@@ -1,0 +1,16 @@
+vec_graph.dylib
+vec_graph.so
+vec_graph.dll
+test_runner
+*.o
+*.dSYM/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+
+site/
+uv.lock
+.claude/
+CLAUDE.md
