@@ -12,5 +12,14 @@ __pycache__/
 
 site/
 uv.lock
+
+# Benchmark artifacts (generated, not committed)
+benchmarks/charts/*.html
+benchmarks/results/*.jsonl
+benchmarks/results/*/*.sqlite
+benchmarks/vectors/*.npy
+# NOTE: benchmarks/charts/*.json is NOT ignored — those Plotly specs
+# are required by mkdocs-plotly-plugin during static site build.
 .claude/
 CLAUDE.md
+.DS_Store
