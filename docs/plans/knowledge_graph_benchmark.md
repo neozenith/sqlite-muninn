@@ -1,6 +1,6 @@
 # Knowledge Graph Benchmark Plan
 
-A benchmark for **combined vector search + graph traversal** workflows — the GraphRAG pattern — exercising all three of vec_graph's subsystems (HNSW, graph TVFs, Node2Vec) together.
+A benchmark for **combined vector search + graph traversal** workflows — the GraphRAG pattern — exercising all three of muninn's subsystems (HNSW, graph TVFs, Node2Vec) together.
 
 **Status:** Plan only. Not implemented. Requires primitive benchmarks (vector search + graph traversal) to be validated first.
 
@@ -46,11 +46,11 @@ The knowledge graph benchmark tests the *composition* — the workflow where a v
 4. **Graph analytics**: Betweenness centrality identifies bridge concepts; PageRank finds authoritative nodes
 5. **Hierarchical retrieval** (advanced): Louvain/Leiden communities -> supernode embeddings -> multi-level search
 
-vec_graph is uniquely positioned here — it's the only SQLite extension combining HNSW + graph TVFs + Node2Vec in a single shared library. The benchmark would demonstrate whether this integration provides measurable advantages over stitching separate tools together.
+muninn is uniquely positioned here — it's the only SQLite extension combining HNSW + graph TVFs + Node2Vec in a single shared library. The benchmark would demonstrate whether this integration provides measurable advantages over stitching separate tools together.
 
 ### What We Already Have
 
-The vec_graph extension currently implements:
+The muninn extension currently implements:
 
 | Capability | TVF/Function | Status |
 |-----------|-------------|--------|
@@ -98,11 +98,11 @@ Query "How does division of labour affect wages?"
 **Key research systems:**
 
 - **Microsoft GraphRAG (2024)**: Extracts KG from documents via LLM, builds community hierarchy (Leiden algorithm), generates community summaries, retrieval via summary search → drill into communities. The gold standard for hierarchical GraphRAG.
-- **HybridRAG (2024)**: Combines vector DB + graph DB with joint scoring (vector similarity + graph distance). Exactly what vec_graph enables in a single SQLite extension.
+- **HybridRAG (2024)**: Combines vector DB + graph DB with joint scoring (vector similarity + graph distance). Exactly what muninn enables in a single SQLite extension.
 - **NaviX (VLDB 2025)**: Native dual indexing in the DB kernel — vector index + graph index with pruning strategies that leverage both simultaneously. The research frontier.
 - **Deep GraphRAG (2025)**: Multi-hop reasoning via graph-guided evidence chains starting from VSS results.
 
-**Why this matters for vec_graph**: Unlike systems that stitch together separate vector and graph databases, vec_graph can do VSS → graph traversal → Node2Vec in a single SQLite connection. This eliminates serialization overhead and enables joined queries that reference both indexes.
+**Why this matters for muninn**: Unlike systems that stitch together separate vector and graph databases, muninn can do VSS → graph traversal → Node2Vec in a single SQLite connection. This eliminates serialization overhead and enables joined queries that reference both indexes.
 
 ---
 
@@ -154,7 +154,7 @@ Cascade approach (cheap → expensive):
 - Use **graph clustering** (Louvain on the match graph) to prevent over-merging. Pure transitive closure is dangerous: if A≈B and B≈C but A≉C, transitive closure merges all three. Louvain cuts weak edges automatically.
 - Select canonical form: most frequent surface form, or the form from the manual seed list.
 
-**For our benchmark**: The HNSW-based blocking step is a compelling use case — it demonstrates vec_graph eating its own dog food. Entity surface forms get embedded, inserted into an HNSW index, then nearest-neighbor search finds candidates for merging. This is a vector-search-to-graph-construction pipeline that exercises the full vec_graph stack.
+**For our benchmark**: The HNSW-based blocking step is a compelling use case — it demonstrates muninn eating its own dog food. Entity surface forms get embedded, inserted into an HNSW index, then nearest-neighbor search finds candidates for merging. This is a vector-search-to-graph-construction pipeline that exercises the full muninn stack.
 
 ### Temporal Knowledge Graphs
 
@@ -185,7 +185,7 @@ This enables four classes of queries:
 3. **As-of**: What did the system know at time T? (transaction time filter)
 4. **Audit trail**: When did fact X enter/leave the graph? (bi-temporal join)
 
-#### Schema Pattern for vec_graph
+#### Schema Pattern for muninn
 
 Temporal awareness does not require changes to the C extension. It's a schema pattern on the edge table, combined with application-level query construction:
 
@@ -666,7 +666,7 @@ Graph size varies significantly by text — *The Communist Manifesto* (~30 pages
 
 ## Benchmark Workflow
 
-### Phase A: Build the Knowledge Graph in vec_graph
+### Phase A: Build the Knowledge Graph in muninn
 
 ```sql
 -- 1. Create HNSW index for node embeddings
@@ -929,23 +929,23 @@ WHERE (valid_from > ?1 AND valid_from <= ?2)       -- newly added
 ### HybridRAG (2024)
 - Combines vector DB (for passage retrieval) with graph DB (for entity relationships)
 - Joint scoring: vector similarity + graph distance
-- **Relevance**: Exactly the pattern vec_graph enables in a single SQLite extension
+- **Relevance**: Exactly the pattern muninn enables in a single SQLite extension
 
 ### NaviX (VLDB 2025)
 - Native dual indexing: vector index + graph index in DB kernel
 - Pruning strategies that leverage both indexes simultaneously
-- **Relevance**: The research frontier; vec_graph's architecture could enable similar optimizations
+- **Relevance**: The research frontier; muninn's architecture could enable similar optimizations
 
 ### Multi-Scale Node Embeddings (2024)
 - Supernode embeddings as aggregates of community member embeddings
 - Enables hierarchical search: coarse (community) -> fine (node)
-- **Relevance**: Node2Vec + community detection + HNSW = this pattern in vec_graph
+- **Relevance**: Node2Vec + community detection + HNSW = this pattern in muninn
 
 ### Grover & Leskovec (2016) — Node2Vec
 - Biased random walks with p,q parameters
 - Captures homophily (BFS-like) vs structural equivalence (DFS-like)
 - Skip-gram with negative sampling for embedding learning
-- **Relevance**: Already implemented in vec_graph
+- **Relevance**: Already implemented in muninn
 
 ### Blondel et al. (2008) — Louvain
 - Fast modularity optimization for community detection
@@ -992,8 +992,8 @@ WHERE (valid_from > ?1 AND valid_from <= ?2)       -- newly added
 Before implementing this benchmark:
 
 1. **Primitive benchmarks validated** (Phases 1-6 of the current plan)
-   - vec_graph HNSW search performance characterized across dimensions and N
-   - vec_graph graph TVF performance characterized across topologies
+   - muninn HNSW search performance characterized across dimensions and N
+   - muninn graph TVF performance characterized across topologies
    - Node2Vec training time and embedding quality validated
 
 2. **New graph capabilities implemented**
@@ -1055,8 +1055,8 @@ benchmarks/
     "book_title": "An Inquiry into the Nature and Causes of the Wealth of Nations",
     "book_author": "Smith, Adam",
     "workflow": "vss_then_expand",
-    "vss_engine": "vec_graph",
-    "graph_engine": "vec_graph",
+    "vss_engine": "muninn",
+    "graph_engine": "muninn",
     "model": "all-MiniLM-L6-v2",
     "dim": 384,
     "n_entities": 400,
@@ -1097,7 +1097,7 @@ kg-extract-book:                               ## Extract KG from a specific boo
 kg-coalesce:                                   ## Entity resolution + dedup (all cached KGs)
 	../.venv/bin/python scripts/kg_coalesce.py
 
-kg: vec_graph                                  ## Run KG benchmark on all cached KGs
+kg: muninn                                  ## Run KG benchmark on all cached KGs
 	../.venv/bin/python scripts/benchmark_kg.py
 
 kg-analyze:                                    ## Analyze KG results → charts
@@ -1122,7 +1122,7 @@ kg-analyze:                                    ## Analyze KG results → charts
 
 7. **REBEL vs SVO extraction**: REBEL produces cleaner, typed relations but is 1.6 GB and slower. SVO extraction is fast but noisy. Do typed relations actually improve retrieval quality enough to justify the model weight?
 
-8. **Comparison fairness**: How to fairly compare "vec_graph integrated" vs "separate tools"? The separate-tools baseline needs equivalent functionality without the single-extension advantage.
+8. **Comparison fairness**: How to fairly compare "muninn integrated" vs "separate tools"? The separate-tools baseline needs equivalent functionality without the single-extension advantage.
 
 9. **Entity coalescing threshold**: What cosine similarity threshold should trigger entity merging? Too low → over-merging ("wages" ≈ "prices"), too high → fragmentation. Need to experiment.
 

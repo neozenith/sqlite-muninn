@@ -1,6 +1,6 @@
 # New Graph Algorithms Plan
 
-New graph algorithm TVFs to add to the vec_graph extension: community detection (Louvain/Leiden), centrality measures (betweenness, closeness, degree), and supporting research.
+New graph algorithm TVFs to add to the muninn extension: community detection (Louvain/Leiden), centrality measures (betweenness, closeness, degree), and supporting research.
 
 **Status:** Plan only. Not implemented. These are prerequisites for the [Knowledge Graph Benchmark](knowledge_graph_benchmark.md).
 
@@ -22,11 +22,11 @@ New graph algorithm TVFs to add to the vec_graph extension: community detection 
 
 ## Overview
 
-The vec_graph extension currently implements BFS, DFS, shortest path, connected components, PageRank, and Node2Vec. The next tier of graph algorithms — community detection and centrality measures — are needed for:
+The muninn extension currently implements BFS, DFS, shortest path, connected components, PageRank, and Node2Vec. The next tier of graph algorithms — community detection and centrality measures — are needed for:
 
 - **GraphRAG workflows**: Centrality-guided retrieval and hierarchical community-based search (see [Knowledge Graph Benchmark](knowledge_graph_benchmark.md))
 - **Standalone graph analytics**: These algorithms are independently useful for any graph stored in SQLite
-- **Competitive parity**: GraphQLite (Rust, alpha) already offers Louvain and betweenness centrality. Adding them keeps vec_graph's feature set comprehensive.
+- **Competitive parity**: GraphQLite (Rust, alpha) already offers Louvain and betweenness centrality. Adding them keeps muninn's feature set comprehensive.
 
 ### What We Already Have
 
@@ -199,7 +199,7 @@ This would compute degree (trivial), closeness, and betweenness in a single grap
 
 ## Node2Vec Deep Dive and Alternatives
 
-### How Node2Vec Works (Already in vec_graph)
+### How Node2Vec Works (Already in muninn)
 
 Node2Vec (Grover & Leskovec, 2016) learns vector embeddings for graph nodes using a two-step process:
 
@@ -234,7 +234,7 @@ Node2Vec (Grover & Leskovec, 2016) learns vector embeddings for graph nodes usin
 | **TransE** (2013) | KGE / translational | Specifically designed for (head, relation, tail) triples | Requires typed relations; can't model symmetric relations | Knowledge graphs with typed edges (not our case) |
 | **RotatE** (2019) | KGE / rotational | Handles symmetry, antisymmetry, inversion, composition | More complex; still requires typed relations | Complex relation patterns in KGs |
 
-**Why Node2Vec is the right choice for vec_graph:**
+**Why Node2Vec is the right choice for muninn:**
 
 1. **Zero-dependency**: Runs in pure C with no ML framework. GraphSAGE/GAT require PyTorch/TensorFlow.
 2. **No node features needed**: Node2Vec works from graph topology alone. GraphSAGE needs feature vectors.
@@ -242,7 +242,7 @@ Node2Vec (Grover & Leskovec, 2016) learns vector embeddings for graph nodes usin
 4. **Compatible with HNSW**: Output embeddings go directly into our HNSW index for similarity search.
 5. **Fast for small graphs**: For ~3K nodes, Node2Vec trains in seconds. GNNs would be overkill.
 
-**When to consider alternatives**: If vec_graph ever needs to support graphs >100K nodes or inductive settings (embedding new nodes without retraining), GraphSAGE would be worth investigating. For now, Node2Vec is ideal.
+**When to consider alternatives**: If muninn ever needs to support graphs >100K nodes or inductive settings (embedding new nodes without retraining), GraphSAGE would be worth investigating. For now, Node2Vec is ideal.
 
 ---
 

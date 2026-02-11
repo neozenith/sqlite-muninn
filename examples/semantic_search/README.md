@@ -23,7 +23,7 @@ Find similar documents using vector embeddings and cosine similarity.
 ## Run
 
 ```bash
-# From sqlite-vec-graph/ after building:
+# From sqlite-muninn/ after building:
 make all
 python examples/semantic_search/example.py
 ```

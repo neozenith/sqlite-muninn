@@ -1,5 +1,5 @@
 """
-Performance benchmarks for sqlite-vec-graph.
+Performance benchmarks for sqlite-muninn.
 
 Measures insert rate, search latency, and recall at various dataset sizes.
 Run: python python/benchmark.py
@@ -14,7 +14,7 @@ import sys
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-EXTENSION_PATH = os.path.join(PROJECT_ROOT, "vec_graph")
+EXTENSION_PATH = os.path.join(PROJECT_ROOT, "muninn")
 
 
 def random_vector(dim):
@@ -179,7 +179,7 @@ def benchmark_graph_tvfs():
 def main():
     random.seed(42)
 
-    print("sqlite-vec-graph Performance Benchmark")
+    print("sqlite-muninn Performance Benchmark")
     print(f"Extension: {EXTENSION_PATH}")
 
     # HNSW benchmarks

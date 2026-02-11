@@ -15,7 +15,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
-EXTENSION_PATH = str(PROJECT_ROOT / "vec_graph")
+EXTENSION_PATH = str(PROJECT_ROOT / "muninn")
 
 
 def pack_vector(values: list[float]) -> bytes:

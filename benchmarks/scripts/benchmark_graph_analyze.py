@@ -10,7 +10,7 @@ Reads all benchmarks/results/graph_*.jsonl files, aggregates by
 Usage:
     python python/benchmark_graph_analyze.py
     python python/benchmark_graph_analyze.py --filter-operation bfs
-    python python/benchmark_graph_analyze.py --filter-engine vec_graph
+    python python/benchmark_graph_analyze.py --filter-engine muninn
 """
 import argparse
 import json
@@ -34,16 +34,16 @@ CHARTS_DIR = PROJECT_ROOT / "benchmarks" / "charts"
 # ── Engine registry ───────────────────────────────────────────────
 
 ENGINE_LABELS = {
-    "vec_graph": "vec_graph-tvf",
+    "muninn": "muninn-tvf",
     "graphqlite": "graphqlite",
 }
 
 ENGINE_HUES = {
-    "vec_graph": 270,      # purple
+    "muninn": 270,      # purple
     "graphqlite": 340,     # pink
 }
 
-ENGINE_ORDER = ["vec_graph", "graphqlite"]
+ENGINE_ORDER = ["muninn", "graphqlite"]
 
 GM_SHORT = {
     "erdos_renyi": "ER",
@@ -66,8 +66,8 @@ def _engine_label(engine):
 def _trace_label(engine, gm=None, deg=None):
     """Full trace label for legends.
 
-    Single variant: "vec_graph-tvf"
-    With variant:   "vec_graph-tvf (ER, deg=5)"
+    Single variant: "muninn-tvf"
+    With variant:   "muninn-tvf (ER, deg=5)"
     """
     base = _engine_label(engine)
     if gm is not None and deg is not None:
@@ -92,7 +92,7 @@ def _make_color(engine, variant_idx=0, n_variants=1):
 
 
 def _trace_opacity(engine):
-    return 1.0 if engine == "vec_graph" else 0.8
+    return 1.0 if engine == "muninn" else 0.8
 
 
 # ── Data loading ──────────────────────────────────────────────────
@@ -382,7 +382,7 @@ def chart_query_time_by_operation(agg):
 
                 color = _make_color(engine, var_idx, n_variants)
                 opacity = _trace_opacity(engine)
-                line_width = 3 if engine == "vec_graph" else 2
+                line_width = 3 if engine == "muninn" else 2
 
                 fig.add_trace(
                     go.Scatter(
@@ -459,7 +459,7 @@ def chart_setup_time(agg):
 
             color = _make_color(engine, var_idx, n_variants)
             opacity = _trace_opacity(engine)
-            line_width = 3 if engine == "vec_graph" else 2
+            line_width = 3 if engine == "muninn" else 2
 
             fig.add_trace(
                 go.Scatter(
@@ -635,7 +635,7 @@ def print_manifest_report():
 def parse_args():
     parser = argparse.ArgumentParser(description="Analyze graph benchmark results and generate charts")
     parser.add_argument("--manifest", action="store_true", help="Show benchmark completeness report")
-    parser.add_argument("--filter-engine", help="Filter by engine (e.g., 'vec_graph', 'cte')")
+    parser.add_argument("--filter-engine", help="Filter by engine (e.g., 'muninn', 'cte')")
     parser.add_argument("--filter-operation", help="Filter by operation (e.g., 'bfs', 'pagerank')")
     parser.add_argument("--filter-graph-model", help="Filter by graph model (e.g., 'erdos_renyi')")
     return parser.parse_args()

@@ -21,7 +21,7 @@ else
     LDFLAGS_TEST = -lsqlite3 $(LDFLAGS)
 endif
 
-SRC = src/vec_graph.c src/hnsw_vtab.c src/hnsw_algo.c \
+SRC = src/muninn.c src/hnsw_vtab.c src/hnsw_algo.c \
       src/graph_tvf.c src/node2vec.c src/vec_math.c \
       src/priority_queue.c src/id_validate.c
 
@@ -35,14 +35,14 @@ help:                                          ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-all: vec_graph$(EXT)                           ## Build the extension
+all: muninn$(EXT)                              ## Build the extension
 
-vec_graph$(EXT): $(SRC)
+muninn$(EXT): $(SRC)
 	$(CC) $(CFLAGS_BASE) $(SHARED_FLAGS) -Isrc -o $@ $^ $(LDFLAGS)
 
 debug: CFLAGS_BASE += -g -fsanitize=address,undefined -DDEBUG -O0
 debug: LDFLAGS += -fsanitize=address,undefined
-debug: vec_graph$(EXT)                         ## Build with ASan + UBSan
+debug: muninn$(EXT)                            ## Build with ASan + UBSan
 
 test: test_runner                              ## Run C unit tests
 	./test_runner
@@ -50,7 +50,7 @@ test: test_runner                              ## Run C unit tests
 test_runner: $(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c src/id_validate.c
 	$(CC) $(CFLAGS_BASE) -Isrc -o $@ $^ $(LDFLAGS_TEST)
 
-test-python: vec_graph$(EXT)                   ## Run Python integration tests
+test-python: muninn$(EXT)                      ## Run Python integration tests
 	.venv/bin/python -m pytest pytests/ -v
 
 test-all: test test-python                     ## Run all tests
@@ -74,4 +74,4 @@ docs-clean:                                        ## Clean documentation build
 ######################################################################
 
 clean: docs-clean                                  ## Clean build artifacts
-	rm -f vec_graph$(EXT) test_runner
+	rm -f muninn$(EXT) test_runner

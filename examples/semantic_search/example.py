@@ -12,7 +12,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent  # examples/{name}/ → project root
-EXTENSION_PATH = str(PROJECT_ROOT / "vec_graph")  # auto-appends .dylib/.so
+EXTENSION_PATH = str(PROJECT_ROOT / "muninn")  # auto-appends .dylib/.so
 
 
 def pack_vector(values: list[float]) -> bytes:

@@ -42,7 +42,7 @@ extern void test_hnsw_algo(void);
 extern void test_id_validate(void);
 
 int main(void) {
-    printf("=== sqlite-vec-graph test suite ===\n\n");
+    printf("=== sqlite-muninn test suite ===\n\n");
 
     printf("[vec_math]\n");
     test_vec_math();

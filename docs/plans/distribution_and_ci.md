@@ -2,7 +2,7 @@
 
 > **Status:** Research / Proposal
 > **Date:** 2026-02-11
-> **Scope:** Publishing `vec_graph` to PyPI and NPM with cross-platform CI/CD
+> **Scope:** Publishing `sqlite-muninn` to PyPI and NPM with cross-platform CI/CD
 
 ---
 
@@ -24,7 +24,7 @@
 
 ## Executive Summary
 
-The goal is to make `vec_graph` installable via `pip install vec-graph` and `npm install vec-graph`, with precompiled binaries for all major platforms. The approach follows the pattern established by **sqlite-vec** (Alex Garcia), which is the gold standard for SQLite extension distribution.
+The goal is to make `muninn` installable via `pip install sqlite-muninn` and `npm install sqlite-muninn`, with precompiled binaries for all major platforms. The approach follows the pattern established by **sqlite-vec** (Alex Garcia), which is the gold standard for SQLite extension distribution.
 
 ### Key Design Decisions
 
@@ -53,14 +53,14 @@ The goal is to make `vec_graph` installable via `pip install vec-graph` and `npm
 
 ### Package Name
 
-`vec-graph` on PyPI → `import vec_graph` in Python.
+`sqlite-muninn` on PyPI → `import sqlite_muninn` in Python.
 
 ### Package Structure
 
 ```
-vec_graph/
+sqlite_muninn/
     __init__.py      # loadable_path() + load() + version
-    vec_graph.so     # Linux (or .dylib on macOS, .dll on Windows)
+    muninn.so     # Linux (or .dylib on macOS, .dll on Windows)
 ```
 
 The binary sits alongside `__init__.py`. No sub-packages needed.
@@ -68,7 +68,7 @@ The binary sits alongside `__init__.py`. No sub-packages needed.
 ### API Surface
 
 ```python
-# vec_graph/__init__.py
+# sqlite_muninn/__init__.py
 import os
 import sqlite3
 
@@ -76,14 +76,14 @@ __version__ = "0.1.0"
 __version_info__ = tuple(__version__.split("."))
 
 def loadable_path() -> str:
-    """Return path to the vec_graph loadable extension (without file extension).
+    """Return path to the muninn loadable extension (without file extension).
 
     SQLite's load_extension() automatically appends .so/.dylib/.dll.
     """
-    return os.path.normpath(os.path.join(os.path.dirname(__file__), "vec_graph"))
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "muninn"))
 
 def load(conn: sqlite3.Connection) -> None:
-    """Load vec_graph into the given SQLite connection."""
+    """Load muninn into the given SQLite connection."""
     conn.load_extension(loadable_path())
 ```
 
@@ -91,11 +91,11 @@ User-facing usage:
 
 ```python
 import sqlite3
-import vec_graph
+import sqlite_muninn
 
 db = sqlite3.connect(":memory:")
 db.enable_load_extension(True)
-vec_graph.load(db)
+sqlite_muninn.load(db)
 db.enable_load_extension(False)
 
 # Now HNSW, graph TVFs, and node2vec are available
@@ -103,10 +103,10 @@ db.enable_load_extension(False)
 
 ### Wheel Tags
 
-The key insight: since `vec_graph` is loaded via `sqlite3.load_extension()` (not Python's C extension mechanism), it does **not** link against `libpython`. The wheel tag is:
+The key insight: since `muninn` is loaded via `sqlite3.load_extension()` (not Python's C extension mechanism), it does **not** link against `libpython`. The wheel tag is:
 
 ```
-vec_graph-0.1.0-py3-none-{platform}.whl
+sqlite_muninn-0.1.0-py3-none-{platform}.whl
 ```
 
 - `py3` — works with any Python 3 version
@@ -127,7 +127,7 @@ vec_graph-0.1.0-py3-none-{platform}.whl
 
 Use **PyPI Trusted Publishers** (OIDC, no API tokens):
 
-1. Configure at `https://pypi.org/manage/project/vec-graph/settings/publishing/`
+1. Configure at `https://pypi.org/manage/project/sqlite-muninn/settings/publishing/`
 2. Link to GitHub repo + workflow file + environment name
 3. Publish with `pypa/gh-action-pypi-publish@release/v1`
 
@@ -155,7 +155,7 @@ This must be documented prominently in README and package description.
 
 ### Package Name
 
-`vec-graph` on NPM (main wrapper) + `@vec-graph/{platform}` platform packages.
+`sqlite-muninn` on NPM (main wrapper) + `@sqlite-muninn/{platform}` platform packages.
 
 ### Architecture: Platform-Specific Optional Dependencies
 
@@ -163,27 +163,27 @@ This is the **esbuild pattern**, also used by sqlite-vec, Prisma, and SWC:
 
 ```
 npm/
-  vec-graph/                    # Main wrapper package
+  sqlite-muninn/                    # Main wrapper package
     package.json                # optionalDependencies → platform packages
     index.mjs                   # ESM entry
     index.cjs                   # CJS entry
     index.d.ts                  # TypeScript declarations
-  @vec-graph/
+  @sqlite-muninn/
     darwin-arm64/               # macOS Apple Silicon
       package.json              # os: ["darwin"], cpu: ["arm64"]
-      vec_graph.dylib
+      muninn.dylib
     darwin-x64/                 # macOS Intel
       package.json
-      vec_graph.dylib
+      muninn.dylib
     linux-x64/                  # Linux x86_64
       package.json
-      vec_graph.so
+      muninn.so
     linux-arm64/                # Linux ARM64
       package.json
-      vec_graph.so
+      muninn.so
     win32-x64/                  # Windows x86_64
       package.json
-      vec_graph.dll
+      muninn.dll
 ```
 
 ### Platform Package Structure
@@ -192,11 +192,11 @@ Each platform package is minimal:
 
 ```json
 {
-  "name": "@vec-graph/darwin-arm64",
+  "name": "@sqlite-muninn/darwin-arm64",
   "version": "0.1.0",
   "os": ["darwin"],
   "cpu": ["arm64"],
-  "files": ["vec_graph.dylib"]
+  "files": ["muninn.dylib"]
 }
 ```
 
@@ -206,17 +206,17 @@ npm/yarn/pnpm automatically installs **only** the matching platform package.
 
 ```json
 {
-  "name": "vec-graph",
+  "name": "sqlite-muninn",
   "version": "0.1.0",
   "main": "index.cjs",
   "module": "index.mjs",
   "types": "index.d.ts",
   "optionalDependencies": {
-    "@vec-graph/darwin-arm64": "0.1.0",
-    "@vec-graph/darwin-x64": "0.1.0",
-    "@vec-graph/linux-x64": "0.1.0",
-    "@vec-graph/linux-arm64": "0.1.0",
-    "@vec-graph/win32-x64": "0.1.0"
+    "@sqlite-muninn/darwin-arm64": "0.1.0",
+    "@sqlite-muninn/darwin-x64": "0.1.0",
+    "@sqlite-muninn/linux-x64": "0.1.0",
+    "@sqlite-muninn/linux-arm64": "0.1.0",
+    "@sqlite-muninn/win32-x64": "0.1.0"
   }
 }
 ```
@@ -244,11 +244,11 @@ import { platform, arch } from "node:process";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PLATFORM_MAP = {
-  "darwin-arm64": { pkg: "@vec-graph/darwin-arm64", ext: "dylib" },
-  "darwin-x64":   { pkg: "@vec-graph/darwin-x64",   ext: "dylib" },
-  "linux-x64":    { pkg: "@vec-graph/linux-x64",    ext: "so" },
-  "linux-arm64":  { pkg: "@vec-graph/linux-arm64",   ext: "so" },
-  "win32-x64":    { pkg: "@vec-graph/win32-x64",    ext: "dll" },
+  "darwin-arm64": { pkg: "@sqlite-muninn/darwin-arm64", ext: "dylib" },
+  "darwin-x64":   { pkg: "@sqlite-muninn/darwin-x64",   ext: "dylib" },
+  "linux-x64":    { pkg: "@sqlite-muninn/linux-x64",    ext: "so" },
+  "linux-arm64":  { pkg: "@sqlite-muninn/linux-arm64",   ext: "so" },
+  "win32-x64":    { pkg: "@sqlite-muninn/win32-x64",    ext: "dll" },
 };
 
 export function getLoadablePath() {
@@ -257,10 +257,10 @@ export function getLoadablePath() {
   if (!target) {
     throw new Error(`Unsupported platform: ${key}. Supported: ${Object.keys(PLATFORM_MAP).join(", ")}`);
   }
-  const loadablePath = join(__dirname, "..", target.pkg, `vec_graph.${target.ext}`);
+  const loadablePath = join(__dirname, "..", target.pkg, `muninn.${target.ext}`);
   if (!statSync(loadablePath, { throwIfNoEntry: false })) {
     throw new Error(
-      `vec_graph binary not found for ${key}. ` +
+      `muninn binary not found for ${key}. ` +
       `Ensure ${target.pkg} is installed (it should be an optionalDependency).`
     );
   }
@@ -305,23 +305,23 @@ Must configure trusted publishing per-package at `https://www.npmjs.com/package/
 |----------|---------------|
 | Users just want to `pip install` and go | Ship loadable extension only (default) |
 | macOS users hit `SQLITE_OMIT_LOAD_EXTENSION` | Document Homebrew Python; suggest `pysqlite3-binary` |
-| Users need specific SQLite version or flags | Offer a `vec-graph-sqlite` package with bundled SQLite |
+| Users need specific SQLite version or flags | Offer a `sqlite-muninn-bundled` package with bundled SQLite |
 | Browser/WASM usage | Requires statically linked SQLite+extension build |
 
 ### Bundled SQLite Package (Optional, Future)
 
-If demand warrants it, create a `vec-graph-sqlite` package that bundles the SQLite amalgamation with `vec_graph` compiled in:
+If demand warrants it, create a `sqlite-muninn-bundled` package that bundles the SQLite amalgamation with `muninn` compiled in:
 
 ```python
 # This would be a CPython extension (like pysqlite3/sqlean.py)
 # Replaces the built-in sqlite3 module
-import vec_graph_sqlite as sqlite3  # drop-in replacement with vec_graph baked in
+import sqlite_muninn_bundled as sqlite3  # drop-in replacement with muninn baked in
 ```
 
 **Implementation approach (from sqlean.py):**
 
 1. Download SQLite amalgamation (`sqlite3.c` + `sqlite3.h`)
-2. Compile with `vec_graph` statically linked via `SQLITE_EXTRA_INIT` / `sqlite3_auto_extension()`
+2. Compile with `muninn` statically linked via `SQLITE_EXTRA_INIT` / `sqlite3_auto_extension()`
 3. Package as a CPython extension module (version-specific wheels: `cp312-cp312-{platform}`)
 4. Requires `cibuildwheel` for cross-platform CPython extension building
 
@@ -344,17 +344,17 @@ import vec_graph_sqlite as sqlite3  # drop-in replacement with vec_graph baked i
 
 ### WASM Build (Required)
 
-Compile SQLite + `vec_graph` to WebAssembly via Emscripten for browser and edge runtime usage. Extensions cannot be dynamically loaded in WASM — they must be statically linked at compile time.
+Compile SQLite + `muninn` to WebAssembly via Emscripten for browser and edge runtime usage. Extensions cannot be dynamically loaded in WASM — they must be statically linked at compile time.
 
 **Static registration entry point:**
 
 ```c
 // src/sqlite3_wasm_extra_init.c
 #include "sqlite3.h"
-extern int sqlite3_vecgraph_init(sqlite3*, char**, const sqlite3_api_routines*);
+extern int sqlite3_muninn_init(sqlite3*, char**, const sqlite3_api_routines*);
 
 int sqlite3_wasm_extra_init(const char *z) {
-    return sqlite3_auto_extension((void(*)(void))sqlite3_vecgraph_init);
+    return sqlite3_auto_extension((void(*)(void))sqlite3_muninn_init);
 }
 ```
 
@@ -365,22 +365,22 @@ int sqlite3_wasm_extra_init(const char *z) {
 wget https://www.sqlite.org/2025/sqlite-amalgamation-3510000.zip
 unzip sqlite-amalgamation-3510000.zip
 
-# 2. Compile SQLite + vec_graph → WASM
+# 2. Compile SQLite + muninn → WASM
 emcc -O2 -s WASM=1 -s EXPORTED_FUNCTIONS='["_sqlite3_open", ...]' \
      -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 \
      sqlite-amalgamation-3510000/sqlite3.c \
-     dist/vec_graph.c \
+     dist/muninn.c \
      src/sqlite3_wasm_extra_init.c \
-     -o dist/vec_graph_sqlite3.js
+     -o dist/muninn_sqlite3.js
 ```
 
-**NPM distribution:** Ship as a separate `vec-graph-wasm` package (not bundled with the native packages). The WASM binary is platform-independent — a single package works everywhere:
+**NPM distribution:** Ship as a separate `sqlite-muninn-wasm` package (not bundled with the native packages). The WASM binary is platform-independent — a single package works everywhere:
 
 ```json
 {
-  "name": "vec-graph-wasm",
+  "name": "sqlite-muninn-wasm",
   "version": "0.1.0",
-  "files": ["vec_graph_sqlite3.js", "vec_graph_sqlite3.wasm"],
+  "files": ["muninn_sqlite3.js", "muninn_sqlite3.wasm"],
   "type": "module"
 }
 ```
@@ -398,7 +398,7 @@ build-wasm:
     - run: make amalgamation
     - run: bash scripts/build_wasm.sh
     - uses: actions/upload-artifact@v4
-      with: { name: wasm, path: "dist/vec_graph_sqlite3.*" }
+      with: { name: wasm, path: "dist/muninn_sqlite3.*" }
 ```
 
 ---
@@ -428,16 +428,16 @@ Apple's Clang can cross-compile between x86_64 and arm64 on a single runner — 
 ```bash
 # Build both architectures on a single macos-15 (ARM64) runner
 cc -arch arm64  -O2 -std=c11 -fPIC -dynamiclib -undefined dynamic_lookup \
-   -Isrc -o vec_graph_arm64.dylib src/*.c -lm
+   -Isrc -o muninn_arm64.dylib src/*.c -lm
 
 cc -arch x86_64 -O2 -std=c11 -fPIC -dynamiclib -undefined dynamic_lookup \
-   -Isrc -o vec_graph_x86_64.dylib src/*.c -lm
+   -Isrc -o muninn_x86_64.dylib src/*.c -lm
 
 # Combine into a single universal binary
-lipo -create vec_graph_arm64.dylib vec_graph_x86_64.dylib -output vec_graph.dylib
+lipo -create muninn_arm64.dylib muninn_x86_64.dylib -output muninn.dylib
 
 # Verify both slices are present
-lipo -info vec_graph.dylib
+lipo -info muninn.dylib
 # Architectures in the fat file: x86_64 arm64
 ```
 
@@ -494,10 +494,10 @@ build-windows:
       shell: cmd
       run: |
         cl.exe /O2 /MT /W4 /LD /Isrc ^
-          src\vec_graph.c src\hnsw_vtab.c src\hnsw_algo.c ^
+          src\muninn.c src\hnsw_vtab.c src\hnsw_algo.c ^
           src\graph_tvf.c src\node2vec.c src\vec_math.c ^
           src\priority_queue.c src\id_validate.c ^
-          /Fe:vec_graph.dll
+          /Fe:muninn.dll
 ```
 
 | Flag | Purpose |
@@ -525,7 +525,7 @@ When you build on `ubuntu-22.04` (glibc 2.35), the resulting `.so` embeds versio
 To verify your binary's glibc requirements:
 
 ```bash
-objdump -T vec_graph.so | grep GLIBC_ | sed 's/.*GLIBC_//' | sort -Vu
+objdump -T muninn.so | grep GLIBC_ | sed 's/.*GLIBC_//' | sort -Vu
 ```
 
 **Building in a manylinux container** (if needed):
@@ -551,7 +551,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: make all
       - uses: actions/upload-artifact@v4
-        with: { name: linux-x86_64, path: vec_graph.so }
+        with: { name: linux-x86_64, path: muninn.so }
 
   build-linux-arm64:
     runs-on: ubuntu-22.04-arm
@@ -559,19 +559,19 @@ jobs:
       - uses: actions/checkout@v4
       - run: make all
       - uses: actions/upload-artifact@v4
-        with: { name: linux-arm64, path: vec_graph.so }
+        with: { name: linux-arm64, path: muninn.so }
 
   build-macos-universal:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run: make ARCH=arm64 all
-      - run: mv vec_graph.dylib vec_graph_arm64.dylib
+      - run: mv muninn.dylib muninn_arm64.dylib
       - run: make clean && make ARCH=x86_64 all
-      - run: mv vec_graph.dylib vec_graph_x86_64.dylib
-      - run: lipo -create vec_graph_arm64.dylib vec_graph_x86_64.dylib -output vec_graph.dylib
+      - run: mv muninn.dylib muninn_x86_64.dylib
+      - run: lipo -create muninn_arm64.dylib muninn_x86_64.dylib -output muninn.dylib
       - uses: actions/upload-artifact@v4
-        with: { name: macos-universal, path: vec_graph.dylib }
+        with: { name: macos-universal, path: muninn.dylib }
 
   build-windows:
     runs-on: windows-2022
@@ -579,9 +579,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
       - shell: cmd
-        run: cl.exe /O2 /MT /W4 /LD /Isrc src\*.c /Fe:vec_graph.dll
+        run: cl.exe /O2 /MT /W4 /LD /Isrc src\*.c /Fe:muninn.dll
       - uses: actions/upload-artifact@v4
-        with: { name: windows-x86_64, path: vec_graph.dll }
+        with: { name: windows-x86_64, path: muninn.dll }
 ```
 
 This uses **4 CI jobs** to produce **5 platform binaries** (the macOS job produces a universal binary containing both architectures).
@@ -590,27 +590,27 @@ This uses **4 CI jobs** to produce **5 platform binaries** (the macOS job produc
 
 ## C/C++ Dependency Distribution
 
-How should C/C++ consumers depend on `vec_graph`? Unlike Python/Node.js, the C ecosystem has no single dominant package manager. Instead, there are several parallel distribution channels, ordered here by priority for the SQLite extension ecosystem.
+How should C/C++ consumers depend on `muninn`? Unlike Python/Node.js, the C ecosystem has no single dominant package manager. Instead, there are several parallel distribution channels, ordered here by priority for the SQLite extension ecosystem.
 
 ### Priority 1: Amalgamation (Single `.c` + `.h` File)
 
 This is the **primary distribution format** for the C ecosystem — it's how SQLite itself, sqlite-vec, and most SQLite extensions are consumed.
 
-**What it is:** All source files concatenated into a single `vec_graph.c`, plus a public API header `vec_graph.h`. Consumer just adds two files to their project.
+**What it is:** All source files concatenated into a single `muninn.c`, plus a public API header `muninn.h`. Consumer just adds two files to their project.
 
 **Consumer usage:**
 
 ```bash
 # Download from GitHub release
-wget https://github.com/user/sqlite-vector-graph/releases/download/v0.1.0/vec_graph-amalgamation.tar.gz
-tar xf vec_graph-amalgamation.tar.gz
+wget https://github.com/user/sqlite-muninn/releases/download/v0.1.0/muninn-amalgamation.tar.gz
+tar xf muninn-amalgamation.tar.gz
 
 # Build as loadable extension
-gcc -O2 -fPIC -shared vec_graph.c -o vec_graph.so -lm           # Linux
-cc -O2 -fPIC -dynamiclib vec_graph.c -o vec_graph.dylib -lm     # macOS
+gcc -O2 -fPIC -shared muninn.c -o muninn.so -lm           # Linux
+cc -O2 -fPIC -dynamiclib muninn.c -o muninn.dylib -lm     # macOS
 
 # Or compile into their application with static linking
-gcc -O2 myapp.c vec_graph.c -lsqlite3 -lm -o myapp
+gcc -O2 myapp.c muninn.c -lsqlite3 -lm -o myapp
 ```
 
 **Why amalgamation is preferred:**
@@ -627,20 +627,20 @@ Option A — Simple shell script (`scripts/amalgamate.sh`):
 #!/bin/bash
 set -euo pipefail
 VERSION=$(cat VERSION)
-OUT=dist/vec_graph.c
+OUT=dist/muninn.c
 
 mkdir -p dist
 cat > "$OUT" <<HEADER
-/* vec_graph amalgamation - v${VERSION}
+/* muninn amalgamation - v${VERSION}
  * Generated $(date -u +%Y-%m-%d)
- * https://github.com/user/sqlite-vector-graph
+ * https://github.com/user/sqlite-muninn
  */
 HEADER
 
 # Concatenate headers (removing internal #include "..." directives)
 for f in src/vec_math.h src/priority_queue.h src/hnsw_algo.h \
          src/id_validate.h src/hnsw_vtab.h src/graph_tvf.h \
-         src/node2vec.h src/vec_graph.h; do
+         src/node2vec.h src/muninn.h; do
     echo "/* ---- $f ---- */"
     grep -v '#include "' "$f"
 done >> "$OUT"
@@ -648,29 +648,29 @@ done >> "$OUT"
 # Concatenate implementations
 for f in src/vec_math.c src/priority_queue.c src/hnsw_algo.c \
          src/id_validate.c src/hnsw_vtab.c src/graph_tvf.c \
-         src/node2vec.c src/vec_graph.c; do
+         src/node2vec.c src/muninn.c; do
     echo "/* ---- $f ---- */"
     grep -v '#include "' "$f"
 done >> "$OUT"
 
 # Copy public header
-cp src/vec_graph.h dist/
+cp src/muninn.h dist/
 
-echo "Amalgamation: dist/vec_graph.c ($(wc -l < "$OUT") lines)"
+echo "Amalgamation: dist/muninn.c ($(wc -l < "$OUT") lines)"
 ```
 
 Option B — Use [cwoffenden/combiner](https://github.com/cwoffenden/combiner) for recursive `#include` resolution:
 
 ```bash
-python combiner/combine.py -r src -o dist/vec_graph.c src/vec_graph.c
+python combiner/combine.py -r src -o dist/muninn.c src/muninn.c
 ```
 
 **Makefile target:**
 
 ```makefile
-amalgamation: dist/vec_graph.c dist/vec_graph.h   ## Create amalgamation
+amalgamation: dist/muninn.c dist/muninn.h   ## Create amalgamation
 
-dist/vec_graph.c dist/vec_graph.h: $(SRC) $(wildcard src/*.h)
+dist/muninn.c dist/muninn.h: $(SRC) $(wildcard src/*.h)
 	bash scripts/amalgamate.sh
 ```
 
@@ -680,9 +680,9 @@ Ship `.so`/`.dylib`/`.dll` files as GitHub Release assets. Consumers download an
 
 ### Priority 3: `make install` with pkg-config
 
-The standard Unix library installation convention. Enables `pkg-config --cflags --libs vec_graph` for downstream Makefiles.
+The standard Unix library installation convention. Enables `pkg-config --cflags --libs muninn` for downstream Makefiles.
 
-**`vec_graph.pc.in` template:**
+**`muninn.pc.in` template:**
 
 ```
 prefix=@PREFIX@
@@ -690,11 +690,11 @@ exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
 includedir=${prefix}/include
 
-Name: vec_graph
+Name: muninn
 Description: HNSW + Graph Traversal + Node2Vec SQLite Extension
 Version: @VERSION@
 Requires: sqlite3
-Libs: -L${libdir} -lvec_graph -lm
+Libs: -L${libdir} -lmuninn -lm
 Cflags: -I${includedir}
 ```
 
@@ -708,21 +708,21 @@ PKGCONFIGDIR = $(LIBDIR)/pkgconfig
 DESTDIR ?=
 VERSION  = $(shell cat VERSION 2>/dev/null || echo 0.0.0)
 
-vec_graph.pc: vec_graph.pc.in
+muninn.pc: muninn.pc.in
 	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' $< > $@
 
-install: vec_graph$(EXT) vec_graph.pc                ## Install library, headers, pkg-config
+install: muninn$(EXT) muninn.pc                ## Install library, headers, pkg-config
 	install -d $(DESTDIR)$(LIBDIR)
 	install -d $(DESTDIR)$(INCLUDEDIR)
 	install -d $(DESTDIR)$(PKGCONFIGDIR)
-	install -m 755 vec_graph$(EXT) $(DESTDIR)$(LIBDIR)/
-	install -m 644 src/vec_graph.h $(DESTDIR)$(INCLUDEDIR)/
-	install -m 644 vec_graph.pc $(DESTDIR)$(PKGCONFIGDIR)/
+	install -m 755 muninn$(EXT) $(DESTDIR)$(LIBDIR)/
+	install -m 644 src/muninn.h $(DESTDIR)$(INCLUDEDIR)/
+	install -m 644 muninn.pc $(DESTDIR)$(PKGCONFIGDIR)/
 
 uninstall:                                           ## Remove installed files
-	rm -f $(DESTDIR)$(LIBDIR)/vec_graph$(EXT)
-	rm -f $(DESTDIR)$(INCLUDEDIR)/vec_graph.h
-	rm -f $(DESTDIR)$(PKGCONFIGDIR)/vec_graph.pc
+	rm -f $(DESTDIR)$(LIBDIR)/muninn$(EXT)
+	rm -f $(DESTDIR)$(INCLUDEDIR)/muninn.h
+	rm -f $(DESTDIR)$(PKGCONFIGDIR)/muninn.pc
 ```
 
 **Consumer usage:**
@@ -732,8 +732,8 @@ uninstall:                                           ## Remove installed files
 make install PREFIX=/usr/local
 
 # Consume from another Makefile
-CFLAGS += $(shell pkg-config --cflags vec_graph)
-LDFLAGS += $(shell pkg-config --libs vec_graph)
+CFLAGS += $(shell pkg-config --cflags muninn)
+LDFLAGS += $(shell pkg-config --libs muninn)
 ```
 
 ### Priority 4: CMake FetchContent
@@ -744,24 +744,24 @@ For CMake-based consumers, provide a `CMakeLists.txt` that supports both `FetchC
 
 ```cmake
 cmake_minimum_required(VERSION 3.14)
-project(vec_graph VERSION 0.1.0 LANGUAGES C)
+project(muninn VERSION 0.1.0 LANGUAGES C)
 
 find_package(SQLite3 REQUIRED)
 
-add_library(vec_graph
-    src/vec_graph.c src/hnsw_vtab.c src/hnsw_algo.c
+add_library(muninn
+    src/muninn.c src/hnsw_vtab.c src/hnsw_algo.c
     src/graph_tvf.c src/node2vec.c src/vec_math.c
     src/priority_queue.c src/id_validate.c
 )
 
-target_include_directories(vec_graph
+target_include_directories(muninn
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
         $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(vec_graph PUBLIC SQLite::SQLite3 PRIVATE m)
-target_compile_features(vec_graph PUBLIC c_std_11)
-set_target_properties(vec_graph PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(muninn PUBLIC SQLite::SQLite3 PRIVATE m)
+target_compile_features(muninn PUBLIC c_std_11)
+set_target_properties(muninn PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Only build tests when this is the top-level project (not when consumed via FetchContent)
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
@@ -771,16 +771,16 @@ endif()
 
 # Install rules (for find_package)
 include(GNUInstallDirs)
-install(TARGETS vec_graph EXPORT vec_graph-targets
+install(TARGETS muninn EXPORT muninn-targets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
-install(FILES src/vec_graph.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(EXPORT vec_graph-targets
-    FILE vec_graph-config.cmake
-    NAMESPACE vec_graph::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/vec_graph
+install(FILES src/muninn.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(EXPORT muninn-targets
+    FILE muninn-config.cmake
+    NAMESPACE muninn::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/muninn
 )
 ```
 
@@ -789,14 +789,14 @@ install(EXPORT vec_graph-targets
 ```cmake
 include(FetchContent)
 FetchContent_Declare(
-    vec_graph
-    GIT_REPOSITORY https://github.com/user/sqlite-vector-graph.git
+    muninn
+    GIT_REPOSITORY https://github.com/user/sqlite-muninn.git
     GIT_TAG        v0.1.0       # Pin to a release tag
 )
-FetchContent_MakeAvailable(vec_graph)
+FetchContent_MakeAvailable(muninn)
 
 add_executable(my_app main.c)
-target_link_libraries(my_app PRIVATE vec_graph)
+target_link_libraries(my_app PRIVATE muninn)
 ```
 
 The `CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR` guard is critical — it prevents tests and dev targets from building when consumed as a dependency.
@@ -806,39 +806,39 @@ The `CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR` guard is critical — i
 The oldest and simplest approach. Consumer adds the repo as a submodule:
 
 ```bash
-git submodule add -b v0.1.0 https://github.com/user/sqlite-vector-graph.git vendor/vec_graph
+git submodule add -b v0.1.0 https://github.com/user/sqlite-muninn.git vendor/muninn
 ```
 
 Then in their Makefile:
 
 ```makefile
-CFLAGS += -Ivendor/vec_graph/src
-SRCS   += vendor/vec_graph/src/vec_graph.c vendor/vec_graph/src/hnsw_vtab.c ...
+CFLAGS += -Ivendor/muninn/src
+SRCS   += vendor/muninn/src/muninn.c vendor/muninn/src/hnsw_vtab.c ...
 ```
 
-No changes needed to `vec_graph` — submodules just clone the repo at a pinned commit. But submodules are considered legacy; FetchContent or the amalgamation is preferred.
+No changes needed to `muninn` — submodules just clone the repo at a pinned commit. But submodules are considered legacy; FetchContent or the amalgamation is preferred.
 
 ### Priority 6: Homebrew Formula (macOS)
 
 ```ruby
 class VecGraph < Formula
   desc "HNSW + graph traversal + Node2Vec SQLite extension"
-  homepage "https://github.com/user/sqlite-vector-graph"
-  url "https://github.com/user/sqlite-vector-graph/archive/refs/tags/v0.1.0.tar.gz"
+  homepage "https://github.com/user/sqlite-muninn"
+  url "https://github.com/user/sqlite-muninn/archive/refs/tags/v0.1.0.tar.gz"
   sha256 "<sha256>"
   license "MIT"
   depends_on "sqlite"
 
   def install
     system "make", "all", "SQLITE_PREFIX=#{Formula["sqlite"].opt_prefix}"
-    lib.install "vec_graph.dylib"
-    include.install "src/vec_graph.h"
-    (lib/"pkgconfig").install "vec_graph.pc"
+    lib.install "muninn.dylib"
+    include.install "src/muninn.h"
+    (lib/"pkgconfig").install "muninn.pc"
   end
 
   test do
     system Formula["sqlite"].opt_bin/"sqlite3", ":memory:",
-           ".load #{lib}/vec_graph", "SELECT 1"
+           ".load #{lib}/muninn", "SELECT 1"
   end
 end
 ```
@@ -884,9 +884,9 @@ This gives consumers three ways to point at SQLite:
 | **GitHub Releases** | Download binary, `load_extension()` | Already done by release CI | Wide — runtime loaders |
 | **`make install`** | `./configure && make install` | Low (Makefile targets) | Unix developers |
 | **CMakeLists.txt** | `FetchContent_Declare(...)` | Medium | CMake users |
-| **Homebrew** | `brew install vec-graph` | Low (formula file) | macOS developers |
+| **Homebrew** | `brew install sqlite-muninn` | Low (formula file) | macOS developers |
 | **pip / npm** | `pip install` / `npm install` | Medium (covered above) | Python / JS developers |
-| **vcpkg / Conan** | `vcpkg install vec-graph` | Medium | Windows / cross-platform |
+| **vcpkg / Conan** | `vcpkg install sqlite-muninn` | Medium | Windows / cross-platform |
 
 ---
 
@@ -1042,7 +1042,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: vec_graph.${{ matrix.ext }}
+          path: muninn.${{ matrix.ext }}
 
   # ── Package & Publish to PyPI ──────────────────────────
   publish-pypi:
@@ -1074,10 +1074,10 @@ jobs:
       - name: Publish platform packages
         run: |
           for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            npm publish npm/@vec-graph/$target --provenance --access public
+            npm publish npm/@sqlite-muninn/$target --provenance --access public
           done
       - name: Publish main package
-        run: npm publish npm/vec-graph --provenance --access public
+        run: npm publish npm/sqlite-muninn --provenance --access public
 
   # ── Upload to GitHub Release ───────────────────────────
   upload-release:
@@ -1090,11 +1090,11 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            linux-x64/vec_graph.so
-            linux-arm64/vec_graph.so
-            darwin-arm64/vec_graph.dylib
-            darwin-x64/vec_graph.dylib
-            win32-x64/vec_graph.dll
+            linux-x64/muninn.so
+            linux-arm64/muninn.so
+            darwin-arm64/muninn.dylib
+            darwin-x64/muninn.dylib
+            win32-x64/muninn.dll
 ```
 
 ### Build System Changes Needed
@@ -1103,9 +1103,9 @@ The current Makefile needs these additions for cross-platform CI:
 
 1. **Windows MSVC support** — Add a `Makefile.msc` or `build_windows.bat`:
    ```bat
-   cl /O2 /W3 /LD src\vec_graph.c src\hnsw_vtab.c src\hnsw_algo.c ^
+   cl /O2 /W3 /LD src\muninn.c src\hnsw_vtab.c src\hnsw_algo.c ^
       src\graph_tvf.c src\node2vec.c src\vec_math.c src\priority_queue.c ^
-      src\id_validate.c /Fe:vec_graph.dll
+      src\id_validate.c /Fe:muninn.dll
    ```
 
 2. **Vendor SQLite headers** — Add a `scripts/vendor.sh`:
@@ -1244,13 +1244,13 @@ Key design choices we're adopting from QMD:
 | **Trigger phrases in description** | Tells AI *when* to activate (`"search my notes"`, `"find in docs"`) | Trigger on `"vector search"`, `"graph traversal"`, `"HNSW"`, `"knowledge graph"` |
 | **`allowed-tools` frontmatter** | Declares what tools the skill needs | Scopes to SQL execution, Python/Node runtime |
 | **`.claude-plugin/marketplace.json`** | Formal plugin registration for Claude Code ecosystem | Adopt for Claude Code plugin distribution |
-| **Dynamic status checks** (`!` backtick) | Inline shell execution for live environment checks | Detect if vec_graph is installed / extension loadable |
+| **Dynamic status checks** (`!` backtick) | Inline shell execution for live environment checks | Detect if muninn is installed / extension loadable |
 
 ### The Problem: AI Coding Tools Can't Use What They Can't Discover
 
 When a developer asks Claude Code, Cursor, Copilot, or Aider to "add vector search to my SQLite database", the AI needs to:
 
-1. **Know `vec_graph` exists** — discoverability
+1. **Know `muninn` exists** — discoverability
 2. **Know how to install it** — package name, platform caveats
 3. **Know the SQL interface** — `CREATE VIRTUAL TABLE ... USING hnsw_index(...)`, not some invented syntax
 4. **Know the idiomatic patterns** — vector encoding, search queries, graph traversal, Node2Vec
@@ -1266,7 +1266,7 @@ Following the QMD pattern, the skill definition lives in the repo and gets distr
 
 ```
 skills/
-    vec_graph/
+    muninn/
         SKILL.md                      # Main skill: YAML frontmatter + usage guide
         references/
             cookbook-python.md         # Python patterns (semantic search, RAG, batch insert)
@@ -1285,7 +1285,7 @@ The `SKILL.md` follows the QMD convention — YAML frontmatter for machine-parse
 
 ````markdown
 ---
-name: vec_graph
+name: muninn
 description: >
   Add HNSW vector similarity search, graph traversal (BFS, DFS, shortest path,
   PageRank, connected components), and Node2Vec embedding generation to any SQLite
@@ -1295,33 +1295,33 @@ description: >
   "Node2Vec", "embedding search", "similarity search in SQLite".
 license: MIT
 compatibility: >
-  Requires vec_graph extension. Python: `pip install vec-graph`.
-  Node.js: `npm install vec-graph`. C: download amalgamation from GitHub Releases.
+  Requires muninn extension. Python: `pip install sqlite-muninn`.
+  Node.js: `npm install sqlite-muninn`. C: download amalgamation from GitHub Releases.
 metadata:
   author: joshpeak
   version: "{{VERSION}}"
-  repository: https://github.com/user/sqlite-vector-graph
+  repository: https://github.com/user/sqlite-muninn
 allowed-tools: Bash(sqlite3:*), Bash(python:*), Bash(node:*)
 ---
 
-# vec_graph — HNSW Vector Search + Graph Traversal for SQLite
+# muninn — HNSW Vector Search + Graph Traversal for SQLite
 
 Zero-dependency C11 SQLite extension. Three subsystems in one `.load`:
 HNSW approximate nearest neighbor search, graph traversal TVFs, and Node2Vec.
 
 ## Installation Check
 
-!`python -c "import vec_graph; print(f'vec_graph {vec_graph.__version__} installed')" 2>/dev/null || echo "Not installed. Run: pip install vec-graph"`
+!`python -c "import sqlite_muninn; print(f'sqlite-muninn {sqlite_muninn.__version__} installed')" 2>/dev/null || echo "Not installed. Run: pip install sqlite-muninn"`
 
 ## Quick Start (Python)
 
 ```python
 import sqlite3
-import vec_graph
+import sqlite_muninn
 
 db = sqlite3.connect(":memory:")
 db.enable_load_extension(True)
-vec_graph.load(db)
+sqlite_muninn.load(db)
 db.enable_load_extension(False)
 ```
 
@@ -1329,7 +1329,7 @@ db.enable_load_extension(False)
 
 ```javascript
 import Database from "better-sqlite3";
-import { load } from "vec-graph";
+import { load } from "sqlite-muninn";
 
 const db = new Database(":memory:");
 load(db);
@@ -1338,7 +1338,7 @@ load(db);
 ## Quick Start (SQLite CLI)
 
 ```sql
-.load ./vec_graph
+.load ./muninn
 ```
 
 ## HNSW Vector Index
@@ -1469,23 +1469,23 @@ See `references/` for detailed per-language cookbooks:
 
 ### Claude Code Plugin Manifest
 
-Following the QMD `.claude-plugin/marketplace.json` pattern, we register vec_graph as a Claude Code plugin:
+Following the QMD `.claude-plugin/marketplace.json` pattern, we register muninn as a Claude Code plugin:
 
 ```json
 {
-  "name": "vec_graph",
+  "name": "muninn",
   "owner": {
     "name": "joshpeak",
     "email": "josh@example.com"
   },
   "plugins": [
     {
-      "name": "vec_graph",
+      "name": "muninn",
       "source": "./",
       "description": "HNSW vector search, graph traversal, and Node2Vec for SQLite.",
       "version": "0.1.0",
       "author": { "name": "joshpeak" },
-      "repository": "https://github.com/user/sqlite-vector-graph",
+      "repository": "https://github.com/user/sqlite-muninn",
       "license": "MIT",
       "keywords": ["sqlite", "vector", "hnsw", "graph", "node2vec", "search"],
       "skills": ["./skills/"]
@@ -1516,7 +1516,7 @@ The `references/` directory contains deeper patterns for each language ecosystem
 | Pattern | What the AI learns |
 |---------|-------------------|
 | **Express.js search endpoint** | API route: receive query → embed → HNSW search → JSON response |
-| **Bun SQLite integration** | `bun:sqlite` with `vec_graph` for edge-native search |
+| **Bun SQLite integration** | `bun:sqlite` with `muninn` for edge-native search |
 | **`Float32Array` ↔ `Buffer`** | Correct vector encoding/decoding for insert and search |
 | **better-sqlite3 transactions** | Batch inserts with `db.transaction()` for performance |
 
@@ -1524,7 +1524,7 @@ The `references/` directory contains deeper patterns for each language ecosystem
 
 | Pattern | What the AI learns |
 |---------|-------------------|
-| **Static linking** | Compile vec_graph into your application with `sqlite3_auto_extension()` |
+| **Static linking** | Compile muninn into your application with `sqlite3_auto_extension()` |
 | **Loadable extension** | `sqlite3_load_extension()` with proper error handling |
 | **Vector preparation** | Allocating `float[]` buffers, binding as `SQLITE_BLOB` with `sqlite3_bind_blob()` |
 | **Thread safety** | One `sqlite3*` connection per thread; HNSW index is connection-scoped |
@@ -1539,7 +1539,7 @@ The `references/` directory contains deeper patterns for each language ecosystem
 
 #### `references/vector-encoding.md`
 
-Cross-language reference for the float32 blob format — the single biggest source of errors when AI tools generate vec_graph code:
+Cross-language reference for the float32 blob format — the single biggest source of errors when AI tools generate muninn code:
 
 | Language | Encode | Decode |
 |----------|--------|--------|
@@ -1556,11 +1556,11 @@ The `skills/` directory and its contents must ship inside every package, not jus
 #### Python (PyPI)
 
 ```
-vec_graph/
+sqlite_muninn/
     __init__.py
-    vec_graph.so              # platform binary
+    muninn.so              # platform binary
     skills/
-        vec_graph/
+        muninn/
             SKILL.md
             references/
                 cookbook-python.md
@@ -1571,18 +1571,18 @@ vec_graph/
 Include in `pyproject.toml`:
 ```toml
 [tool.setuptools.package-data]
-vec_graph = ["skills/**/*.md"]
+sqlite_muninn = ["skills/**/*.md"]
 ```
 
 #### Node.js (NPM)
 
 ```
-vec-graph/
+sqlite-muninn/
     index.mjs
     index.cjs
     index.d.ts
     skills/
-        vec_graph/
+        muninn/
             SKILL.md
             references/
                 cookbook-node.md
@@ -1600,11 +1600,11 @@ Include in `package.json`:
 #### C/C++ (Amalgamation Tarball)
 
 ```
-vec_graph-amalgamation/
-    vec_graph.c
-    vec_graph.h
+muninn-amalgamation/
+    muninn.c
+    muninn.h
     skills/
-        vec_graph/
+        muninn/
             SKILL.md
             references/
                 cookbook-c.md
@@ -1615,46 +1615,46 @@ vec_graph-amalgamation/
 
 #### GitHub Repo (Source)
 
-The repo is the source of truth. All files live at `skills/vec_graph/` at the repo root. Each language package includes the full `SKILL.md` plus only the relevant reference files for that ecosystem.
+The repo is the source of truth. All files live at `skills/muninn/` at the repo root. Each language package includes the full `SKILL.md` plus only the relevant reference files for that ecosystem.
 
 ### Cross-Tool Compatibility
 
 Different AI tools discover instructions differently. The `SKILL.md` with YAML frontmatter is the canonical format; tool-specific files can be generated from it:
 
-| Tool | Discovery Mechanism | How vec_graph Gets Found |
+| Tool | Discovery Mechanism | How muninn Gets Found |
 |------|---------------------|--------------------------|
 | **Claude Code** | `.claude-plugin/` + `skills/` | Native plugin discovery; `SKILL.md` frontmatter parsed directly |
-| **Claude Code (manual)** | `CLAUDE.md` in consumer project | `python -m vec_graph init --claude` generates snippet |
-| **Cursor** | `.cursorrules` in consumer project | `python -m vec_graph init --cursor` generates rules |
-| **GitHub Copilot** | README + adjacent files | README links to `skills/vec_graph/SKILL.md` |
+| **Claude Code (manual)** | `CLAUDE.md` in consumer project | `python -m sqlite_muninn init --claude` generates snippet |
+| **Cursor** | `.cursorrules` in consumer project | `python -m sqlite_muninn init --cursor` generates rules |
+| **GitHub Copilot** | README + adjacent files | README links to `skills/muninn/SKILL.md` |
 | **Aider** | `.aider.conf.yml` conventions | Link to SKILL.md in conventions file |
-| **Windsurf** | `.windsurfrules` | `python -m vec_graph init --windsurf` generates rules |
+| **Windsurf** | `.windsurfrules` | `python -m sqlite_muninn init --windsurf` generates rules |
 | **Context7** | Indexed documentation | Published docs include SKILL.md patterns |
 | **Any tool** | Reads files adjacent to imported package | `skills/` directory discoverable next to `__init__.py` or `index.mjs` |
 
-**`vec-graph init` CLI helper** (future):
+**`sqlite_muninn init` CLI helper** (future):
 
 ```bash
 # Generate tool-specific instruction files from canonical SKILL.md
-python -m vec_graph init --claude    # → prints CLAUDE.md snippet to stdout
-python -m vec_graph init --cursor    # → prints .cursorrules content
-python -m vec_graph init --windsurf  # → prints .windsurfrules content
-python -m vec_graph init --all       # → writes all tool-specific files
+python -m sqlite_muninn init --claude    # → prints CLAUDE.md snippet to stdout
+python -m sqlite_muninn init --cursor    # → prints .cursorrules content
+python -m sqlite_muninn init --windsurf  # → prints .windsurfrules content
+python -m sqlite_muninn init --all       # → writes all tool-specific files
 ```
 
 ### Maintenance Strategy
 
 The skill files are **release artifacts** — versioned and validated alongside the code:
 
-1. **Source of truth:** `skills/vec_graph/` at the repo root (human-editable, reviewed in PRs)
+1. **Source of truth:** `skills/muninn/` at the repo root (human-editable, reviewed in PRs)
 2. **Build step:** `make skill` copies the skills directory into each package, stamping the version in YAML frontmatter
 3. **CI validation:** A job extracts and executes every code block from `SKILL.md` and all `references/*.md` files against the built extension
 4. **Versioned with releases:** The `SKILL.md` in version 0.2.0's PyPI package describes 0.2.0's API, not trunk
 
 ```makefile
-skill: skills/vec_graph/SKILL.md                ## Stamp version into skill files
+skill: skills/muninn/SKILL.md                ## Stamp version into skill files
 	@VERSION=$$(cat VERSION); \
-	for f in skills/vec_graph/SKILL.md skills/vec_graph/references/*.md; do \
+	for f in skills/muninn/SKILL.md skills/muninn/references/*.md; do \
 	    sed "s/{{VERSION}}/$$VERSION/g" "$$f" > "dist/$${f}"; \
 	done
 ```
@@ -1672,14 +1672,14 @@ validate-skill-md:
     - uses: actions/checkout@v4
     - run: make all
     - name: Validate skill examples
-      run: python scripts/validate_skill_examples.py skills/vec_graph/
+      run: python scripts/validate_skill_examples.py skills/muninn/
 ```
 
 The validation script:
-1. Recursively finds all `.md` files under `skills/vec_graph/`
+1. Recursively finds all `.md` files under `skills/muninn/`
 2. Parses fenced code blocks (```sql, ```python, ```javascript)
-3. Runs SQL blocks against a fresh SQLite connection with vec_graph loaded
-4. Runs Python blocks in a subprocess with vec_graph importable
+3. Runs SQL blocks against a fresh SQLite connection with muninn loaded
+4. Runs Python blocks in a subprocess with muninn importable
 5. Reports any blocks that error out (with file path and line number)
 
 This ensures that every code example across the entire skill directory **actually works** against the current build. When a contributor changes the SQL interface, CI will catch the stale skill docs before they ship.
@@ -1691,7 +1691,7 @@ Most SQLite extensions (and most libraries in general) rely on:
 - Documentation sites that require web fetching
 - Stack Overflow answers that may be outdated
 
-By shipping a structured `skills/` directory **inside every package**, `vec_graph` becomes the path of least resistance for any AI coding tool. When a developer says "add vector search to my SQLite app," the AI tool that can find and read `vec_graph`'s `SKILL.md` will produce correct, working code on the first attempt — while competitors require multiple rounds of debugging hallucinated syntax.
+By shipping a structured `skills/` directory **inside every package**, `muninn` becomes the path of least resistance for any AI coding tool. When a developer says "add vector search to my SQLite app," the AI tool that can find and read `muninn`'s `SKILL.md` will produce correct, working code on the first attempt — while competitors require multiple rounds of debugging hallucinated syntax.
 
 This is especially powerful for a niche category (SQLite extensions) where AI training data is sparse. The `SKILL.md` essentially **injects correct knowledge** at the point of use, bypassing the training data gap entirely.
 
@@ -1714,19 +1714,19 @@ _Get green builds on all platforms before thinking about distribution._
 
 ### Phase 2: C Distribution (Amalgamation + Install)
 
-_Make vec_graph consumable by C/C++ projects._
+_Make muninn consumable by C/C++ projects._
 
-7. **Create `scripts/amalgamate.sh`** — Produces `dist/vec_graph.c` + `dist/vec_graph.h`
+7. **Create `scripts/amalgamate.sh`** — Produces `dist/muninn.c` + `dist/muninn.h`
 8. **Add `make amalgamation` target** — Generates the amalgamation
 9. **Add `VERSION` file** — Single source of truth for all packages
-10. **Add `vec_graph.pc.in`** — pkg-config template
+10. **Add `muninn.pc.in`** — pkg-config template
 11. **Add `make install` / `make uninstall`** — Standard `PREFIX`/`DESTDIR` conventions
 12. **Add `CMakeLists.txt`** — Support FetchContent + find_package for CMake consumers
 13. **Update release workflow** — Upload amalgamation tarball to GitHub Releases
 
 ### Phase 3: Python Distribution
 
-_Ship `pip install vec-graph`._
+_Ship `pip install sqlite-muninn`._
 
 14. **Create `bindings/python/`** — `__init__.py` with `loadable_path()` + `load()`
 15. **Create `scripts/build_wheels.py`** — Assembles platform-tagged wheels from CI artifacts
@@ -1736,7 +1736,7 @@ _Ship `pip install vec-graph`._
 
 ### Phase 4: Node.js Distribution
 
-_Ship `npm install vec-graph` (native) and `npm install vec-graph-wasm` (browser)._
+_Ship `npm install sqlite-muninn` (native) and `npm install sqlite-muninn-wasm` (browser)._
 
 19. **Create `npm/` directory structure** — Main package + 5 platform packages
 20. **Write `index.mjs`, `index.cjs`, `index.d.ts`** — Wrapper API
@@ -1746,36 +1746,36 @@ _Ship `npm install vec-graph` (native) and `npm install vec-graph-wasm` (browser
 
 ### Phase 5: WASM Build
 
-_Ship `vec-graph-wasm` for browser and edge runtimes._
+_Ship `sqlite-muninn-wasm` for browser and edge runtimes._
 
 24. **Create `src/sqlite3_wasm_extra_init.c`** — Static extension registration
-25. **Create `scripts/build_wasm.sh`** — Emscripten build script (SQLite amalgamation + vec_graph amalgamation)
+25. **Create `scripts/build_wasm.sh`** — Emscripten build script (SQLite amalgamation + muninn amalgamation)
 26. **Add `build-wasm` job** to release workflow — `mymindstorm/setup-emsdk` action
 27. **Investigate WASM SIMD** (`-msimd128`) — Recover `vec_math.c` performance where possible
-28. **Create `npm/vec-graph-wasm/`** — Platform-independent npm package
+28. **Create `npm/sqlite-muninn-wasm/`** — Platform-independent npm package
 29. **Add `publish-wasm` job** to `release.yml`
 30. **Test in browser** — Verify HNSW + graph TVFs work end-to-end in WASM
 
 ### Phase 6: Agent-Ready Documentation (SKILL.md + Skills Directory)
 
-_Make vec_graph the easiest SQLite extension for AI coding tools to use correctly. Follows the [QMD skills pattern](https://github.com/tobi/qmd)._
+_Make muninn the easiest SQLite extension for AI coding tools to use correctly. Follows the [QMD skills pattern](https://github.com/tobi/qmd)._
 
-31. **Create `skills/vec_graph/SKILL.md`** — YAML frontmatter (name, description, triggers, allowed-tools, compatibility) + structured usage guide with Quick Starts, SQL reference, and Common Mistakes
-32. **Create `skills/vec_graph/references/`** — Per-language cookbooks: `cookbook-python.md`, `cookbook-node.md`, `cookbook-c.md`, `cookbook-sql.md`, plus cross-cutting `vector-encoding.md` and `platform-caveats.md`
+31. **Create `skills/muninn/SKILL.md`** — YAML frontmatter (name, description, triggers, allowed-tools, compatibility) + structured usage guide with Quick Starts, SQL reference, and Common Mistakes
+32. **Create `skills/muninn/references/`** — Per-language cookbooks: `cookbook-python.md`, `cookbook-node.md`, `cookbook-c.md`, `cookbook-sql.md`, plus cross-cutting `vector-encoding.md` and `platform-caveats.md`
 33. **Create `.claude-plugin/marketplace.json`** — Claude Code plugin manifest pointing to `skills/` directory
 34. **Add `make skill` target** — Version-stamp `{{VERSION}}` in all skill markdown files during build
-35. **Write `scripts/validate_skill_examples.py`** — Recursively extract and execute all fenced code blocks from `skills/vec_graph/**/*.md` against the built extension
+35. **Write `scripts/validate_skill_examples.py`** — Recursively extract and execute all fenced code blocks from `skills/muninn/**/*.md` against the built extension
 36. **Add `validate-skill-md` CI job** — Ensure agent documentation never drifts from the actual API
 37. **Include `skills/` in package manifests** — Add to `pyproject.toml` package-data, `package.json` files array, and amalgamation tarball (each ecosystem gets SKILL.md + relevant reference files only)
-38. **Build `python -m vec_graph init` CLI** — Generate tool-specific instruction files (CLAUDE.md, .cursorrules, .windsurfrules) from canonical SKILL.md
+38. **Build `python -m sqlite_muninn init` CLI** — Generate tool-specific instruction files (CLAUDE.md, .cursorrules, .windsurfrules) from canonical SKILL.md
 39. **Submit to Context7** — Ensure SKILL.md patterns are indexed for tools that use Context7 documentation lookup
 
 ### Phase 7: Ecosystem (Optional)
 
-40. **Homebrew formula** — Custom tap for `brew install vec-graph`
+40. **Homebrew formula** — Custom tap for `brew install sqlite-muninn`
 41. **Fuzz testing** — libFuzzer harnesses for `hnsw_algo` and `graph_tvf`
 42. **Performance regression tracking** — Bencher or github-action-benchmark
-43. **Bundled SQLite package** — `vec-graph-sqlite` with baked-in extension
+43. **Bundled SQLite package** — `sqlite-muninn-bundled` with baked-in extension
 44. **vcpkg / Conan ports** — When demand warrants
 
 ---

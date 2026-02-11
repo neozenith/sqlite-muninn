@@ -1,12 +1,12 @@
-# sqlite-vec-graph
+# sqlite-muninn
 
 A zero-dependency C extension for SQLite that combines **HNSW vector similarity search**, **graph database primitives**, and **graph embedding generation** in a single shared library.
 
-**[Documentation](https://neozenith.github.io/sqlite-vector-graph/)** | **[GitHub](https://github.com/neozenith/sqlite-vector-graph)**
+**[Documentation](https://neozenith.github.io/sqlite-muninn/)** | **[GitHub](https://github.com/neozenith/sqlite-muninn)**
 
 ```mermaid
 graph LR
-    subgraph sqlite-vec-graph Extension
+    subgraph Muninn Extension
         direction TB
         HNSW["HNSW Virtual Table<br/><i>hnsw_index</i>"]
         GTVF["Graph TVFs<br/><i>bfs, dfs, shortest_path,<br/>components, pagerank</i>"]
@@ -50,7 +50,7 @@ make test-all    # Both
 ## Quick Start
 
 ```sql
-.load ./vec_graph
+.load ./muninn
 
 -- Create an HNSW vector index
 CREATE VIRTUAL TABLE my_vectors USING hnsw_index(
@@ -260,13 +260,13 @@ SELECT node2vec_train(
 
 ## Benchmarks
 
-The project includes a comprehensive benchmark suite comparing vec_graph against other SQLite extensions across real-world workloads.
+The project includes a comprehensive benchmark suite comparing muninn against other SQLite extensions across real-world workloads.
 
 **Vector search** benchmarks compare against [sqlite-vector](https://github.com/nicepkg/sqlite-vector), [sqlite-vec](https://github.com/asg017/sqlite-vec), and [vectorlite](https://github.com/nicepkg/vectorlite) using 3 embedding models (MiniLM, MPNet, BGE-Large) and 2 text datasets (AG News, Wealth of Nations) at scales up to 250K vectors.
 
-**Graph traversal** benchmarks compare vec_graph TVFs against recursive CTEs and [GraphQLite](https://github.com/nicepkg/graphqlite) on synthetic graphs (Erdos-Renyi, Barabasi-Albert) at scales up to 100K nodes.
+**Graph traversal** benchmarks compare muninn TVFs against recursive CTEs and [GraphQLite](https://github.com/nicepkg/graphqlite) on synthetic graphs (Erdos-Renyi, Barabasi-Albert) at scales up to 100K nodes.
 
-Results include interactive Plotly charts for insert throughput, search latency, recall, database size, and tipping-point analysis. See the [full benchmark results](https://neozenith.github.io/sqlite-vector-graph/benchmarks/) on the documentation site.
+Results include interactive Plotly charts for insert throughput, search latency, recall, database size, and tipping-point analysis. See the [full benchmark results](https://neozenith.github.io/sqlite-muninn/benchmarks/) on the documentation site.
 
 ```bash
 make -C benchmarks help       # List all benchmark targets
@@ -289,7 +289,7 @@ docs/                 MkDocs documentation source
 
 ## Documentation
 
-Full documentation is published at **[neozenith.github.io/sqlite-vector-graph](https://neozenith.github.io/sqlite-vector-graph/)** via MkDocs Material with interactive Plotly charts.
+Full documentation is published at **[neozenith.github.io/sqlite-muninn](https://neozenith.github.io/sqlite-muninn/)** via MkDocs Material with interactive Plotly charts.
 
 ```bash
 make docs-serve    # Local dev server with live reload

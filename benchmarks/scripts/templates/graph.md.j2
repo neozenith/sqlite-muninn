@@ -7,7 +7,7 @@
 
 | Library | Engine | BFS | DFS | Shortest Path | Components | PageRank |
 |---------|--------|:---:|:---:|:-------------:|:----------:|:--------:|
-| [vec_graph](https://github.com/neozenith/sqlite-vector-graph) | **vec_graph TVFs** | Yes | Yes | Yes (Dijkstra) | Yes | Yes |
+| [muninn](https://github.com/neozenith/sqlite-muninn) | **muninn TVFs** | Yes | Yes | Yes (Dijkstra) | Yes | Yes |
 | [SQLite](https://www.sqlite.org/) | **Recursive CTEs** | Yes | — | Yes | Yes (slow) | — |
 | [GraphQLite](https://github.com/colliery-io/graphqlite) | **GraphQLite** | Yes | Yes | Yes | Yes | Yes |
 

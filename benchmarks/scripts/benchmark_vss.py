@@ -1,12 +1,12 @@
 """
 Multi-dimensional benchmark suite for SQLite vector search extensions.
 
-Compares vec_graph (HNSW), sqliteai/sqlite-vector, vectorlite, and sqlite-vec
+Compares muninn (HNSW), sqliteai/sqlite-vector, vectorlite, and sqlite-vec
 across multiple vector dimensions, datasets, and data volumes. Computes
 saturation metrics and writes JSONL results for analysis.
 
 Engines:
-    vec_graph        — This project's HNSW index
+    muninn           — This project's HNSW index
     sqlite_vector    — sqliteai/sqlite-vector (quantize_scan + full_scan)
     vectorlite       — vectorlite-py (HNSW via hnswlib)
     sqlite_vec       — asg017/sqlite-vec (brute-force KNN)
@@ -75,7 +75,7 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-VEC_GRAPH_PATH = str(PROJECT_ROOT / "vec_graph")
+MUNINN_PATH = str(PROJECT_ROOT / "muninn")
 RESULTS_DIR = PROJECT_ROOT / "benchmarks" / "results"
 VECTORS_DIR = PROJECT_ROOT / "benchmarks" / "vectors"
 TEXTS_DIR = PROJECT_ROOT / "benchmarks" / "texts"
@@ -253,7 +253,7 @@ def download_gutenberg(gutenberg_id):
     url = f"https://www.gutenberg.org/cache/epub/{gutenberg_id}/pg{gutenberg_id}.txt"
     log.info("    Downloading Gutenberg #%d from %s...", gutenberg_id, url)
 
-    req = urllib.request.Request(url, headers={"User-Agent": "vec_graph-benchmark/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "muninn-benchmark/1.0"})
     with urllib.request.urlopen(req, timeout=60) as resp:
         raw_text = resp.read().decode("utf-8-sig")
 
@@ -468,15 +468,15 @@ def compute_recall(search_results, ground_truth):
     return sum(recalls) / len(recalls) if recalls else 0.0
 
 
-# ── vec_graph (HNSW) runner ───────────────────────────────────────
+# ── muninn (HNSW) runner ──────────────────────────────────────────
 
 
-def run_vec_graph(vectors, query_ids, dim, db_path=":memory:"):
-    """Benchmark vec_graph HNSW insert + search. Returns metrics dict."""
+def run_muninn(vectors, query_ids, dim, db_path=":memory:"):
+    """Benchmark muninn HNSW insert + search. Returns metrics dict."""
     n = len(vectors)
     conn = sqlite3.connect(db_path)
     conn.enable_load_extension(True)
-    conn.load_extension(VEC_GRAPH_PATH)
+    conn.load_extension(MUNINN_PATH)
 
     conn.execute(
         f"CREATE VIRTUAL TABLE bench_vec USING hnsw_index("
@@ -882,18 +882,18 @@ def verify_extensions():
     """Verify all extensions are loadable. Returns dict of {engine: bool}."""
     status = {}
 
-    # vec_graph
+    # muninn
     try:
         c = sqlite3.connect(":memory:")
         c.enable_load_extension(True)
-        c.load_extension(VEC_GRAPH_PATH)
+        c.load_extension(MUNINN_PATH)
         c.close()
-        log.info("  vec_graph:       OK (%s)", VEC_GRAPH_PATH)
-        status["vec_graph"] = True
+        log.info("  muninn:          OK (%s)", MUNINN_PATH)
+        status["muninn"] = True
     except Exception as e:
-        log.error("  vec_graph:       FAILED — %s", e)
+        log.error("  muninn:          FAILED — %s", e)
         log.error("  Run 'make all' first.")
-        status["vec_graph"] = False
+        status["muninn"] = False
 
     # sqlite-vector (sqliteai)
     try:
@@ -996,13 +996,13 @@ def run_benchmark(
 
             record_dataset = dataset if vector_source != "random" else None
 
-            if engine == "vec_graph":
-                log.info("  Running vec_graph HNSW (N=%d, dim=%d, storage=%s)...", n, dim, storage)
-                vg = run_vec_graph(vectors, query_ids, dim, db_path=db_path)
+            if engine == "muninn":
+                log.info("  Running muninn HNSW (N=%d, dim=%d, storage=%s)...", n, dim, storage)
+                vg = run_muninn(vectors, query_ids, dim, db_path=db_path)
                 vg["recall"] = compute_recall(vg.pop("results"), ground_truth)
 
                 record = make_record(
-                    engine="vec_graph",
+                    engine="muninn",
                     search_method="hnsw",
                     vector_source=vector_source,
                     model_name=model_name if vector_source != "random" else None,
@@ -1147,13 +1147,13 @@ def run_benchmark(
             )
 
 
-ALL_ENGINES = ["vec_graph", "sqlite_vector", "vectorlite", "sqlite_vec"]
+ALL_ENGINES = ["muninn", "sqlite_vector", "vectorlite", "sqlite_vec"]
 
 
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Multi-engine benchmark: vec_graph vs sqlite-vector vs vectorlite vs sqlite-vec",
+        description="Multi-engine benchmark: muninn vs sqlite-vector vs vectorlite vs sqlite-vec",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Profiles:

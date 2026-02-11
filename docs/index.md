@@ -1,4 +1,4 @@
-# sqlite-vec-graph
+# sqlite-muninn
 
 A zero-dependency C extension for SQLite that combines **HNSW vector similarity search**, **graph database primitives**, and **graph embedding generation** in a single shared library.
 
@@ -23,7 +23,7 @@ make test-python # Python integration tests
 ```
 
 ```sql
-.load ./vec_graph
+.load ./muninn
 
 -- Create an HNSW vector index
 CREATE VIRTUAL TABLE my_vectors USING hnsw_index(

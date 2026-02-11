@@ -1,5 +1,5 @@
 """
-Graph traversal benchmark: vec_graph TVFs vs recursive CTEs vs GraphQLite.
+Graph traversal benchmark: muninn TVFs vs recursive CTEs vs GraphQLite.
 
 Compares graph traversal operations (BFS, DFS, shortest path, connected components,
 PageRank) across different engines on synthetic graphs with controlled topology.
@@ -9,7 +9,7 @@ Graph models:
     barabasi_albert — Scale-free graph via preferential attachment
 
 Engines:
-    vec_graph   — This project's graph TVFs (graph_bfs, graph_dfs, etc.)
+    muninn      — This project's graph TVFs (graph_bfs, graph_dfs, etc.)
     cte         — Recursive CTEs in plain SQLite (baseline)
     graphqlite  — GraphQLite library (Python API)
 
@@ -21,7 +21,7 @@ Profiles:
 
 Run:
     python python/benchmark_graph.py --nodes 100 --avg-degree 5
-    python python/benchmark_graph.py --nodes 1000 --avg-degree 20 --engine vec_graph
+    python python/benchmark_graph.py --nodes 1000 --avg-degree 20 --engine muninn
 """
 import argparse
 import collections
@@ -46,7 +46,7 @@ except ImportError:
     HAS_GRAPHQLITE = False
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-VEC_GRAPH_PATH = str(PROJECT_ROOT / "vec_graph")
+MUNINN_PATH = str(PROJECT_ROOT / "muninn")
 RESULTS_DIR = PROJECT_ROOT / "benchmarks" / "results"
 
 N_PER_QUERY_OPS = 50  # random start nodes for per-query operations
@@ -325,11 +325,11 @@ def python_pagerank(adj, damping=0.85, iterations=100):
     return rank
 
 
-# ── vec_graph runner ──────────────────────────────────────────────
+# ── muninn runner ─────────────────────────────────────────────────
 
 
-def setup_vec_graph_edges(conn, edges):
-    """Create edge table and load edges for vec_graph TVFs."""
+def setup_muninn_edges(conn, edges):
+    """Create edge table and load edges for muninn TVFs."""
     conn.execute("CREATE TABLE IF NOT EXISTS bench_edges(src INTEGER, dst INTEGER, weight REAL)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_bench_src ON bench_edges(src)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_bench_dst ON bench_edges(dst)")
@@ -337,8 +337,8 @@ def setup_vec_graph_edges(conn, edges):
     conn.commit()
 
 
-def run_graph_vec_graph(conn, operation, adj, start_nodes, end_nodes=None):
-    """Run a graph operation using vec_graph TVFs. Returns (results, timing)."""
+def run_graph_muninn(conn, operation, adj, start_nodes, end_nodes=None):
+    """Run a graph operation using muninn TVFs. Returns (results, timing)."""
     if operation == "bfs":
         times = []
         results = []
@@ -680,18 +680,18 @@ def run_graph_benchmark(
     for engine in engines:
         log.info("\n  Engine: %s", engine)
 
-        if engine == "vec_graph":
+        if engine == "muninn":
             conn = sqlite3.connect(":memory:")
             conn.enable_load_extension(True)
-            conn.load_extension(VEC_GRAPH_PATH)
+            conn.load_extension(MUNINN_PATH)
 
             t0 = time.perf_counter()
-            setup_vec_graph_edges(conn, edges)
+            setup_muninn_edges(conn, edges)
             setup_time = time.perf_counter() - t0
 
             for op in operations:
                 log.info("    Operation: %s", op)
-                results, times = run_graph_vec_graph(conn, op, adj, start_nodes, end_nodes)
+                results, times = run_graph_muninn(conn, op, adj, start_nodes, end_nodes)
                 if results is None:
                     continue
 
@@ -708,7 +708,7 @@ def run_graph_benchmark(
                     nodes_visited = sum(len(r) for r in results) / len(results) if results else 0
 
                 record = make_graph_record(
-                    engine="vec_graph", operation=op, graph_model=graph_model,
+                    engine="muninn", operation=op, graph_model=graph_model,
                     n_nodes=n_nodes, n_edges=n_edges, avg_degree=actual_avg_degree,
                     weighted=weighted, setup_time_s=setup_time,
                     query_times=times, correct=correct,
@@ -792,7 +792,7 @@ def run_graph_benchmark(
                 log.info("      %s: %.3fms (correct=%s)", op, record["query_time_ms"], correct)
 
 
-ALL_GRAPH_ENGINES = ["vec_graph", "graphqlite"]
+ALL_GRAPH_ENGINES = ["muninn", "graphqlite"]
 
 
 def verify_graph_extensions():
@@ -802,13 +802,13 @@ def verify_graph_extensions():
     try:
         c = sqlite3.connect(":memory:")
         c.enable_load_extension(True)
-        c.load_extension(VEC_GRAPH_PATH)
+        c.load_extension(MUNINN_PATH)
         c.close()
-        log.info("  vec_graph:     OK")
-        status["vec_graph"] = True
+        log.info("  muninn:        OK")
+        status["muninn"] = True
     except Exception as e:
-        log.error("  vec_graph:     FAILED — %s", e)
-        status["vec_graph"] = False
+        log.error("  muninn:        FAILED — %s", e)
+        status["muninn"] = False
 
     # CTE is always available (built-in SQLite)
     status["cte"] = True
@@ -832,13 +832,13 @@ def verify_graph_extensions():
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Graph traversal benchmark: vec_graph TVFs vs CTEs vs GraphQLite",
+        description="Graph traversal benchmark: muninn TVFs vs CTEs vs GraphQLite",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python python/benchmark_graph.py --nodes 100 --avg-degree 5
   python python/benchmark_graph.py --graph-model barabasi_albert --nodes 1000 --avg-degree 5
-  python python/benchmark_graph.py --nodes 1000 --avg-degree 20 --engine vec_graph
+  python python/benchmark_graph.py --nodes 1000 --avg-degree 20 --engine muninn
         """,
     )
     parser.add_argument("--graph-model", choices=["erdos_renyi", "barabasi_albert"], default="erdos_renyi")

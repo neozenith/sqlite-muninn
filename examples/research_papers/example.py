@@ -11,7 +11,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
-EXTENSION_PATH = str(PROJECT_ROOT / "vec_graph")
+EXTENSION_PATH = str(PROJECT_ROOT / "muninn")
 
 # ── Data: 12 papers in 3 clusters ───────────────────────────────────
 # ML cluster (5 papers): ML-Survey is heavily cited hub

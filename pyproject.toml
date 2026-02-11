@@ -1,6 +1,6 @@
 # This project is a C library — pyproject.toml is used only for Python tooling deps.
 [project]
-name = "sqlite-vec-graph-docs"
+name = "sqlite-muninn-docs"
 version = "0.0.0"
 requires-python = ">=3.12"
 

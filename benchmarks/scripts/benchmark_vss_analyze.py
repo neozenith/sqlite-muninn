@@ -8,7 +8,7 @@ Reads all benchmarks/results/*.jsonl files (excluding graph_* files), aggregates
 2. Plotly JSON charts: per-model tipping point, cross-model comparison, recall, storage
 
 Engines:
-    vec_graph-hnsw              — this project's HNSW index
+    muninn-hnsw              — this project's HNSW index
     sqlite-vector-quantize      — sqliteai/sqlite-vector quantized approximate search
     sqlite-vector-fullscan      — sqliteai/sqlite-vector brute-force exact search
     vectorlite-hnsw             — vectorlite HNSW (hnswlib backend)
@@ -233,12 +233,12 @@ def _fmt_bytes(size):
 # Design rules:
 #   1. Labels: {library}-{algorithm} or {library}-{algorithm}-{dims}d-{model}
 #   2. Hue per library-algorithm, vary S/L per model -> "fiber bundle" effect
-#   3. Non-vec_graph traces at 80% opacity so vec_graph pops
+#   3. Non-muninn traces at 80% opacity so muninn pops
 #   4. Legend ordered: library-algorithm first, then model (by dim ascending)
 
 
 ENGINE_METHOD_PAIRS = [
-    ("vec_graph", "hnsw"),
+    ("muninn", "hnsw"),
     ("sqlite_vector", "quantize_scan"),
     ("sqlite_vector", "full_scan"),
     ("vectorlite", "hnsw"),
@@ -247,7 +247,7 @@ ENGINE_METHOD_PAIRS = [
 
 # Library-algorithm labels
 ENGINE_LABELS = {
-    ("vec_graph", "hnsw"): "vec_graph-hnsw",
+    ("muninn", "hnsw"): "muninn-hnsw",
     ("sqlite_vector", "quantize_scan"): "sqlite-vector-quantize",
     ("sqlite_vector", "full_scan"): "sqlite-vector-fullscan",
     ("vectorlite", "hnsw"): "vectorlite-hnsw",
@@ -256,7 +256,7 @@ ENGINE_LABELS = {
 
 # Base hue per library-algorithm (HSL hue degrees)
 ENGINE_HUES = {
-    ("vec_graph", "hnsw"): 270,                # purple
+    ("muninn", "hnsw"): 270,                # purple
     ("sqlite_vector", "quantize_scan"): 175,    # teal
     ("sqlite_vector", "full_scan"): 18,         # warm orange
     ("vectorlite", "hnsw"): 210,                # blue
@@ -265,15 +265,15 @@ ENGINE_HUES = {
 
 
 def _engine_label(engine, method):
-    """Library-algorithm label: vec_graph-hnsw, sqlite-vector-quantize, etc."""
+    """Library-algorithm label: muninn-hnsw, sqlite-vector-quantize, etc."""
     return ENGINE_LABELS.get((engine, method), f"{engine}-{method}")
 
 
 def _trace_label(engine, method, model=None, dim=None):
     """Full trace label for legends.
 
-    Single-model charts: "vec_graph-hnsw"
-    Cross-model charts:  "vec_graph-hnsw-384d-MiniLM"
+    Single-model charts: "muninn-hnsw"
+    Cross-model charts:  "muninn-hnsw-384d-MiniLM"
     """
     base = _engine_label(engine, method)
     if model is not None and dim is not None:
@@ -299,8 +299,8 @@ def _make_color(engine, method, model_idx=0, n_models=1):
 
 
 def _trace_opacity(engine):
-    """vec_graph at full opacity, everything else softened to 80%."""
-    return 1.0 if engine == "vec_graph" else 0.8
+    """muninn at full opacity, everything else softened to 80%."""
+    return 1.0 if engine == "muninn" else 0.8
 
 
 def _save_chart(fig, name):
@@ -380,7 +380,7 @@ def print_model_overview(agg, models, active_pairs, ds_label=""):
         ds = next((k[4] for k in agg if k[3] == model), None)
 
         largest_n = max(sizes) if sizes else 0
-        hnsw_lat = _get_val(agg, "vec_graph", "hnsw", "model", model, ds, dim, largest_n, "search_latency_ms")
+        hnsw_lat = _get_val(agg, "muninn", "hnsw", "model", model, ds, dim, largest_n, "search_latency_ms")
         qscan_lat = _get_val(agg, "sqlite_vector", "quantize_scan", "model", model, ds, dim, largest_n, "search_latency_ms")
         wins = ""
         if hnsw_lat is not None and qscan_lat is not None:
@@ -583,7 +583,7 @@ def print_random_search_table(agg, active_pairs):
                 val = _get_val(agg, engine, method, "random", None, None, dim, n, "search_latency_ms")
                 row += f" | {_fmt(val):>{col_w}}"
 
-            hnsw = _get_val(agg, "vec_graph", "hnsw", "random", None, None, dim, n, "search_latency_ms")
+            hnsw = _get_val(agg, "muninn", "hnsw", "random", None, None, dim, n, "search_latency_ms")
             qscan = _get_val(agg, "sqlite_vector", "quantize_scan", "random", None, None, dim, n, "search_latency_ms")
             winner = ""
             if hnsw is not None and qscan is not None:
@@ -673,7 +673,7 @@ def chart_model_tipping_point(agg):
 
                 color = _make_color(engine, method)
                 opacity = _trace_opacity(engine)
-                line_width = 3 if engine == "vec_graph" else 2
+                line_width = 3 if engine == "muninn" else 2
 
                 fig.add_trace(
                     go.Scatter(
@@ -743,7 +743,7 @@ def chart_model_comparison(agg):
 
                 color = _make_color(engine, method, model_idx, n_models)
                 opacity = _trace_opacity(engine)
-                line_width = 3 if engine == "vec_graph" else 2
+                line_width = 3 if engine == "muninn" else 2
 
                 fig.add_trace(
                     go.Scatter(
@@ -813,7 +813,7 @@ def chart_model_recall(agg):
 
                 color = _make_color(engine, method, model_idx, n_models)
                 opacity = _trace_opacity(engine)
-                line_width = 3 if engine == "vec_graph" else 2
+                line_width = 3 if engine == "muninn" else 2
 
                 fig.add_trace(
                     go.Scatter(
@@ -883,7 +883,7 @@ def chart_model_insert_throughput(agg):
 
                 color = _make_color(engine, method, model_idx, n_models)
                 opacity = _trace_opacity(engine)
-                line_width = 3 if engine == "vec_graph" else 2
+                line_width = 3 if engine == "muninn" else 2
 
                 fig.add_trace(
                     go.Scatter(
@@ -961,7 +961,7 @@ def chart_model_db_size(agg):
 
                 color = _make_color(engine, method, model_idx, n_models)
                 opacity = _trace_opacity(engine)
-                line_width = 3 if engine == "vec_graph" else 2
+                line_width = 3 if engine == "muninn" else 2
 
                 fig.add_trace(
                     go.Scatter(
@@ -1019,7 +1019,7 @@ def chart_dataset_comparison(agg):
         fig = go.Figure()
         has_traces = False
 
-        for engine, method in [("vec_graph", "hnsw"), ("sqlite_vector", "quantize_scan")]:
+        for engine, method in [("muninn", "hnsw"), ("sqlite_vector", "quantize_scan")]:
             for ds in datasets:
                 sizes = sorted(
                     k[6] for k in agg
@@ -1035,7 +1035,7 @@ def chart_dataset_comparison(agg):
 
                 color = _make_color(engine, method)
                 opacity = _trace_opacity(engine)
-                line_width = 3 if engine == "vec_graph" else 2
+                line_width = 3 if engine == "muninn" else 2
                 dash = ds_dash.get(ds, "solid")
 
                 fig.add_trace(
@@ -1113,7 +1113,7 @@ def chart_saturation(agg):
         rc_mean = sum(data["rc"]) / len(data["rc"])
         cv_mean = sum(data["cv"]) / len(data["cv"]) if data["cv"] else None
 
-        # Use vec_graph purple hue for model bars, grey for random
+        # Use muninn purple hue for model bars, grey for random
         is_model = "random" not in label
         hue = 270 if is_model else 0
         sat = 75 if is_model else 0

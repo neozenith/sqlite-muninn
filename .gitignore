@@ -24,3 +24,6 @@ benchmarks/texts/
 .claude/
 CLAUDE.md
 .DS_Store
+*.dylib
+*.so
+*.dll

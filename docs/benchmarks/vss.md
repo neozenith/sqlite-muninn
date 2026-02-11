@@ -7,7 +7,7 @@
 
 | Library | Engine | Method | Strategy |
 |---------|--------|--------|----------|
-| [vec_graph](https://github.com/neozenith/sqlite-vector-graph) | **vec_graph-hnsw** | HNSW graph index | Approximate, O(log N) search |
+| [muninn](https://github.com/neozenith/sqlite-muninn) | **muninn-hnsw** | HNSW graph index | Approximate, O(log N) search |
 | [sqlite-vector](https://github.com/sqliteai/sqlite-vector) | **sqlite-vector-quantize** | Product Quantization | Approximate, O(N) scan |
 | [sqlite-vector](https://github.com/sqliteai/sqlite-vector) | **sqlite-vector-fullscan** | Brute-force | Exact, O(N) scan |
 | [vectorlite](https://github.com/1yefuwang1/vectorlite) | **vectorlite-hnsw** | HNSW via hnswlib | Approximate, O(log N) search |

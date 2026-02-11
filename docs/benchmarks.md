@@ -21,7 +21,7 @@ make -C benchmarks analyze
 ## Results
 
 - **[Vector Search](benchmarks/vss.md)** — HNSW vs brute-force across 3 embedding models, 2 datasets, and 4 SQLite extensions
-- **[Graph Traversal](benchmarks/graph.md)** — BFS, DFS, shortest path, components, and PageRank across vec_graph TVFs, recursive CTEs, and GraphQLite
+- **[Graph Traversal](benchmarks/graph.md)** — BFS, DFS, shortest path, components, and PageRank across muninn TVFs, recursive CTEs, and GraphQLite
 
 ## Completeness
 
@@ -48,13 +48,13 @@ make -C benchmarks graph-manifest   # Graph completeness report
 
 ```bash
 # Vector: specific model, engine, and dataset
-.venv/bin/python benchmarks/scripts/benchmark_vss.py --source model:all-MiniLM-L6-v2 --sizes 1000,5000 --engine vec_graph --dataset ag_news
+.venv/bin/python benchmarks/scripts/benchmark_vss.py --source model:all-MiniLM-L6-v2 --sizes 1000,5000 --engine muninn --dataset ag_news
 
 # Vector: random vectors
 .venv/bin/python benchmarks/scripts/benchmark_vss.py --source random --dim 384 --sizes 1000,5000
 
 # Graph: specific topology
-.venv/bin/python benchmarks/scripts/benchmark_graph.py --nodes 1000 --avg-degree 10 --engine vec_graph
+.venv/bin/python benchmarks/scripts/benchmark_graph.py --nodes 1000 --avg-degree 10 --engine muninn
 
 # Graph: scale-free
 .venv/bin/python benchmarks/scripts/benchmark_graph.py --graph-model barabasi_albert --nodes 5000 --avg-degree 5

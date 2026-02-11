@@ -2,20 +2,17 @@
 
 Rename the project from `sqlite-vector-graph` / `vec_graph` to `sqlite-muninn` / `muninn`, establishing a memorable brand identity with a cohesive naming architecture across all ecosystems.
 
-**Status:** Plan only. Not yet implemented.
+**Status:** Mechanical rename completed. Brand identity incubating in [`brand_identity.md`](brand_identity.md).
 
 ---
 
 ## Table of Contents
 
 1. [Decision](#decision)
-2. [Why Muninn](#why-muninn)
-3. [Name Availability](#name-availability)
-4. [Naming Architecture](#naming-architecture)
-5. [SEO Strategy](#seo-strategy)
-6. [Brand Identity](#brand-identity)
-7. [Rename Checklist](#rename-checklist)
-8. [Risks and Mitigations](#risks-and-mitigations)
+2. [Name Availability](#name-availability)
+3. [Naming Architecture](#naming-architecture)
+4. [Rename Checklist](#rename-checklist)
+5. [Risks and Mitigations](#risks-and-mitigations)
 
 ---
 
@@ -27,41 +24,7 @@ Rename the project from `sqlite-vector-graph` / `vec_graph` to `sqlite-muninn` /
 
 **Rationale:** The old name describes the implementation mechanism (vector + graph). The new name describes the *purpose* — a memory system for knowledge retrieval. As the project grows beyond raw HNSW/graph primitives into GraphRAG, knowledge indexing, community detection, and agent memory, the old name becomes increasingly misleading.
 
----
-
-## Why Muninn
-
-**Muninn** (Old Norse: *Muninn*, "memory") is one of Odin's two ravens in Norse mythology. Every day, Huginn ("thought") and Muninn ("memory") fly across all the realms gathering information, then return to perch on Odin's shoulders and whisper everything they've learned.
-
-From the Poetic Edda (Grimnismal, stanza 20):
-
-> *Huginn and Muninn fly each day over the wide world.*
-> *I fear for Huginn that he may not return,*
-> *yet I worry more for Muninn.*
-
-Odin fears losing Memory more than Thought.
-
-### The Metaphor
-
-| Norse Myth | This Library |
-|-----------|-------------|
-| Muninn flies out across the realms | Indexer crawls codebases, docs, session logs, infrastructure |
-| Muninn observes and encodes what it sees | Vector embeddings capture semantic meaning |
-| Muninn traces connections between realms | Graph edges encode relationships |
-| Muninn returns knowledge to Odin | Graph traversal retrieves connected context |
-| Without Muninn, Odin loses his power | Without memory, an AI agent is stateless |
-
-### Shortlist Considered
-
-The final four contenders before selecting Muninn:
-
-| Name | Strength | Why Not Chosen |
-|------|----------|---------------|
-| **grimoire** | Strongest "deep dark lore" imagery | No layered wordplay; slightly generic |
-| **tome** | Short, evocative, scholarly weight | Too generic; no story behind it |
-| **lore** | Most self-describing ("it manages lore") | Likely taken on PyPI; no distinctive brand |
-| **engram** | Best pun (engram/n-gram) | Doesn't capture the retrieval/agent angle as strongly |
-| **muninn** | Norse mythology, raven logo, "memory" meaning, brand story | **Selected** |
+For background on the name choice, mythology, and shortlist, see [`brand_identity.md`](brand_identity.md).
 
 ---
 
@@ -93,153 +56,56 @@ The `sqlite-` prefix avoids all collisions and follows the established SQLite ex
 | **C header** | `vec_graph.h` | `muninn.h` | Public API header |
 | **Internal prefix** | `vecgraph_` / `vec_graph_` | `muninn_` | For C symbols, shadow tables, etc. |
 
-### SQLite Loading
-
-```sql
--- Old
-.load ./vec_graph
-
--- New
-.load ./muninn
-```
-
-SQLite's `load_extension()` auto-discovers the entry point `sqlite3_muninn_init` from the filename `muninn`.
-
-### Python API
-
-```python
-# Old
-import sqlite3
-conn = sqlite3.connect(":memory:")
-conn.enable_load_extension(True)
-conn.load_extension("./vec_graph")
-
-# New
-import sqlite3
-import sqlite_muninn
-
-conn = sqlite3.connect(":memory:")
-conn.enable_load_extension(True)
-sqlite_muninn.load(conn)
-```
-
----
-
-## SEO Strategy
-
-The short package name is for humans. SEO keywords go in metadata:
-
-| Channel | Where Keywords Live |
-|---------|-------------------|
-| **GitHub** | Repo description + topics (tags) |
-| **PyPI** | `keywords` field in pyproject.toml + long description |
-| **NPM** | `keywords` array in package.json + README |
-| **Google** | README H1 + description + content |
-
-### GitHub Repo Description
-
-> Muninn — HNSW vector search, graph traversal & knowledge graphs for SQLite
-
-### GitHub Topics
-
-```
-sqlite, vector-search, knowledge-graph, hnsw, graph-traversal,
-node2vec, graphrag, sqlite-extension, embeddings, rag
-```
-
-### README H1
-
-```markdown
-# Muninn
-
-**HNSW vector search + graph traversal + knowledge graphs for SQLite**
-
-A zero-dependency C11 SQLite extension combining vector similarity search,
-graph traversal TVFs, and Node2Vec embedding generation in a single loadable library.
-```
-
-### PyPI Keywords
-
-```
-sqlite, vector, search, hnsw, knowledge-graph, graph, traversal,
-node2vec, embeddings, graphrag, rag, sqlite-extension
-```
-
----
-
-## Brand Identity
-
-### Logo Concept
-
-A raven silhouette — options for incorporating the tech identity:
-
-- Graph nodes/edges subtly patterned into the wing feathers
-- A raven carrying a glowing node in its talons
-- A raven perched on a graph structure (like Odin's shoulder)
-- Minimalist raven head profile with a single vector/node as the eye
-
-### Color Palette Suggestions
-
-- Primary: deep charcoal/black (raven)
-- Accent: amber/gold (Odin's wisdom, the glowing knowledge)
-- Background: dark navy or off-white
-
-### Tagline Options
-
-- "Memory for your data" (direct)
-- "The raven remembers" (mythological)
-- "Vector search + graph traversal for SQLite" (technical)
-
 ---
 
 ## Rename Checklist
 
-### Phase 1: C Extension (Core)
+### Phase 1: C Extension (Core) — DONE
 
-- [ ] Rename `src/vec_graph.c` → `src/muninn.c`
-- [ ] Rename `src/vec_graph.h` → `src/muninn.h`
-- [ ] Update entry point: `sqlite3_vecgraph_init` → `sqlite3_muninn_init`
-- [ ] Update all internal `#include "vec_graph.h"` references
-- [ ] Update `Makefile`: output target `vec_graph$(EXT)` → `muninn$(EXT)`
-- [ ] Update `Makefile`: all references to `vec_graph` in build rules
-- [ ] Update C test files that reference `vec_graph`
-- [ ] Verify `make all && make test` passes
+- [x] Rename `src/vec_graph.c` → `src/muninn.c`
+- [x] Rename `src/vec_graph.h` → `src/muninn.h`
+- [x] Update entry point: `sqlite3_vecgraph_init` → `sqlite3_muninn_init`
+- [x] Update all internal `#include "vec_graph.h"` references
+- [x] Update `Makefile`: output target `vec_graph$(EXT)` → `muninn$(EXT)`
+- [x] Update `Makefile`: all references to `vec_graph` in build rules
+- [x] Update C test files that reference `vec_graph`
+- [x] Verify `make all && make test` passes
 
-### Phase 2: Python Integration
+### Phase 2: Python Integration — DONE
 
-- [ ] Update `pytests/conftest.py`: extension loading path
-- [ ] Update any Python imports/references to `vec_graph`
-- [ ] Update benchmark scripts in `benchmarks/scripts/`
-- [ ] Verify `make test-python` passes
+- [x] Update `pytests/conftest.py`: extension loading path
+- [x] Update any Python imports/references to `vec_graph`
+- [x] Update benchmark scripts in `benchmarks/scripts/`
+- [x] Verify `make test-python` passes
 
-### Phase 3: Documentation
+### Phase 3: Documentation — DONE
 
-- [ ] Update `README.md` — new name, description, loading instructions
-- [ ] Update `CLAUDE.md` — all references to `vec_graph`
-- [ ] Update `docs/plans/distribution_and_ci.md` — package names, wheel tags, npm structure
-- [ ] Update `docs/plans/knowledge_graph_benchmark.md` — references to `vec_graph`
-- [ ] Update any other docs under `docs/`
+- [x] Update `README.md` — new name, description, loading instructions
+- [x] Update `CLAUDE.md` — all references to `vec_graph`
+- [x] Update `docs/plans/distribution_and_ci.md` — package names, wheel tags, npm structure
+- [x] Update `docs/plans/knowledge_graph_benchmark.md` — references to `vec_graph`
+- [x] Update any other docs under `docs/`
 
-### Phase 4: Project Infrastructure
+### Phase 4: Project Infrastructure — DONE (partial)
 
-- [ ] Update `pyproject.toml` — project name and metadata
-- [ ] Update `.github/workflows/` — any references to `vec_graph`
-- [ ] Update `benchmarks/Makefile` — extension path references
-- [ ] Rename GitHub repository: `sqlite-vector-graph` → `sqlite-muninn`
-- [ ] Update GitHub repo description and topics
-- [ ] Set up redirect from old repo name (GitHub does this automatically)
+- [x] Update `pyproject.toml` — project name and metadata
+- [ ] Update `.github/workflows/` — any references to `vec_graph` (none exist yet)
+- [x] Update `benchmarks/Makefile` — extension path references
+- [ ] Rename GitHub repository: `sqlite-vector-graph` → `sqlite-muninn` (manual GitHub operation, post-merge)
+- [ ] Update GitHub repo description and topics (manual, post-merge)
+- [x] Set up redirect from old repo name (GitHub does this automatically)
 
-### Phase 5: Memory / Agent Context
+### Phase 5: Memory / Agent Context — DONE
 
-- [ ] Update `.claude/` memory files referencing `vec_graph`
-- [ ] Update `MEMORY.md` with new project name and conventions
+- [x] Update `.claude/` memory files referencing `vec_graph`
+- [x] Update `MEMORY.md` with new project name and conventions
 
 ### Phase 6: Publishing Prep (Future — Defer Until Distribution Plan)
 
 - [ ] Register `sqlite-muninn` on PyPI (can reserve with empty package)
 - [ ] Register `sqlite-muninn` on NPM
 - [ ] Register `@sqlite-muninn` org on NPM for platform packages
-- [ ] Create logo assets
+- [ ] Create logo assets (see [`brand_identity.md`](brand_identity.md))
 - [ ] Update `docs/plans/distribution_and_ci.md` with finalized names
 
 ---

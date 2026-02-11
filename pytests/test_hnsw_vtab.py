@@ -277,7 +277,7 @@ class TestHnswPersistence:
         db_path = str(tmp_path / "test.db")
         ext_path = __import__("os").path.join(
             __import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__))),
-            "vec_graph",
+            "muninn",
         )
 
         # Create and populate

@@ -1,5 +1,5 @@
 """
-Fixtures for sqlite-vec-graph Python integration tests.
+Fixtures for sqlite-muninn Python integration tests.
 
 Compiles the extension (if needed) and provides a fresh sqlite3 connection
 with the extension loaded.
@@ -13,7 +13,7 @@ import pytest
 
 # Extension path relative to project root
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXTENSION_PATH = os.path.join(PROJECT_ROOT, "vec_graph")
+EXTENSION_PATH = os.path.join(PROJECT_ROOT, "muninn")
 
 
 @pytest.fixture(scope="session", autouse=True)

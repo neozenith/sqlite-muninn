@@ -19,7 +19,7 @@ else
     EXT = .dll
 endif
 
-EXTENSION = ../vec_graph$(EXT)
+EXTENSION = ../muninn$(EXT)
 
 .PHONY: help compare saturation \
         models-prep models-prep-manifest models vss-analyze clean \

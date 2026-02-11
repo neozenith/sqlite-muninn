@@ -1,6 +1,6 @@
 # Competitive Landscape Analysis
 
-An analysis of whether the vec_graph / sqlite-muninn project occupies a unique niche, and who the closest competitors are.
+An analysis of whether the muninn / sqlite-muninn project occupies a unique niche, and who the closest competitors are.
 
 **Status:** Research completed 2026-02-11. Should be refreshed periodically.
 

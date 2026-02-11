@@ -1,9 +1,9 @@
-site_name: sqlite-vec-graph
+site_name: sqlite-muninn
 site_description: "HNSW vector search + graph traversal + Node2Vec embeddings in a single SQLite extension."
-site_url: https://neozenith.github.io/sqlite-vector-graph/
+site_url: https://neozenith.github.io/sqlite-muninn/
 site_author: Josh Peak
-repo_url: https://github.com/neozenith/sqlite-vector-graph
-repo_name: neozenith/sqlite-vector-graph
+repo_url: https://github.com/neozenith/sqlite-muninn
+repo_name: neozenith/sqlite-muninn
 edit_uri: edit/main/docs/
 
 theme:
@@ -71,4 +71,4 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/neozenith/sqlite-vector-graph
+      link: https://github.com/neozenith/sqlite-muninn
