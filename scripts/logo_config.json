@@ -1,0 +1,33 @@
+{
+  "canvas": {
+    "width": 2048,
+    "height": 1024
+  },
+  "background": [255, 255, 255, 0],
+  "icon": {
+    "position": [0.05, 0.5],
+    "anchor": "center_left",
+    "scale": 0.9
+  },
+  "wordmark": {
+    "text": "MUNINN",
+    "split_at": 3,
+    "position": [0.55, 0.5],
+    "anchor": "center_left",
+    "font": null,
+    "font_size_ratio": 0.25,
+    "font_weight": null,
+    "color_left": [43, 45, 66],
+    "color_right": [244, 162, 97],
+    "stroke_width": 0,
+    "stroke_color": null
+  },
+  "runes": {
+    "text": "\u16d7\u16a2\u16be\u16c1\u16be\u16be",
+    "position": [0.5, 0.85],
+    "anchor": "center",
+    "opacity": 0.15,
+    "font": null,
+    "font_size_ratio": 0.12
+  }
+}

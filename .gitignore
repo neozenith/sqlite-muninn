@@ -27,3 +27,5 @@ CLAUDE.md
 *.dylib
 *.so
 *.dll
+tmp/
+docs/logo/

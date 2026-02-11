@@ -1,6 +1,10 @@
 # sqlite-muninn
 
-A zero-dependency C extension for SQLite that combines **HNSW vector similarity search**, **graph database primitives**, and **graph embedding generation** in a single shared library.
+![Muninn Raven Logo](assets/munnin_logo.png)
+
+Odin's magical raven of Memory. 
+
+A zero-dependency C extension for SQLite to add an advanced collection of knowledge graph primitives like Vector Similarity Search, HNSW Indexes, Graph database, Community Detection, Node2Vec capabilities.
 
 ## Features
 
