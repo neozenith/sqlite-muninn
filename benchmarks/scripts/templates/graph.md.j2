@@ -5,18 +5,18 @@
 
 ## Engines
 
-| Engine | BFS | DFS | Shortest Path | Components | PageRank |
-|--------|:---:|:---:|:-------------:|:----------:|:--------:|
-| **vec_graph TVFs** | Yes | Yes | Yes (Dijkstra) | Yes | Yes |
-| **Recursive CTEs** | Yes | — | Yes | Yes (slow) | — |
-| **GraphQLite** | Yes | Yes | Yes | Yes | Yes |
+| Library | Engine | BFS | DFS | Shortest Path | Components | PageRank |
+|---------|--------|:---:|:---:|:-------------:|:----------:|:--------:|
+| [vec_graph](https://github.com/neozenith/sqlite-vector-graph) | **vec_graph TVFs** | Yes | Yes | Yes (Dijkstra) | Yes | Yes |
+| [SQLite](https://www.sqlite.org/) | **Recursive CTEs** | Yes | — | Yes | Yes (slow) | — |
+| [GraphQLite](https://github.com/colliery-io/graphqlite) | **GraphQLite** | Yes | Yes | Yes | Yes | Yes |
 
 ## Graph Models
 
 | Model | Description | Key Property |
 |-------|-------------|-------------|
-| **Erdos-Renyi** | Random edges, uniform probability | Uniform degree distribution |
-| **Barabasi-Albert** | Preferential attachment | Power-law (scale-free) degree distribution |
+| [Erdos-Renyi](https://en.wikipedia.org/wiki/Erd%C5%91s%E2%80%93R%C3%A9nyi_model) | Random edges, uniform probability | Uniform degree distribution |
+| [Barabasi-Albert](https://en.wikipedia.org/wiki/Barab%C3%A1si%E2%80%93Albert_model) | Preferential attachment | Power-law (scale-free) degree distribution |
 
 ## Query Latency
 

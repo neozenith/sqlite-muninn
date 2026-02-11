@@ -5,29 +5,29 @@
 
 ## Engines
 
-| Engine | Method | Strategy |
-|--------|--------|----------|
-| **vec_graph-hnsw** | HNSW graph index | Approximate, O(log N) search |
-| **sqlite-vector-quantize** | Product Quantization | Approximate, O(N) scan |
-| **sqlite-vector-fullscan** | Brute-force | Exact, O(N) scan |
-| **vectorlite-hnsw** | HNSW via hnswlib | Approximate, O(log N) search |
-| **sqlite-vec-brute** | Brute-force KNN | Exact, O(N) scan |
+| Library | Engine | Method | Strategy |
+|---------|--------|--------|----------|
+| [vec_graph](https://github.com/neozenith/sqlite-vector-graph) | **vec_graph-hnsw** | HNSW graph index | Approximate, O(log N) search |
+| [sqlite-vector](https://github.com/sqliteai/sqlite-vector) | **sqlite-vector-quantize** | Product Quantization | Approximate, O(N) scan |
+| [sqlite-vector](https://github.com/sqliteai/sqlite-vector) | **sqlite-vector-fullscan** | Brute-force | Exact, O(N) scan |
+| [vectorlite](https://github.com/1yefuwang1/vectorlite) | **vectorlite-hnsw** | HNSW via hnswlib | Approximate, O(log N) search |
+| [sqlite-vec](https://github.com/asg017/sqlite-vec) | **sqlite-vec-brute** | Brute-force KNN | Exact, O(N) scan |
 
 ## Datasets
 
-| | AG News | Wealth of Nations |
-|---|---|---|
-| **Source** | HuggingFace `ag_news` | Project Gutenberg #3300 |
-| **Passages** | ~120K | ~2,500 (256-token windows, 50-token overlap) |
-| **Topology** | 4 discrete clusters | Continuous conceptual gradient |
+| Dataset | Source | Passages | Topology |
+|---------|--------|----------|----------|
+| [AG News](https://huggingface.co/datasets/ag_news) | HuggingFace | ~120K | 4 discrete clusters |
+| [Wealth of Nations](https://www.gutenberg.org/ebooks/3300) | Project Gutenberg | ~2,500 (256-token windows, 50-token overlap) | Continuous conceptual gradient |
+
 
 ## Models
 
 | Model | Dimension | Use Case |
 |-------|-----------|----------|
-| **all-MiniLM-L6-v2** | 384 | Fast, lightweight semantic search |
-| **all-mpnet-base-v2** | 768 | Balanced quality/speed |
-| **BAAI/bge-large-en-v1.5** | 1024 | High-quality retrieval |
+| [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) | 384 | Fast, lightweight semantic search |
+| [all-mpnet-base-v2](https://huggingface.co/sentence-transformers/all-mpnet-base-v2) | 768 | Balanced quality/speed |
+| [BAAI/bge-large-en-v1.5](https://huggingface.co/BAAI/bge-large-en-v1.5) | 1024 | High-quality retrieval |
 
 
 

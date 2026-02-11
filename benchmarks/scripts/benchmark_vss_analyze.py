@@ -1240,6 +1240,12 @@ MODEL_USE_CASES = {
     "BGE-Large": "High-quality retrieval",
 }
 
+MODEL_URLS = {
+    "MiniLM": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2",
+    "MPNet": "https://huggingface.co/sentence-transformers/all-mpnet-base-v2",
+    "BGE-Large": "https://huggingface.co/BAAI/bge-large-en-v1.5",
+}
+
 
 def generate_docs():
     """Render vss.md.j2 template to docs/benchmarks/vss.md."""
@@ -1257,13 +1263,28 @@ def generate_docs():
             "model_id": info["model_id"],
             "dim": info["dim"],
             "use_case": MODEL_USE_CASES.get(label, ""),
+            "url": MODEL_URLS.get(label, ""),
         }
         for label, info in EMBEDDING_MODELS.items()
     ]
 
     datasets = [
-        {"key": "ag_news", "label": "AG News"},
-        {"key": "wealth_of_nations", "label": "Wealth of Nations"},
+        {
+            "key": "ag_news",
+            "label": "AG News",
+            "url": "https://huggingface.co/datasets/ag_news",
+            "source": "HuggingFace",
+            "passages": "~120K",
+            "topology": "4 discrete clusters",
+        },
+        {
+            "key": "wealth_of_nations",
+            "label": "Wealth of Nations",
+            "url": "https://www.gutenberg.org/ebooks/3300",
+            "source": "Project Gutenberg",
+            "passages": "~2,500 (256-token windows, 50-token overlap)",
+            "topology": "Continuous conceptual gradient",
+        },
     ]
 
     output = template.render(models=models, datasets=datasets)

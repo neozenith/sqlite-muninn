@@ -1255,7 +1255,7 @@ _Ship `pip install vec-graph`._
 
 ### Phase 4: Node.js Distribution
 
-_Ship `npm install vec-graph`._
+_Ship `npm install vec-graph` (native) and `npm install vec-graph-wasm` (browser)._
 
 19. **Create `npm/` directory structure** — Main package + 5 platform packages
 20. **Write `index.mjs`, `index.cjs`, `index.d.ts`** — Wrapper API
@@ -1263,14 +1263,25 @@ _Ship `npm install vec-graph`._
 22. **Add `publish-npm` job** to `release.yml`
 23. **Test with `better-sqlite3` and `node:sqlite`**
 
-### Phase 5: Ecosystem (Optional)
+### Phase 5: WASM Build
 
-24. **Homebrew formula** — Custom tap for `brew install vec-graph`
-25. **Fuzz testing** — libFuzzer harnesses for `hnsw_algo` and `graph_tvf`
-26. **Performance regression tracking** — Bencher or github-action-benchmark
-27. **WASM build** — Emscripten target for browser usage
-28. **Bundled SQLite package** — `vec-graph-sqlite` with baked-in extension
-29. **vcpkg / Conan ports** — When demand warrants
+_Ship `vec-graph-wasm` for browser and edge runtimes._
+
+24. **Create `src/sqlite3_wasm_extra_init.c`** — Static extension registration
+25. **Create `scripts/build_wasm.sh`** — Emscripten build script (SQLite amalgamation + vec_graph amalgamation)
+26. **Add `build-wasm` job** to release workflow — `mymindstorm/setup-emsdk` action
+27. **Investigate WASM SIMD** (`-msimd128`) — Recover `vec_math.c` performance where possible
+28. **Create `npm/vec-graph-wasm/`** — Platform-independent npm package
+29. **Add `publish-wasm` job** to `release.yml`
+30. **Test in browser** — Verify HNSW + graph TVFs work end-to-end in WASM
+
+### Phase 6: Ecosystem (Optional)
+
+31. **Homebrew formula** — Custom tap for `brew install vec-graph`
+32. **Fuzz testing** — libFuzzer harnesses for `hnsw_algo` and `graph_tvf`
+33. **Performance regression tracking** — Bencher or github-action-benchmark
+34. **Bundled SQLite package** — `vec-graph-sqlite` with baked-in extension
+35. **vcpkg / Conan ports** — When demand warrants
 
 ---
 
