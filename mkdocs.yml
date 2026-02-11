@@ -40,7 +40,10 @@ plugins:
 
 nav:
   - Home: index.md
-  - Benchmarks: benchmarks.md
+  - Benchmarks:
+    - Overview: benchmarks.md
+    - Vector Search: benchmarks/vss.md
+    - Graph Traversal: benchmarks/graph.md
 
 markdown_extensions:
   - pymdownx.highlight:

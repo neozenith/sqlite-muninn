@@ -18,6 +18,7 @@ benchmarks/charts/*.html
 benchmarks/results/*.jsonl
 benchmarks/results/*/*.sqlite
 benchmarks/vectors/*.npy
+benchmarks/texts/
 # NOTE: benchmarks/charts/*.json is NOT ignored — those Plotly specs
 # are required by mkdocs-plotly-plugin during static site build.
 .claude/

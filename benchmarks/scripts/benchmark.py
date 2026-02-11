@@ -13,7 +13,7 @@ import math
 import sys
 
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 EXTENSION_PATH = os.path.join(PROJECT_ROOT, "vec_graph")
 
 

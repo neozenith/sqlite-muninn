@@ -1,22 +1,34 @@
 """
-Multi-dimensional benchmark suite: vec_graph (HNSW) vs sqliteai/sqlite-vector.
+Multi-dimensional benchmark suite for SQLite vector search extensions.
 
-Runs identical workloads through both extensions across multiple vector dimensions,
-computes saturation metrics, and writes JSONL results for analysis.
+Compares vec_graph (HNSW), sqliteai/sqlite-vector, vectorlite, and sqlite-vec
+across multiple vector dimensions, datasets, and data volumes. Computes
+saturation metrics and writes JSONL results for analysis.
+
+Engines:
+    vec_graph        — This project's HNSW index
+    sqlite_vector    — sqliteai/sqlite-vector (quantize_scan + full_scan)
+    vectorlite       — vectorlite-py (HNSW via hnswlib)
+    sqlite_vec       — asg017/sqlite-vec (brute-force KNN)
+
+Datasets:
+    ag_news              — 120K short news snippets, 4 categories (HuggingFace)
+    wealth_of_nations    — ~2.5K paragraphs from Gutenberg #3300
 
 Profiles:
-    small       — 3 dims (384, 768, 1536), N ≤ 50K, random vectors (~10 min)
-    medium      — 2 dims (384, 768), N = 100K–500K, random vectors (~1–2 hrs)
-    saturation  — 8 dims (32–1536), N = 50K, random vectors (~20 min)
-    models      — 3 real embedding models, N ≤ 50K (~30 min)
+    small       — 3 dims (384, 768, 1536), N <= 50K, random vectors (~10 min)
+    medium      — 2 dims (384, 768), N = 100K-500K, random vectors (~1-2 hrs)
+    saturation  — 8 dims (32-1536), N = 50K, random vectors (~20 min)
+    models      — 3 real embedding models x 2 datasets (~30 min)
 
 Prerequisites:
-    pip install sqliteai-vector sentence-transformers datasets numpy
+    uv sync --all-groups
     make all
 
 Run:
-    python python/benchmark_compare.py --profile small
-    python python/benchmark_compare.py --source random --dim 384 --sizes 1000,5000
+    python python/benchmark_vss.py --profile small
+    python python/benchmark_vss.py --source random --dim 384 --sizes 1000,5000
+    python python/benchmark_vss.py --source model:all-MiniLM-L6-v2 --sizes 1000 --dataset ag_news
 """
 import argparse
 import datetime
@@ -26,11 +38,13 @@ import logging
 import math
 import platform
 import random
+import re
 import resource
 import sqlite3
 import struct
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -43,12 +57,28 @@ try:
 except ImportError:
     HAS_MODEL_DEPS = False
 
+try:
+    import sqlite_vec
+
+    HAS_SQLITE_VEC = True
+except ImportError:
+    HAS_SQLITE_VEC = False
+
+try:
+    import apsw
+    import vectorlite_py
+
+    HAS_VECTORLITE = True
+except ImportError:
+    HAS_VECTORLITE = False
+
 log = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 VEC_GRAPH_PATH = str(PROJECT_ROOT / "vec_graph")
 RESULTS_DIR = PROJECT_ROOT / "benchmarks" / "results"
 VECTORS_DIR = PROJECT_ROOT / "benchmarks" / "vectors"
+TEXTS_DIR = PROJECT_ROOT / "benchmarks" / "texts"
 
 # Benchmark defaults
 K = 10
@@ -80,18 +110,24 @@ EMBEDDING_MODELS = {
     "BGE-Large": {"model_id": "BAAI/bge-large-en-v1.5", "dim": 1024},
 }
 
+# Dataset registry
+DATASETS = {
+    "ag_news": {
+        "source_type": "huggingface",
+        "hf_name": "ag_news",
+        "hf_split": "train",
+        "text_field": "text",
+    },
+    "wealth_of_nations": {
+        "source_type": "gutenberg",
+        "gutenberg_id": 3300,
+        "chunk_tokens": 256,
+        "chunk_overlap": 50,
+    },
+}
+
 # Profile definitions
 PROFILES = {
-    "small": {
-        "source": "random",
-        "dimensions": [384, 768, 1536],
-        "sizes": [1_000, 5_000, 10_000, 50_000],
-    },
-    "medium": {
-        "source": "random",
-        "dimensions": [384, 768],
-        "sizes": [100_000, 250_000, 500_000],
-    },
     "saturation": {
         "source": "random",
         "dimensions": [32, 64, 128, 256, 512, 768, 1024, 1536],
@@ -100,6 +136,7 @@ PROFILES = {
     "models": {
         "source": "models",
         "dimensions": None,  # determined by model
+        "datasets": ["ag_news", "wealth_of_nations"],
         "sizes": [1_000, 5_000, 10_000, 50_000, 100_000, 250_000],
     },
 }
@@ -183,11 +220,12 @@ def format_time(seconds):
     return f"{seconds / 3600:.1f}hr"
 
 
-def make_scenario_name(vector_source, model_name, dim, n):
+def make_scenario_name(vector_source, model_name, dataset, dim, n):
     """Build a deterministic scenario name from run parameters."""
     if vector_source == "random":
         return f"random_dim{dim}_n{n}"
-    return f"model_{model_name}_n{n}"
+    ds_suffix = f"_{dataset}" if dataset and dataset != "ag_news" else ""
+    return f"model_{model_name}{ds_suffix}_n{n}"
 
 
 def make_db_path(scenario_name, run_timestamp, engine):
@@ -195,6 +233,107 @@ def make_db_path(scenario_name, run_timestamp, engine):
     db_dir = RESULTS_DIR / scenario_name
     db_dir.mkdir(parents=True, exist_ok=True)
     return db_dir / f"{run_timestamp}_{engine}.sqlite"
+
+
+# ── Gutenberg text support ─────────────────────────────────────────
+
+
+def download_gutenberg(gutenberg_id):
+    """Fetch plain text from Project Gutenberg, strip boilerplate, and cache locally.
+
+    Returns the path to the cached text file.
+    """
+    TEXTS_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = TEXTS_DIR / f"gutenberg_{gutenberg_id}.txt"
+
+    if cache_path.exists():
+        log.info("    Gutenberg #%d: cached at %s", gutenberg_id, cache_path)
+        return cache_path
+
+    url = f"https://www.gutenberg.org/cache/epub/{gutenberg_id}/pg{gutenberg_id}.txt"
+    log.info("    Downloading Gutenberg #%d from %s...", gutenberg_id, url)
+
+    req = urllib.request.Request(url, headers={"User-Agent": "vec_graph-benchmark/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        raw_text = resp.read().decode("utf-8-sig")
+
+    # Strip Gutenberg boilerplate (header and footer)
+    start_markers = ["*** START OF THE PROJECT GUTENBERG", "*** START OF THIS PROJECT GUTENBERG"]
+    end_markers = ["*** END OF THE PROJECT GUTENBERG", "*** END OF THIS PROJECT GUTENBERG"]
+
+    start_idx = 0
+    for marker in start_markers:
+        idx = raw_text.find(marker)
+        if idx != -1:
+            start_idx = raw_text.index("\n", idx) + 1
+            break
+
+    end_idx = len(raw_text)
+    for marker in end_markers:
+        idx = raw_text.find(marker)
+        if idx != -1:
+            end_idx = idx
+            break
+
+    clean_text = raw_text[start_idx:end_idx].strip()
+
+    cache_path.write_text(clean_text, encoding="utf-8")
+    log.info("    Gutenberg #%d: saved %d chars to %s", gutenberg_id, len(clean_text), cache_path)
+    return cache_path
+
+
+def chunk_fixed_tokens(text, window=256, overlap=50):
+    """Split text into fixed-size token windows with overlap.
+
+    Uses word-level tokenization as an approximation of sub-word tokens.
+    Returns a list of text chunks.
+    """
+    # Collapse whitespace and split into words
+    words = text.split()
+    if not words:
+        return []
+
+    stride = max(1, window - overlap)
+    chunks = []
+    for i in range(0, len(words), stride):
+        chunk_words = words[i : i + window]
+        if len(chunk_words) < window // 4:
+            break  # skip tiny trailing chunks
+        chunks.append(" ".join(chunk_words))
+
+    return chunks
+
+
+def load_dataset_texts(dataset_key, max_n):
+    """Unified text loading: AG News via HuggingFace, Gutenberg via download+chunk.
+
+    Returns a list of text strings, up to max_n.
+    """
+    ds_config = DATASETS[dataset_key]
+
+    if ds_config["source_type"] == "huggingface":
+        if not HAS_MODEL_DEPS:
+            log.error("HuggingFace datasets require: uv sync --all-groups")
+            sys.exit(1)
+        hf_dataset = load_dataset(ds_config["hf_name"], split=ds_config["hf_split"])
+        field = ds_config["text_field"]
+        n = min(max_n, len(hf_dataset))
+        texts = [row[field] for row in hf_dataset.select(range(n))]
+        log.info("    %s: loaded %d texts (HuggingFace)", dataset_key, len(texts))
+        return texts
+
+    if ds_config["source_type"] == "gutenberg":
+        text_path = download_gutenberg(ds_config["gutenberg_id"])
+        raw_text = text_path.read_text(encoding="utf-8")
+        # Normalize paragraph breaks for chunking
+        raw_text = re.sub(r"\n{3,}", "\n\n", raw_text)
+        chunks = chunk_fixed_tokens(raw_text, window=ds_config["chunk_tokens"], overlap=ds_config["chunk_overlap"])
+        texts = chunks[:max_n]
+        log.info("    %s: %d chunks (window=%d, overlap=%d)", dataset_key, len(texts), ds_config["chunk_tokens"], ds_config["chunk_overlap"])
+        return texts
+
+    log.error("Unknown dataset source_type: %s", ds_config["source_type"])
+    sys.exit(1)
 
 
 # ── Saturation metrics ────────────────────────────────────────────
@@ -249,13 +388,13 @@ def compute_saturation_metrics(vectors, dim, n_sample_pairs=SATURATION_SAMPLE_PA
 
     mean_nn = sum(nn_dists) / len(nn_dists) if nn_dists else 0
 
-    # Relative Contrast: mean(pairwise) / mean(nearest-neighbor) → 1.0 means saturated
+    # Relative Contrast: mean(pairwise) / mean(nearest-neighbor) -> 1.0 means saturated
     rc = mean_pairwise / mean_nn if mean_nn > 1e-10 else None
 
-    # Coefficient of Variation: std(pairwise) / mean(pairwise) → 0 means saturated
+    # Coefficient of Variation: std(pairwise) / mean(pairwise) -> 0 means saturated
     cv = std_pairwise / mean_pairwise if mean_pairwise > 1e-10 else None
 
-    # Nearest/Farthest ratio: mean → 1.0 means saturated
+    # Nearest/Farthest ratio: mean -> 1.0 means saturated
     nf = sum(nf_ratios) / len(nf_ratios) if nf_ratios else None
 
     return {
@@ -279,7 +418,7 @@ def brute_force_knn(query, vectors, k):
 
 
 def compute_ground_truth_python(vectors, query_ids, k):
-    """Compute ground truth via Python brute-force. Good for N ≤ 50K."""
+    """Compute ground truth via Python brute-force. Good for N <= 50K."""
     return [brute_force_knn(vectors[qid], vectors, k) for qid in query_ids]
 
 
@@ -461,6 +600,126 @@ def run_sqlite_vector(vectors, query_ids, dim, db_path=":memory:"):
     }
 
 
+# ── vectorlite runner ─────────────────────────────────────────────
+
+
+def run_vectorlite(vectors, query_ids, dim, db_path=":memory:"):
+    """Benchmark vectorlite HNSW insert + search. Returns metrics dict.
+
+    Uses apsw instead of sqlite3 because vectorlite requires a newer SQLite
+    version than the one bundled with Python's sqlite3 module.
+    """
+    if not HAS_VECTORLITE:
+        log.error("vectorlite not available: pip install vectorlite-py apsw")
+        return None
+
+    n = len(vectors)
+    conn = apsw.Connection(db_path)
+    conn.enable_load_extension(True)
+    conn.load_extension(vectorlite_py.vectorlite_path())
+
+    cursor = conn.cursor()
+    cursor.execute(
+        f"CREATE VIRTUAL TABLE bench_vl USING vectorlite("
+        f"embedding float32[{dim}] l2, "
+        f"hnsw(max_elements={n}, ef_construction={HNSW_EF_CONSTRUCTION}, M={HNSW_M}))"
+    )
+
+    # Insert
+    rss_before = peak_rss_mb()
+    t0 = time.perf_counter()
+    for rowid, v in vectors.items():
+        cursor.execute(
+            "INSERT INTO bench_vl(rowid, embedding) VALUES (?, ?)",
+            (rowid, pack_vector(v)),
+        )
+    t_insert = time.perf_counter() - t0
+    rss_after = peak_rss_mb()
+
+    # Search
+    t0 = time.perf_counter()
+    results = []
+    for qid in query_ids:
+        rows = list(cursor.execute(
+            "SELECT rowid, distance FROM bench_vl WHERE knn_search(embedding, knn_param(?, ?, ?))",
+            (pack_vector(vectors[qid]), K, HNSW_EF_SEARCH),
+        ))
+        results.append(set(r[0] for r in rows))
+    t_search = time.perf_counter() - t0
+
+    conn.close()
+
+    db_size = None
+    if db_path != ":memory:":
+        db_size = Path(db_path).stat().st_size
+        log.info("    DB saved: %s (%s)", db_path, _fmt_bytes(db_size))
+
+    return {
+        "insert_rate": n / t_insert if t_insert > 0 else float("inf"),
+        "search_ms": (t_search / len(query_ids)) * 1000,
+        "results": results,
+        "memory_mb": max(0, rss_after - rss_before),
+        "db_path": str(db_path) if db_path != ":memory:" else None,
+        "db_size_bytes": db_size,
+    }
+
+
+# ── sqlite-vec runner ─────────────────────────────────────────────
+
+
+def run_sqlite_vec(vectors, query_ids, dim, db_path=":memory:"):
+    """Benchmark sqlite-vec brute-force KNN insert + search. Returns metrics dict."""
+    if not HAS_SQLITE_VEC:
+        log.error("sqlite-vec not available: pip install sqlite-vec")
+        return None
+
+    n = len(vectors)
+    conn = sqlite3.connect(db_path)
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+
+    conn.execute(f"CREATE VIRTUAL TABLE bench_sv USING vec0(embedding float[{dim}])")
+
+    # Insert
+    rss_before = peak_rss_mb()
+    t0 = time.perf_counter()
+    for rowid, v in vectors.items():
+        conn.execute(
+            "INSERT INTO bench_sv(rowid, embedding) VALUES (?, ?)",
+            (rowid, pack_vector(v)),
+        )
+    t_insert = time.perf_counter() - t0
+    rss_after = peak_rss_mb()
+
+    # Search (brute-force KNN)
+    t0 = time.perf_counter()
+    results = []
+    for qid in query_ids:
+        rows = conn.execute(
+            "SELECT rowid, distance FROM bench_sv WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+            (pack_vector(vectors[qid]), K),
+        ).fetchall()
+        results.append(set(r[0] for r in rows))
+    t_search = time.perf_counter() - t0
+
+    conn.commit()
+    conn.close()
+
+    db_size = None
+    if db_path != ":memory:":
+        db_size = Path(db_path).stat().st_size
+        log.info("    DB saved: %s (%s)", db_path, _fmt_bytes(db_size))
+
+    return {
+        "insert_rate": n / t_insert if t_insert > 0 else float("inf"),
+        "search_ms": (t_search / len(query_ids)) * 1000,
+        "results": results,
+        "memory_mb": max(0, rss_after - rss_before),
+        "db_path": str(db_path) if db_path != ":memory:" else None,
+        "db_size_bytes": db_size,
+    }
+
+
 # ── JSONL output ──────────────────────────────────────────────────
 
 
@@ -472,7 +731,8 @@ def write_jsonl_record(filepath, record):
 
 
 def make_record(
-    engine, search_method, vector_source, model_name, dim, n, metrics, saturation, storage="memory", engine_params=None
+    engine, search_method, vector_source, model_name, dim, n, metrics,
+    saturation, storage="memory", engine_params=None, dataset=None,
 ):
     """Build a JSONL record from benchmark metrics."""
     info = platform_info()
@@ -482,6 +742,7 @@ def make_record(
         "search_method": search_method,
         "vector_source": vector_source,
         "model_name": model_name,
+        "dataset": dataset,
         "dim": dim,
         "n": n,
         "k": K,
@@ -507,19 +768,19 @@ def make_record(
 # ── Model embedding support ──────────────────────────────────────
 
 
-def _model_cache_path(model_label):
-    """Return the .npy cache path for a model (one file per model, not per size)."""
-    return VECTORS_DIR / f"{model_label}.npy"
+def _model_cache_path(model_label, dataset="ag_news"):
+    """Return the .npy cache path for a model+dataset combination."""
+    return VECTORS_DIR / f"{model_label}_{dataset}.npy"
 
 
-def load_or_generate_model_vectors(model_label, model_id, dim, n):
-    """Load cached model embeddings or generate them from AG News dataset.
+def load_or_generate_model_vectors(model_label, model_id, dim, n, dataset="ag_news"):
+    """Load cached model embeddings or generate them from the specified dataset.
 
-    Uses a single .npy cache per model (not per size).  If the cache has
+    Uses a single .npy cache per model+dataset (not per size). If the cache has
     enough vectors it is sliced; otherwise it is regenerated at the
     requested size.
     """
-    cache_path = _model_cache_path(model_label)
+    cache_path = _model_cache_path(model_label, dataset)
 
     if cache_path.exists():
         arr = np.load(cache_path)
@@ -529,20 +790,19 @@ def load_or_generate_model_vectors(model_label, model_id, dim, n):
             return vectors
         log.info("    Cache has %d vectors, need %d — regenerating", len(arr), n)
 
-    log.info("    Generating %d embeddings with %s (%s)...", n, model_label, model_id)
+    log.info("    Generating %d embeddings with %s (%s) on %s...", n, model_label, model_id, dataset)
 
     if not HAS_MODEL_DEPS:
-        log.error("Model embeddings require: uv add --group benchmark-models sentence-transformers datasets")
+        log.error("Model embeddings require: uv sync --all-groups")
         sys.exit(1)
 
-    model = SentenceTransformer(model_id)
-    dataset = load_dataset("ag_news", split="train")
-    texts = [row["text"] for row in dataset.select(range(min(n, len(dataset))))]
+    texts = load_dataset_texts(dataset, max_n=n)
 
     if len(texts) < n:
-        log.warning("    AG News has %d texts, requested %d — using available", len(texts), n)
+        log.warning("    %s has %d texts, requested %d — using available", dataset, len(texts), n)
         n = len(texts)
 
+    model = SentenceTransformer(model_id)
     embeddings = model.encode(texts[:n], show_progress_bar=True, batch_size=256, normalize_embeddings=True)
 
     # Cache for reuse
@@ -550,55 +810,67 @@ def load_or_generate_model_vectors(model_label, model_id, dim, n):
     np.save(cache_path, embeddings)
     log.info("    Cached %d embeddings to %s", n, cache_path)
 
+    del model  # free GPU/CPU memory
+
     vectors = {i + 1: embeddings[i].tolist() for i in range(n)}
     return vectors
 
 
-def prep_model_vectors():
-    """Pre-download models, dataset, and generate all .npy cache files.
+def prep_model_vectors(only_model=None, only_dataset=None):
+    """Pre-download models, datasets, and generate all .npy cache files.
 
-    Generates one cache file per model at the maximum size needed by the
-    models profile.  Subsequent benchmark runs load and slice from these
+    Generates one cache file per model per dataset at the maximum size needed
+    by the models profile. Subsequent benchmark runs load and slice from these
     caches without touching the network or the GPU.
+
+    Use only_model / only_dataset to limit scope and reduce peak memory.
+    Each (model, dataset) pair runs with ~1-2 GB RAM; running all 6 at once
+    can spike to 6+ GB.
     """
     if not HAS_MODEL_DEPS:
-        log.error("Model prep requires: uv add --group benchmark-models sentence-transformers datasets")
+        log.error("Model prep requires: uv sync --all-groups")
         sys.exit(1)
 
     max_n = max(PROFILES["models"]["sizes"])
-    log.info("Pre-building model vector caches (max N=%d)", max_n)
+    datasets_to_prep = PROFILES["models"].get("datasets", ["ag_news"])
+    models_to_prep = dict(EMBEDDING_MODELS)
 
-    # Download dataset once (HuggingFace caches it, but first call is slow)
-    log.info("  Loading AG News dataset...")
-    dataset = load_dataset("ag_news", split="train")
-    n_available = len(dataset)
-    n = min(max_n, n_available)
-    texts = [row["text"] for row in dataset.select(range(n))]
-    log.info("  AG News: %d texts available, using %d", n_available, n)
+    if only_dataset:
+        datasets_to_prep = [only_dataset]
+    if only_model:
+        models_to_prep = {only_model: EMBEDDING_MODELS[only_model]}
+
+    log.info("Pre-building model vector caches (max N=%d, datasets=%s, models=%s)", max_n, datasets_to_prep, list(models_to_prep))
 
     VECTORS_DIR.mkdir(parents=True, exist_ok=True)
 
-    for model_label, model_info in EMBEDDING_MODELS.items():
-        cache_path = _model_cache_path(model_label)
+    for dataset_key in datasets_to_prep:
+        log.info("\n  Dataset: %s", dataset_key)
+        texts = load_dataset_texts(dataset_key, max_n=max_n)
+        n = len(texts)
+        log.info("  %s: %d texts available", dataset_key, n)
 
-        if cache_path.exists():
-            arr = np.load(cache_path)
-            if len(arr) >= n:
-                log.info("  %s: cached (%d vectors, %s)", model_label, len(arr), _fmt_bytes(cache_path.stat().st_size))
-                continue
-            log.info("  %s: cache has %d vectors, need %d — regenerating", model_label, len(arr), n)
+        for model_label, model_info in models_to_prep.items():
+            cache_path = _model_cache_path(model_label, dataset_key)
 
-        log.info("  %s: downloading model %s...", model_label, model_info["model_id"])
-        model = SentenceTransformer(model_info["model_id"])
+            if cache_path.exists():
+                arr = np.load(cache_path)
+                if len(arr) >= n:
+                    log.info("  %s/%s: cached (%d vectors, %s)", model_label, dataset_key, len(arr), _fmt_bytes(cache_path.stat().st_size))
+                    continue
+                log.info("  %s/%s: cache has %d vectors, need %d — regenerating", model_label, dataset_key, len(arr), n)
 
-        log.info("  %s: encoding %d texts (dim=%d)...", model_label, n, model_info["dim"])
-        embeddings = model.encode(texts[:n], show_progress_bar=True, batch_size=256, normalize_embeddings=True)
+            log.info("  %s: downloading model %s...", model_label, model_info["model_id"])
+            model = SentenceTransformer(model_info["model_id"])
 
-        np.save(cache_path, embeddings)
-        log.info("  %s: cached %d embeddings to %s (%s)", model_label, n, cache_path, _fmt_bytes(cache_path.stat().st_size))
+            log.info("  %s/%s: encoding %d texts (dim=%d)...", model_label, dataset_key, n, model_info["dim"])
+            embeddings = model.encode(texts[:n], show_progress_bar=True, batch_size=256, normalize_embeddings=True)
 
-        # Free model memory before loading the next one
-        del model
+            np.save(cache_path, embeddings)
+            log.info("  %s/%s: cached %d embeddings to %s (%s)", model_label, dataset_key, n, cache_path, _fmt_bytes(cache_path.stat().st_size))
+
+            # Free model memory before loading the next one
+            del model
 
     log.info("Model prep complete. Cached vectors in %s", VECTORS_DIR)
 
@@ -607,21 +879,23 @@ def prep_model_vectors():
 
 
 def verify_extensions():
-    """Verify both extensions are loadable. Returns (vec_graph_ok, sv_ok)."""
-    vg_ok = False
-    sv_ok = False
+    """Verify all extensions are loadable. Returns dict of {engine: bool}."""
+    status = {}
 
+    # vec_graph
     try:
         c = sqlite3.connect(":memory:")
         c.enable_load_extension(True)
         c.load_extension(VEC_GRAPH_PATH)
         c.close()
         log.info("  vec_graph:       OK (%s)", VEC_GRAPH_PATH)
-        vg_ok = True
+        status["vec_graph"] = True
     except Exception as e:
         log.error("  vec_graph:       FAILED — %s", e)
         log.error("  Run 'make all' first.")
+        status["vec_graph"] = False
 
+    # sqlite-vector (sqliteai)
     try:
         ext = _sqlite_vector_ext_path()
         c = sqlite3.connect(":memory:")
@@ -631,18 +905,54 @@ def verify_extensions():
         backend = c.execute("SELECT vector_backend()").fetchone()[0]
         c.close()
         log.info("  sqlite-vector:   OK (v%s, %s)", version, backend)
-        sv_ok = True
+        status["sqlite_vector"] = True
     except Exception as e:
         log.error("  sqlite-vector:   FAILED — %s", e)
-        log.error("  Run 'pip install sqliteai-vector' first.")
+        status["sqlite_vector"] = False
 
-    return vg_ok, sv_ok
+    # vectorlite
+    if HAS_VECTORLITE:
+        try:
+            c = apsw.Connection(":memory:")
+            c.enable_load_extension(True)
+            c.load_extension(vectorlite_py.vectorlite_path())
+            c.close()
+            log.info("  vectorlite:      OK (%s)", vectorlite_py.vectorlite_path())
+            status["vectorlite"] = True
+        except Exception as e:
+            log.error("  vectorlite:      FAILED — %s", e)
+            status["vectorlite"] = False
+    else:
+        log.warning("  vectorlite:      not installed (pip install vectorlite-py apsw)")
+        status["vectorlite"] = False
+
+    # sqlite-vec
+    if HAS_SQLITE_VEC:
+        try:
+            c = sqlite3.connect(":memory:")
+            c.enable_load_extension(True)
+            sqlite_vec.load(c)
+            version = c.execute("SELECT vec_version()").fetchone()[0]
+            c.close()
+            log.info("  sqlite-vec:      OK (v%s)", version)
+            status["sqlite_vec"] = True
+        except Exception as e:
+            log.error("  sqlite-vec:      FAILED — %s", e)
+            status["sqlite_vec"] = False
+    else:
+        log.warning("  sqlite-vec:      not installed (pip install sqlite-vec)")
+        status["sqlite_vec"] = False
+
+    return status
 
 
 # ── Main benchmark loop ──────────────────────────────────────────
 
 
-def run_benchmark(vector_source, model_name, dim, sizes, engines, output_path, storage="memory", run_timestamp=None):
+def run_benchmark(
+    vector_source, model_name, dim, sizes, engines, output_path,
+    storage="memory", run_timestamp=None, dataset=None,
+):
     """Run the benchmark for a single dimension and vector source."""
     total_configs = len(sizes) * len(engines)
     completed = 0
@@ -660,7 +970,9 @@ def run_benchmark(vector_source, model_name, dim, sizes, engines, output_path, s
             if model_info is None:
                 log.error("Unknown model: %s", model_name)
                 continue
-            vectors = load_or_generate_model_vectors(model_name, model_info["model_id"], dim, n)
+            vectors = load_or_generate_model_vectors(
+                model_name, model_info["model_id"], dim, n, dataset=dataset or "ag_news",
+            )
             n = len(vectors)  # may be clamped by dataset size
 
         query_ids = pick_queries(vectors, N_QUERIES)
@@ -674,13 +986,15 @@ def run_benchmark(vector_source, model_name, dim, sizes, engines, output_path, s
         saturation = compute_saturation_metrics(vectors, dim)
 
         # Determine db paths for disk storage
-        scenario = make_scenario_name(vector_source, model_name, dim, n)
+        scenario = make_scenario_name(vector_source, model_name, dataset, dim, n)
 
         for engine in engines:
             if storage == "disk":
                 db_path = str(make_db_path(scenario, run_timestamp, engine))
             else:
                 db_path = ":memory:"
+
+            record_dataset = dataset if vector_source != "random" else None
 
             if engine == "vec_graph":
                 log.info("  Running vec_graph HNSW (N=%d, dim=%d, storage=%s)...", n, dim, storage)
@@ -705,6 +1019,7 @@ def run_benchmark(vector_source, model_name, dim, sizes, engines, output_path, s
                     saturation=saturation,
                     storage=storage,
                     engine_params={"m": HNSW_M, "ef_construction": HNSW_EF_CONSTRUCTION, "ef_search": HNSW_EF_SEARCH},
+                    dataset=record_dataset,
                 )
                 write_jsonl_record(output_path, record)
 
@@ -733,6 +1048,7 @@ def run_benchmark(vector_source, model_name, dim, sizes, engines, output_path, s
                     },
                     saturation=saturation,
                     storage=storage,
+                    dataset=record_dataset,
                 )
                 write_jsonl_record(output_path, record_q)
 
@@ -755,8 +1071,68 @@ def run_benchmark(vector_source, model_name, dim, sizes, engines, output_path, s
                     },
                     saturation=saturation,
                     storage=storage,
+                    dataset=record_dataset,
                 )
                 write_jsonl_record(output_path, record_f)
+
+            elif engine == "vectorlite":
+                log.info("  Running vectorlite HNSW (N=%d, dim=%d, storage=%s)...", n, dim, storage)
+                vl = run_vectorlite(vectors, query_ids, dim, db_path=db_path)
+                if vl is None:
+                    completed += 1
+                    continue
+                vl["recall"] = compute_recall(vl.pop("results"), ground_truth)
+
+                record = make_record(
+                    engine="vectorlite",
+                    search_method="hnsw",
+                    vector_source=vector_source,
+                    model_name=model_name if vector_source != "random" else None,
+                    dim=dim,
+                    n=n,
+                    metrics={
+                        "insert_rate": vl["insert_rate"],
+                        "search_ms": vl["search_ms"],
+                        "recall": vl["recall"],
+                        "memory_mb": vl["memory_mb"],
+                        "db_path": vl.get("db_path"),
+                        "db_size_bytes": vl.get("db_size_bytes"),
+                    },
+                    saturation=saturation,
+                    storage=storage,
+                    engine_params={"m": HNSW_M, "ef_construction": HNSW_EF_CONSTRUCTION, "ef_search": HNSW_EF_SEARCH},
+                    dataset=record_dataset,
+                )
+                write_jsonl_record(output_path, record)
+
+            elif engine == "sqlite_vec":
+                log.info("  Running sqlite-vec brute-force (N=%d, dim=%d, storage=%s)...", n, dim, storage)
+                sv = run_sqlite_vec(vectors, query_ids, dim, db_path=db_path)
+                if sv is None:
+                    completed += 1
+                    continue
+                sv["recall"] = compute_recall(sv.pop("results"), ground_truth)
+
+                record = make_record(
+                    engine="sqlite_vec",
+                    search_method="brute_force",
+                    vector_source=vector_source,
+                    model_name=model_name if vector_source != "random" else None,
+                    dim=dim,
+                    n=n,
+                    metrics={
+                        "insert_rate": sv["insert_rate"],
+                        "search_ms": sv["search_ms"],
+                        "recall": sv["recall"],
+                        "memory_mb": sv["memory_mb"],
+                        "db_path": sv.get("db_path"),
+                        "db_size_bytes": sv.get("db_size_bytes"),
+                    },
+                    saturation=saturation,
+                    storage=storage,
+                    dataset=record_dataset,
+                )
+                write_jsonl_record(output_path, record)
 
             completed += 1
             elapsed = time.perf_counter() - start_time
@@ -771,23 +1147,32 @@ def run_benchmark(vector_source, model_name, dim, sizes, engines, output_path, s
             )
 
 
+ALL_ENGINES = ["vec_graph", "sqlite_vector", "vectorlite", "sqlite_vec"]
+
+
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Multi-dimensional benchmark: vec_graph vs sqlite-vector",
+        description="Multi-engine benchmark: vec_graph vs sqlite-vector vs vectorlite vs sqlite-vec",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Profiles:
-  small       3 dims (384,768,1536), N≤50K, random      (~10 min)
+  small       3 dims (384,768,1536), N<=50K, random      (~10 min)
   medium      2 dims (384,768), N=100K-500K, random      (~1-2 hrs)
   saturation  8 dims (32-1536), N=50K, random            (~20 min)
-  models      3 real embedding models, N≤50K             (~30 min)
+  models      3 models x 2 datasets, N<=250K             (~30 min)
+
+Datasets (for model source):
+  ag_news              120K news snippets (HuggingFace)
+  wealth_of_nations    ~2.5K paragraphs from Gutenberg #3300
 
 Examples:
-  python python/benchmark_compare.py --profile small
-  python python/benchmark_compare.py --source random --dim 384 --sizes 1000,5000
-  python python/benchmark_compare.py --source model:all-MiniLM-L6-v2 --sizes 1000,5000
-  python python/benchmark_compare.py --profile small --storage disk
+  python python/benchmark_vss.py --profile small
+  python python/benchmark_vss.py --source random --dim 384 --sizes 1000,5000
+  python python/benchmark_vss.py --source model:all-MiniLM-L6-v2 --sizes 1000 --dataset ag_news
+  python python/benchmark_vss.py --source model:all-MiniLM-L6-v2 --sizes 1000 --dataset wealth_of_nations
+  python python/benchmark_vss.py --engine sqlite_vec --source random --dim 384 --sizes 1000
+  python python/benchmark_vss.py --profile small --storage disk
         """,
     )
     parser.add_argument("--profile", choices=PROFILES.keys(), help="Predefined benchmark profile")
@@ -796,9 +1181,15 @@ Examples:
     parser.add_argument("--sizes", help="Comma-separated dataset sizes (e.g., 1000,5000,10000)")
     parser.add_argument(
         "--engine",
-        choices=["all", "vec_graph", "sqlite_vector"],
+        choices=["all"] + ALL_ENGINES,
         default="all",
         help="Which engine(s) to benchmark",
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=list(DATASETS.keys()),
+        default="ag_news",
+        help="Text dataset for model embeddings (default: ag_news)",
     )
     parser.add_argument(
         "--storage",
@@ -809,7 +1200,17 @@ Examples:
     parser.add_argument(
         "--prep-models",
         action="store_true",
-        help="Download models, dataset, and pre-build .npy caches, then exit",
+        help="Download models, datasets, and pre-build .npy caches, then exit",
+    )
+    parser.add_argument(
+        "--prep-model",
+        choices=list(EMBEDDING_MODELS.keys()),
+        help="Prep only this model (use with --prep-models to limit memory)",
+    )
+    parser.add_argument(
+        "--prep-dataset",
+        choices=list(DATASETS.keys()),
+        help="Prep only this dataset (use with --prep-models to limit memory)",
     )
     return parser.parse_args()
 
@@ -822,28 +1223,24 @@ def main():
     args = parse_args()
 
     if args.prep_models:
-        prep_model_vectors()
+        prep_model_vectors(only_model=args.prep_model, only_dataset=args.prep_dataset)
         return
 
     # Verify extensions
     log.info("Checking extensions...")
-    vg_ok, sv_ok = verify_extensions()
+    ext_status = verify_extensions()
 
     # Determine engines to run
     if args.engine == "all":
-        engines = []
-        if vg_ok:
-            engines.append("vec_graph")
-        if sv_ok:
-            engines.append("sqlite_vector")
-    elif args.engine == "vec_graph":
-        engines = ["vec_graph"] if vg_ok else []
+        engines = [e for e in ALL_ENGINES if ext_status.get(e)]
     else:
-        engines = ["sqlite_vector"] if sv_ok else []
+        engines = [args.engine] if ext_status.get(args.engine) else []
 
     if not engines:
         log.error("No engines available. Exiting.")
         sys.exit(1)
+
+    log.info("Engines: %s", ", ".join(engines))
 
     # Determine output path
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -860,22 +1257,25 @@ def main():
         log.info("Running profile: %s", args.profile)
 
         if profile["source"] == "models":
-            # Run each model separately
-            for model_label, model_info in EMBEDDING_MODELS.items():
-                dim = model_info["dim"]
-                log.info("\n" + "=" * 72)
-                log.info("Model: %s (dim=%d)", model_label, dim)
-                log.info("=" * 72)
-                run_benchmark(
-                    vector_source="model",
-                    model_name=model_label,
-                    dim=dim,
-                    sizes=profile["sizes"],
-                    engines=engines,
-                    output_path=output_path,
-                    storage=storage,
-                    run_timestamp=timestamp,
-                )
+            datasets_to_run = profile.get("datasets", ["ag_news"])
+            # Run each model x dataset separately
+            for dataset_key in datasets_to_run:
+                for model_label, model_info in EMBEDDING_MODELS.items():
+                    dim = model_info["dim"]
+                    log.info("\n" + "=" * 72)
+                    log.info("Model: %s (dim=%d), Dataset: %s", model_label, dim, dataset_key)
+                    log.info("=" * 72)
+                    run_benchmark(
+                        vector_source="model",
+                        model_name=model_label,
+                        dim=dim,
+                        sizes=profile["sizes"],
+                        engines=engines,
+                        output_path=output_path,
+                        storage=storage,
+                        run_timestamp=timestamp,
+                        dataset=dataset_key,
+                    )
         else:
             for dim in profile["dimensions"]:
                 log.info("\n" + "=" * 72)
@@ -895,6 +1295,7 @@ def main():
         # Custom run from individual args
         source = args.source
         model_name = None
+        dataset = args.dataset
 
         if source.startswith("model:"):
             model_id = source.split(":", 1)[1]
@@ -918,7 +1319,7 @@ def main():
         sizes = [int(s) for s in args.sizes.split(",")] if args.sizes else [1_000, 5_000, 10_000]
 
         log.info("\n" + "=" * 72)
-        log.info("Custom run: source=%s, dim=%d, sizes=%s", source, dim, sizes)
+        log.info("Custom run: source=%s, dim=%d, sizes=%s, dataset=%s", source, dim, sizes, dataset)
         log.info("=" * 72)
 
         run_benchmark(
@@ -930,6 +1331,7 @@ def main():
             output_path=output_path,
             storage=storage,
             run_timestamp=timestamp,
+            dataset=dataset if source != "random" else None,
         )
 
     log.info("\n" + "=" * 72)
