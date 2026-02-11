@@ -12,6 +12,8 @@ SQLITE_EXTENSION_INIT1
 #include "muninn.h"
 #include "hnsw_vtab.h"
 #include "graph_tvf.h"
+#include "graph_centrality.h"
+#include "graph_community.h"
 #include "node2vec.h"
 
 #ifdef _WIN32
@@ -31,6 +33,18 @@ int sqlite3_muninn_init(sqlite3 *db, char **pzErrMsg,
     rc = graph_register_tvfs(db);
     if (rc != SQLITE_OK) {
         *pzErrMsg = sqlite3_mprintf("muninn: failed to register graph TVFs");
+        return rc;
+    }
+
+    rc = centrality_register_tvfs(db);
+    if (rc != SQLITE_OK) {
+        *pzErrMsg = sqlite3_mprintf("muninn: failed to register centrality TVFs");
+        return rc;
+    }
+
+    rc = community_register_tvfs(db);
+    if (rc != SQLITE_OK) {
+        *pzErrMsg = sqlite3_mprintf("muninn: failed to register community TVFs");
         return rc;
     }
 

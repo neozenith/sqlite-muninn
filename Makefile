@@ -22,11 +22,12 @@ else
 endif
 
 SRC = src/muninn.c src/hnsw_vtab.c src/hnsw_algo.c \
-      src/graph_tvf.c src/node2vec.c src/vec_math.c \
+      src/graph_tvf.c src/graph_load.c src/graph_centrality.c \
+      src/graph_community.c src/node2vec.c src/vec_math.c \
       src/priority_queue.c src/id_validate.c
 
 TEST_SRC = test/test_main.c test/test_vec_math.c test/test_priority_queue.c \
-           test/test_hnsw_algo.c test/test_id_validate.c
+           test/test_hnsw_algo.c test/test_id_validate.c test/test_graph_load.c
 
 .PHONY: all debug test test-python test-all clean help \
         docs-serve docs-build docs-clean
@@ -47,7 +48,7 @@ debug: muninn$(EXT)                            ## Build with ASan + UBSan
 test: test_runner                              ## Run C unit tests
 	./test_runner
 
-test_runner: $(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c src/id_validate.c
+test_runner: $(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c src/id_validate.c src/graph_load.c
 	$(CC) $(CFLAGS_BASE) -Isrc -o $@ $^ $(LDFLAGS_TEST)
 
 test-python: muninn$(EXT)                      ## Run Python integration tests

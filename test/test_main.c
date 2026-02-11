@@ -6,6 +6,14 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <sqlite3.h>
+
+/*
+ * graph_load.c uses SQLITE_EXTENSION_INIT3 which declares sqlite3_api as extern.
+ * The test runner links libsqlite3 directly and never calls graph_data_load(),
+ * so a NULL pointer is safe here — it just satisfies the linker.
+ */
+const sqlite3_api_routines *sqlite3_api = NULL;
 
 /* Test result tracking */
 static int total_passed = 0;
@@ -40,6 +48,7 @@ extern void test_vec_math(void);
 extern void test_priority_queue(void);
 extern void test_hnsw_algo(void);
 extern void test_id_validate(void);
+extern void test_graph_load(void);
 
 int main(void) {
     printf("=== sqlite-muninn test suite ===\n\n");
@@ -55,6 +64,9 @@ int main(void) {
 
     printf("\n[id_validate]\n");
     test_id_validate();
+
+    printf("\n[graph_load]\n");
+    test_graph_load();
 
     printf("\n=== Results: %d passed, %d failed ===\n",
            total_passed, total_failed);
