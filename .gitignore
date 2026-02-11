@@ -29,3 +29,21 @@ CLAUDE.md
 *.dll
 tmp/
 docs/logo/
+
+# Build output
+dist/
+
+# Node.js
+node_modules/
+package-lock.json
+
+# Python package build
+*.egg-info/
+build/
+sqlite_muninn/muninn.*
+!sqlite_muninn/__init__.py
+
+# MSVC artifacts
+*.obj
+*.lib
+*.exp

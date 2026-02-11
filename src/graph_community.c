@@ -12,6 +12,7 @@
  * Terminates when no node changes community in Phase 1.
  */
 #include "graph_community.h"
+#include "graph_common.h"
 #include "graph_load.h"
 #include "id_validate.h"
 
@@ -388,41 +389,7 @@ static double run_leiden(const GraphData *g, int *community,
  * TVF: graph_leiden
  * ═══════════════════════════════════════════════════════════════ */
 
-static const char *safe_text(sqlite3_value *v) {
-    if (!v || sqlite3_value_type(v) == SQLITE_NULL) return NULL;
-    return (const char *)sqlite3_value_text(v);
-}
-
-/* Two-pass xBestIndex: assigns sequential argvIndex in column order.
- * See graph_centrality.c for detailed comments. */
-static int graph_best_index_impl(sqlite3_index_info *pIdxInfo,
-                                  int first_hidden, int last_hidden,
-                                  int required_mask) {
-    int n_cols = last_hidden - first_hidden + 1;
-    int constraint_for[32];
-    for (int j = 0; j < n_cols && j < 32; j++) constraint_for[j] = -1;
-
-    for (int i = 0; i < pIdxInfo->nConstraint; i++) {
-        if (!pIdxInfo->aConstraint[i].usable) continue;
-        if (pIdxInfo->aConstraint[i].op != SQLITE_INDEX_CONSTRAINT_EQ) continue;
-        int col = pIdxInfo->aConstraint[i].iColumn;
-        if (col >= first_hidden && col <= last_hidden)
-            constraint_for[col - first_hidden] = i;
-    }
-
-    int argv_idx = 1;
-    int idx_num = 0;
-    for (int j = 0; j < n_cols && j < 32; j++) {
-        if (constraint_for[j] >= 0) {
-            pIdxInfo->aConstraintUsage[constraint_for[j]].argvIndex = argv_idx++;
-            pIdxInfo->aConstraintUsage[constraint_for[j]].omit = 1;
-            idx_num |= (1 << j);
-        }
-    }
-    pIdxInfo->idxNum = idx_num;
-    pIdxInfo->estimatedCost = ((idx_num & required_mask) == required_mask) ? 5000.0 : 1e12;
-    return SQLITE_OK;
-}
+/* safe_text and graph_best_index_common are in graph_common.h */
 
 typedef struct {
     sqlite3_vtab base;
@@ -479,7 +446,7 @@ static int lei_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int lei_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_impl(pIdxInfo, LEI_COL_EDGE_TABLE, LEI_COL_TIME_END, 0x7);
+    return graph_best_index_common(pIdxInfo, LEI_COL_EDGE_TABLE, LEI_COL_TIME_END, 0x7, 5000.0);
 }
 
 static int lei_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -518,13 +485,13 @@ static int lei_filter(sqlite3_vtab_cursor *pCursor, int idxNum,
     for (int bit = 0; bit < LEI_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit))) continue;
         switch (bit + LEI_COL_EDGE_TABLE) {
-            case LEI_COL_EDGE_TABLE:    config.edge_table    = safe_text(argv[pos]); break;
-            case LEI_COL_SRC_COL:       config.src_col       = safe_text(argv[pos]); break;
-            case LEI_COL_DST_COL:       config.dst_col       = safe_text(argv[pos]); break;
-            case LEI_COL_WEIGHT_COL:    config.weight_col    = safe_text(argv[pos]); break;
+            case LEI_COL_EDGE_TABLE:    config.edge_table    = graph_safe_text(argv[pos]); break;
+            case LEI_COL_SRC_COL:       config.src_col       = graph_safe_text(argv[pos]); break;
+            case LEI_COL_DST_COL:       config.dst_col       = graph_safe_text(argv[pos]); break;
+            case LEI_COL_WEIGHT_COL:    config.weight_col    = graph_safe_text(argv[pos]); break;
             case LEI_COL_RESOLUTION:    resolution = sqlite3_value_double(argv[pos]); break;
-            case LEI_COL_DIRECTION:     config.direction     = safe_text(argv[pos]); break;
-            case LEI_COL_TIMESTAMP_COL: config.timestamp_col = safe_text(argv[pos]); break;
+            case LEI_COL_DIRECTION:     config.direction     = graph_safe_text(argv[pos]); break;
+            case LEI_COL_TIMESTAMP_COL: config.timestamp_col = graph_safe_text(argv[pos]); break;
             case LEI_COL_TIME_START:    config.time_start    = argv[pos]; break;
             case LEI_COL_TIME_END:      config.time_end      = argv[pos]; break;
         }

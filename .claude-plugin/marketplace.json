@@ -1,0 +1,19 @@
+{
+  "name": "muninn",
+  "owner": {
+    "name": "joshpeak"
+  },
+  "plugins": [
+    {
+      "name": "muninn",
+      "source": "./",
+      "description": "HNSW vector search, graph traversal, and Node2Vec for SQLite.",
+      "version": "0.1.0",
+      "author": { "name": "joshpeak" },
+      "repository": "https://github.com/user/sqlite-muninn",
+      "license": "MIT",
+      "keywords": ["sqlite", "vector", "hnsw", "graph", "node2vec", "search"],
+      "skills": ["./skills/"]
+    }
+  ]
+}

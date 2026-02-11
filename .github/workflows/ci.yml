@@ -1,0 +1,207 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Build & Test (All Platforms) ─────────────────────────
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: Linux x86_64
+            ext: so
+          - os: ubuntu-22.04-arm
+            name: Linux ARM64
+            ext: so
+          - os: macos-15
+            name: macOS Universal
+            ext: dylib
+          - os: windows-2022
+            name: Windows x86_64
+            ext: dll
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Unix build ──────────────────────────────────────
+      - name: Build extension (Unix)
+        if: runner.os != 'Windows'
+        run: make all
+
+      - name: Run C unit tests
+        if: runner.os != 'Windows'
+        run: |
+          sudo apt-get install -y libsqlite3-dev 2>/dev/null || true
+          make test
+
+      - name: SQLite CLI smoke test
+        if: runner.os != 'Windows'
+        run: |
+          sqlite3 :memory: ".load ./muninn" "SELECT 1"
+
+      # ── Windows build ───────────────────────────────────
+      - name: Setup MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build extension (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: scripts\build_windows.bat
+
+      # ── Python integration tests ────────────────────────
+      - uses: actions/setup-python@v5
+        if: runner.os != 'Windows'
+        with:
+          python-version: "3.13"
+
+      - name: Python integration tests
+        if: runner.os != 'Windows'
+        run: |
+          pip install pytest
+          python -m pytest pytests/ -v
+
+      # ── Upload artifact ─────────────────────────────────
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muninn-${{ matrix.name }}
+          path: muninn.${{ matrix.ext }}
+
+  # ── macOS Universal Binary ──────────────────────────────
+  build-macos-universal:
+    runs-on: macos-15
+    name: Build (macOS Universal Binary)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build arm64
+        run: make ARCH=arm64 all
+
+      - name: Rename arm64 binary
+        run: mv muninn.dylib muninn_arm64.dylib
+
+      - name: Build x86_64
+        run: make clean all ARCH=x86_64
+
+      - name: Rename x86_64 binary
+        run: mv muninn.dylib muninn_x86_64.dylib
+
+      - name: Create universal binary
+        run: |
+          lipo -create muninn_arm64.dylib muninn_x86_64.dylib -output muninn.dylib
+          lipo -info muninn.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muninn-macos-universal
+          path: muninn.dylib
+
+  # ── Sanitizers (Linux only) ──────────────────────────────
+  sanitize:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        sanitizer:
+          - name: ASan+UBSan
+            flags: "-fsanitize=address,undefined -fno-sanitize-recover=all"
+    name: Sanitize (${{ matrix.sanitizer.name }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SQLite dev headers
+        run: sudo apt-get install -y libsqlite3-dev
+
+      - name: Build and test with ${{ matrix.sanitizer.name }}
+        run: |
+          CC=clang make test \
+            CFLAGS_EXTRA="${{ matrix.sanitizer.flags }} -g -O1 -fno-omit-frame-pointer"
+
+  # ── Amalgamation ─────────────────────────────────────────
+  amalgamation:
+    runs-on: ubuntu-22.04
+    name: Amalgamation
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create amalgamation
+        run: make amalgamation
+
+      - name: Verify amalgamation compiles as loadable extension
+        run: |
+          cc -O2 -fPIC -shared dist/muninn.c -o dist/muninn.so -lm
+          ls -la dist/muninn.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amalgamation
+          path: |
+            dist/muninn.c
+            dist/muninn.h
+
+  # ── Package Install Tests ────────────────────────────────
+  package-install:
+    runs-on: ubuntu-22.04
+    name: Package Install Tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SQLite dev headers
+        run: sudo apt-get install -y libsqlite3-dev
+
+      - name: Build extension
+        run: make all
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Test pip install from source
+        run: |
+          pip install .
+          python -c "
+          import sqlite_muninn
+          print(f'Version: {sqlite_muninn.__version__}')
+          print(f'Path: {sqlite_muninn.loadable_path()}')
+          "
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test Node.js module loads
+        run: |
+          node -e "
+          const m = require('./index.cjs');
+          console.log('Version:', m.version);
+          console.log('Path:', m.getLoadablePath());
+          "
+
+  # ── WASM Build ───────────────────────────────────────────
+  wasm:
+    runs-on: ubuntu-22.04
+    name: WASM Build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Create amalgamation
+        run: make amalgamation
+
+      - name: Build WASM
+        run: bash scripts/build_wasm.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: |
+            dist/muninn_sqlite3.js
+            dist/muninn_sqlite3.wasm

@@ -10,6 +10,7 @@
  * support for weighted edges and temporal filtering.
  */
 #include "graph_centrality.h"
+#include "graph_common.h"
 #include "graph_load.h"
 #include "id_validate.h"
 
@@ -89,61 +90,6 @@ static int cent_disconnect(sqlite3_vtab *pVTab) {
  * Each TVF defines its own column enum and calls this to
  * fill a GraphLoadConfig and extract additional params.
  * ═══════════════════════════════════════════════════════════════ */
-
-static const char *safe_text(sqlite3_value *v) {
-    if (!v || sqlite3_value_type(v) == SQLITE_NULL) return NULL;
-    return (const char *)sqlite3_value_text(v);
-}
-
-/*
- * Two-pass xBestIndex helper for TVFs with optional hidden columns.
- *
- * SQLite requires contiguous argvIndex values (1, 2, 3, ...) with no gaps.
- * When optional hidden params are omitted, column-based argvIndex creates gaps.
- *
- * Pass 1: Scan constraints and record which hidden columns have EQ constraints.
- * Pass 2: Assign sequential argvIndex values in column order.
- *
- * This guarantees argv[] is always in column order in xFilter, and
- * idxNum bitmask tells which columns are present.
- */
-static int graph_best_index_impl(sqlite3_index_info *pIdxInfo,
-                                  int first_hidden, int last_hidden,
-                                  int required_mask) {
-    int n_cols = last_hidden - first_hidden + 1;
-
-    /* Pass 1: map each hidden column to its constraint index (or -1) */
-    int constraint_for[32];  /* max 32 hidden columns */
-    for (int j = 0; j < n_cols && j < 32; j++) constraint_for[j] = -1;
-
-    for (int i = 0; i < pIdxInfo->nConstraint; i++) {
-        if (!pIdxInfo->aConstraint[i].usable) continue;
-        if (pIdxInfo->aConstraint[i].op != SQLITE_INDEX_CONSTRAINT_EQ) continue;
-        int col = pIdxInfo->aConstraint[i].iColumn;
-        if (col >= first_hidden && col <= last_hidden) {
-            int off = col - first_hidden;
-            constraint_for[off] = i;
-        }
-    }
-
-    /* Pass 2: assign sequential argvIndex in column order */
-    int argv_idx = 1;
-    int idx_num = 0;
-    for (int j = 0; j < n_cols && j < 32; j++) {
-        if (constraint_for[j] >= 0) {
-            pIdxInfo->aConstraintUsage[constraint_for[j]].argvIndex = argv_idx++;
-            pIdxInfo->aConstraintUsage[constraint_for[j]].omit = 1;
-            idx_num |= (1 << j);
-        }
-    }
-
-    pIdxInfo->idxNum = idx_num;
-    if ((idx_num & required_mask) == required_mask)
-        pIdxInfo->estimatedCost = 1000.0;
-    else
-        pIdxInfo->estimatedCost = 1e12;
-    return SQLITE_OK;
-}
 
 /* ═══════════════════════════════════════════════════════════════
  * Double-precision priority queue for Dijkstra/Brandes
@@ -448,7 +394,7 @@ static int deg_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int deg_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_impl(pIdxInfo, DEG_COL_EDGE_TABLE, DEG_COL_TIME_END, 0x7);
+    return graph_best_index_common(pIdxInfo, DEG_COL_EDGE_TABLE, DEG_COL_TIME_END, 0x7, 1000.0);
 }
 
 static int deg_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -488,13 +434,13 @@ static int deg_filter(sqlite3_vtab_cursor *pCursor, int idxNum,
     for (int bit = 0; bit < DEG_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit))) continue;
         switch (bit + DEG_COL_EDGE_TABLE) {
-            case DEG_COL_EDGE_TABLE:    config.edge_table    = safe_text(argv[pos]); break;
-            case DEG_COL_SRC_COL:       config.src_col       = safe_text(argv[pos]); break;
-            case DEG_COL_DST_COL:       config.dst_col       = safe_text(argv[pos]); break;
-            case DEG_COL_WEIGHT_COL:    config.weight_col    = safe_text(argv[pos]); break;
+            case DEG_COL_EDGE_TABLE:    config.edge_table    = graph_safe_text(argv[pos]); break;
+            case DEG_COL_SRC_COL:       config.src_col       = graph_safe_text(argv[pos]); break;
+            case DEG_COL_DST_COL:       config.dst_col       = graph_safe_text(argv[pos]); break;
+            case DEG_COL_WEIGHT_COL:    config.weight_col    = graph_safe_text(argv[pos]); break;
             case DEG_COL_NORMALIZED:    normalized = sqlite3_value_int(argv[pos]); break;
-            case DEG_COL_DIRECTION:     config.direction     = safe_text(argv[pos]); break;
-            case DEG_COL_TIMESTAMP_COL: config.timestamp_col = safe_text(argv[pos]); break;
+            case DEG_COL_DIRECTION:     config.direction     = graph_safe_text(argv[pos]); break;
+            case DEG_COL_TIMESTAMP_COL: config.timestamp_col = graph_safe_text(argv[pos]); break;
             case DEG_COL_TIME_START:    config.time_start    = argv[pos]; break;
             case DEG_COL_TIME_END:      config.time_end      = argv[pos]; break;
         }
@@ -641,7 +587,7 @@ static int bet_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int bet_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_impl(pIdxInfo, BET_COL_EDGE_TABLE, BET_COL_TIME_END, 0x7);
+    return graph_best_index_common(pIdxInfo, BET_COL_EDGE_TABLE, BET_COL_TIME_END, 0x7, 1000.0);
 }
 
 static int bet_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -681,14 +627,14 @@ static int bet_filter(sqlite3_vtab_cursor *pCursor, int idxNum,
     for (int bit = 0; bit < BET_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit))) continue;
         switch (bit + BET_COL_EDGE_TABLE) {
-            case BET_COL_EDGE_TABLE:    config.edge_table    = safe_text(argv[pos]); break;
-            case BET_COL_SRC_COL:       config.src_col       = safe_text(argv[pos]); break;
-            case BET_COL_DST_COL:       config.dst_col       = safe_text(argv[pos]); break;
-            case BET_COL_WEIGHT_COL:    config.weight_col    = safe_text(argv[pos]); break;
+            case BET_COL_EDGE_TABLE:    config.edge_table    = graph_safe_text(argv[pos]); break;
+            case BET_COL_SRC_COL:       config.src_col       = graph_safe_text(argv[pos]); break;
+            case BET_COL_DST_COL:       config.dst_col       = graph_safe_text(argv[pos]); break;
+            case BET_COL_WEIGHT_COL:    config.weight_col    = graph_safe_text(argv[pos]); break;
             case BET_COL_NORMALIZED:    normalized = sqlite3_value_int(argv[pos]); break;
-            case BET_COL_DIRECTION:     config.direction     = safe_text(argv[pos]); break;
+            case BET_COL_DIRECTION:     config.direction     = graph_safe_text(argv[pos]); break;
             case BET_COL_AUTO_APPROX:   auto_approx = sqlite3_value_int(argv[pos]); break;
-            case BET_COL_TIMESTAMP_COL: config.timestamp_col = safe_text(argv[pos]); break;
+            case BET_COL_TIMESTAMP_COL: config.timestamp_col = graph_safe_text(argv[pos]); break;
             case BET_COL_TIME_START:    config.time_start    = argv[pos]; break;
             case BET_COL_TIME_END:      config.time_end      = argv[pos]; break;
         }
@@ -915,7 +861,7 @@ static int clo_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int clo_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_impl(pIdxInfo, CLO_COL_EDGE_TABLE, CLO_COL_TIME_END, 0x7);
+    return graph_best_index_common(pIdxInfo, CLO_COL_EDGE_TABLE, CLO_COL_TIME_END, 0x7, 1000.0);
 }
 
 static int clo_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -954,13 +900,13 @@ static int clo_filter(sqlite3_vtab_cursor *pCursor, int idxNum,
     for (int bit = 0; bit < CLO_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit))) continue;
         switch (bit + CLO_COL_EDGE_TABLE) {
-            case CLO_COL_EDGE_TABLE:    config.edge_table    = safe_text(argv[pos]); break;
-            case CLO_COL_SRC_COL:       config.src_col       = safe_text(argv[pos]); break;
-            case CLO_COL_DST_COL:       config.dst_col       = safe_text(argv[pos]); break;
-            case CLO_COL_WEIGHT_COL:    config.weight_col    = safe_text(argv[pos]); break;
+            case CLO_COL_EDGE_TABLE:    config.edge_table    = graph_safe_text(argv[pos]); break;
+            case CLO_COL_SRC_COL:       config.src_col       = graph_safe_text(argv[pos]); break;
+            case CLO_COL_DST_COL:       config.dst_col       = graph_safe_text(argv[pos]); break;
+            case CLO_COL_WEIGHT_COL:    config.weight_col    = graph_safe_text(argv[pos]); break;
             case CLO_COL_NORMALIZED:    normalized = sqlite3_value_int(argv[pos]); break;
-            case CLO_COL_DIRECTION:     config.direction     = safe_text(argv[pos]); break;
-            case CLO_COL_TIMESTAMP_COL: config.timestamp_col = safe_text(argv[pos]); break;
+            case CLO_COL_DIRECTION:     config.direction     = graph_safe_text(argv[pos]); break;
+            case CLO_COL_TIMESTAMP_COL: config.timestamp_col = graph_safe_text(argv[pos]); break;
             case CLO_COL_TIME_START:    config.time_start    = argv[pos]; break;
             case CLO_COL_TIME_END:      config.time_end      = argv[pos]; break;
         }

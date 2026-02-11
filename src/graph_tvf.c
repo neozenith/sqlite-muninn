@@ -12,6 +12,7 @@
  * All table/column names are validated via id_validate() to prevent SQL injection.
  */
 #include "graph_tvf.h"
+#include "graph_common.h"
 #include "id_validate.h"
 #include "priority_queue.h"
 
@@ -80,12 +81,6 @@ typedef struct {
     int capacity;
 } StrHashSet;
 
-static unsigned int str_hash(const char *s) {
-    unsigned int h = 5381;
-    for (; *s; s++) h = h * 33 + (unsigned char)*s;
-    return h;
-}
-
 static int shs_init(StrHashSet *s, int cap) {
     if (cap < 16) cap = 16;
     /* Round up to power of 2 */
@@ -106,7 +101,7 @@ static void shs_destroy(StrHashSet *s) {
 }
 
 static int shs_contains(const StrHashSet *s, const char *key) {
-    unsigned int slot = str_hash(key) & (unsigned int)(s->capacity - 1);
+    unsigned int slot = graph_str_hash(key) & (unsigned int)(s->capacity - 1);
     for (int i = 0; i < s->capacity; i++) {
         int idx = ((int)slot + i) & (s->capacity - 1);
         if (!s->keys[idx]) return 0;
@@ -123,7 +118,7 @@ static int shs_insert(StrHashSet *s, const char *key) {
         if (!new_keys) return -1;
         for (int i = 0; i < s->capacity; i++) {
             if (s->keys[i]) {
-                unsigned int slot = str_hash(s->keys[i]) & (unsigned int)(new_cap - 1);
+                unsigned int slot = graph_str_hash(s->keys[i]) & (unsigned int)(new_cap - 1);
                 for (int j = 0; j < new_cap; j++) {
                     int idx = ((int)slot + j) & (new_cap - 1);
                     if (!new_keys[idx]) { new_keys[idx] = s->keys[i]; break; }
@@ -134,7 +129,7 @@ static int shs_insert(StrHashSet *s, const char *key) {
         s->keys = new_keys;
         s->capacity = new_cap;
     }
-    unsigned int slot = str_hash(key) & (unsigned int)(s->capacity - 1);
+    unsigned int slot = graph_str_hash(key) & (unsigned int)(s->capacity - 1);
     for (int i = 0; i < s->capacity; i++) {
         int idx = ((int)slot + i) & (s->capacity - 1);
         if (!s->keys[idx]) {

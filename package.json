@@ -1,0 +1,27 @@
+{
+  "name": "sqlite-muninn",
+  "version": "0.1.0",
+  "description": "HNSW vector search + graph traversal + Node2Vec for SQLite",
+  "main": "index.cjs",
+  "module": "index.mjs",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "keywords": ["sqlite", "vector", "hnsw", "graph", "node2vec", "search"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/user/sqlite-muninn.git"
+  },
+  "scripts": {
+    "install": "make all 2>/dev/null || echo 'Skipping native build — install from npm for pre-built binaries'",
+    "test": "echo 'See: make test-all'"
+  },
+  "files": [
+    "index.mjs",
+    "index.cjs",
+    "index.d.ts",
+    "VERSION",
+    "src/",
+    "Makefile",
+    "scripts/build_windows.bat"
+  ]
+}

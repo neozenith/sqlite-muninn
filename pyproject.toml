@@ -1,9 +1,39 @@
-# This project is a C library — pyproject.toml is used only for Python tooling deps.
-[project]
-name = "sqlite-muninn-docs"
-version = "0.0.0"
-requires-python = ">=3.12"
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
 
+[project]
+name = "sqlite-muninn"
+dynamic = ["version"]
+description = "HNSW vector search + graph traversal + Node2Vec for SQLite"
+requires-python = ">=3.12"
+license = "MIT"
+readme = "README.md"
+keywords = ["sqlite", "vector", "hnsw", "graph", "node2vec", "search"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/user/sqlite-muninn"
+Repository = "https://github.com/user/sqlite-muninn"
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+
+[tool.setuptools.packages.find]
+include = ["sqlite_muninn*"]
+
+[tool.setuptools.package-data]
+sqlite_muninn = ["*.so", "*.dylib", "*.dll", "skills/**/*.md"]
+
+# Development dependency groups (not package dependencies)
 [dependency-groups]
 benchmark = [
     "numpy>=2.4.2",
@@ -21,4 +51,7 @@ docs = [
     "mkdocs>=1.6.0",
     "mkdocs-material>=9.5.0",
     "mkdocs-plotly-plugin>=0.1.3",
+]
+dev = [
+    "pytest>=8.0",
 ]

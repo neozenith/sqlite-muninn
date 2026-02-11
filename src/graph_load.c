@@ -13,20 +13,11 @@
 SQLITE_EXTENSION_INIT3
 
 #include "graph_load.h"
+#include "graph_common.h"
 #include "id_validate.h"
 
 #include <stdlib.h>
 #include <string.h>
-
-/* ═══════════════════════════════════════════════════════════════
- * Hash function (djb2)
- * ═══════════════════════════════════════════════════════════════ */
-
-static unsigned int str_hash(const char *s) {
-    unsigned int h = 5381;
-    for (; *s; s++) h = h * 33 + (unsigned char)*s;
-    return h;
-}
 
 /* ═══════════════════════════════════════════════════════════════
  * GraphData lifecycle
@@ -67,7 +58,7 @@ static void graph_data_rehash(GraphData *g) {
     for (int i = 0; i < new_cap; i++) new_map[i] = -1;
 
     for (int i = 0; i < g->node_count; i++) {
-        unsigned int slot = str_hash(g->ids[i]) & (unsigned int)(new_cap - 1);
+        unsigned int slot = graph_str_hash(g->ids[i]) & (unsigned int)(new_cap - 1);
         while (new_map[slot] != -1) {
             slot = (slot + 1) & (unsigned int)(new_cap - 1);
         }
@@ -79,7 +70,7 @@ static void graph_data_rehash(GraphData *g) {
 }
 
 int graph_data_find(const GraphData *g, const char *id) {
-    unsigned int slot = str_hash(id) & (unsigned int)(g->map_capacity - 1);
+    unsigned int slot = graph_str_hash(id) & (unsigned int)(g->map_capacity - 1);
     for (int probe = 0; probe < g->map_capacity; probe++) {
         int idx = g->map_indices[slot];
         if (idx == -1) return -1;
@@ -117,7 +108,7 @@ int graph_data_find_or_add(GraphData *g, const char *id) {
     }
 
     /* Insert into hash map */
-    unsigned int slot = str_hash(id) & (unsigned int)(g->map_capacity - 1);
+    unsigned int slot = graph_str_hash(id) & (unsigned int)(g->map_capacity - 1);
     while (g->map_indices[slot] != -1) {
         slot = (slot + 1) & (unsigned int)(g->map_capacity - 1);
     }
