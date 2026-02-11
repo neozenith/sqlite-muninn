@@ -17,7 +17,8 @@
 7. [Cross-Platform CI/CD](#cross-platform-cicd)
 8. [SQLite Version Testing](#sqlite-version-testing)
 9. [Release Automation](#release-automation)
-10. [Recommended Implementation Order](#recommended-implementation-order)
+10. [Agent-Ready Distribution (SKILL.md)](#agent-ready-distribution-skillmd)
+11. [Recommended Implementation Order](#recommended-implementation-order)
 
 ---
 
@@ -1218,6 +1219,486 @@ Build scripts read this file and stamp it into `__init__.py`, `package.json`, an
 
 ---
 
+## Agent-Ready Distribution (SKILL.md)
+
+### Inspiration: QMD's Skills Pattern
+
+The `skills/` directory structure is inspired by [QMD](https://github.com/tobi/qmd) (Tobi Lütke), which pioneered a clean pattern for making CLI tools discoverable by AI coding assistants. QMD's approach:
+
+```
+skills/
+    qmd/
+        SKILL.md              # YAML frontmatter + structured usage docs
+        references/
+            mcp-setup.md      # Deep-dive supplementary docs
+.claude-plugin/
+    marketplace.json          # Plugin manifest (MCP servers, metadata)
+```
+
+Key design choices we're adopting from QMD:
+
+| QMD Pattern | What It Does | Our Adaptation |
+|-------------|-------------|----------------|
+| **YAML frontmatter** | Machine-parseable metadata (name, description, triggers, `allowed-tools`) | Same — gives AI tools structured context before reading prose |
+| **`references/` subdirectory** | Deep-dive docs alongside the skill | Per-language cookbooks as reference files |
+| **Trigger phrases in description** | Tells AI *when* to activate (`"search my notes"`, `"find in docs"`) | Trigger on `"vector search"`, `"graph traversal"`, `"HNSW"`, `"knowledge graph"` |
+| **`allowed-tools` frontmatter** | Declares what tools the skill needs | Scopes to SQL execution, Python/Node runtime |
+| **`.claude-plugin/marketplace.json`** | Formal plugin registration for Claude Code ecosystem | Adopt for Claude Code plugin distribution |
+| **Dynamic status checks** (`!` backtick) | Inline shell execution for live environment checks | Detect if vec_graph is installed / extension loadable |
+
+### The Problem: AI Coding Tools Can't Use What They Can't Discover
+
+When a developer asks Claude Code, Cursor, Copilot, or Aider to "add vector search to my SQLite database", the AI needs to:
+
+1. **Know `vec_graph` exists** — discoverability
+2. **Know how to install it** — package name, platform caveats
+3. **Know the SQL interface** — `CREATE VIRTUAL TABLE ... USING hnsw_index(...)`, not some invented syntax
+4. **Know the idiomatic patterns** — vector encoding, search queries, graph traversal, Node2Vec
+5. **Know the gotchas** — macOS `load_extension` disabled, vector blob format, dimension constraints
+
+Today, AI tools piece this together from README fragments, Stack Overflow, and hallucinated guesses. The result: incorrect SQL syntax, wrong vector encoding, missing `enable_load_extension()` calls, and frustrated developers who blame the extension instead of the AI.
+
+**The fix:** Ship a structured `skills/` directory with a `SKILL.md` file and per-language reference cookbooks — a machine-readable knowledge base that AI coding tools can consume directly.
+
+### Repository Structure
+
+Following the QMD pattern, the skill definition lives in the repo and gets distributed with every package:
+
+```
+skills/
+    vec_graph/
+        SKILL.md                      # Main skill: YAML frontmatter + usage guide
+        references/
+            cookbook-python.md         # Python patterns (semantic search, RAG, batch insert)
+            cookbook-node.md           # Node.js patterns (Express, Bun, buffer encoding)
+            cookbook-c.md              # C/C++ patterns (static linking, blob binding)
+            cookbook-sql.md            # Pure SQL patterns (CLI workflows, graph pipelines)
+            vector-encoding.md        # Cross-language vector format reference
+            platform-caveats.md       # macOS load_extension, Windows DLL, glibc compat
+.claude-plugin/
+    marketplace.json                  # Claude Code plugin manifest
+```
+
+### SKILL.md with YAML Frontmatter
+
+The `SKILL.md` follows the QMD convention — YAML frontmatter for machine-parseable metadata, followed by structured usage documentation:
+
+````markdown
+---
+name: vec_graph
+description: >
+  Add HNSW vector similarity search, graph traversal (BFS, DFS, shortest path,
+  PageRank, connected components), and Node2Vec embedding generation to any SQLite
+  database. Use when users need vector search, knowledge graphs, graph algorithms,
+  semantic search, or RAG retrieval in SQLite. Triggers on "vector search",
+  "nearest neighbor", "HNSW", "graph traversal", "knowledge graph", "PageRank",
+  "Node2Vec", "embedding search", "similarity search in SQLite".
+license: MIT
+compatibility: >
+  Requires vec_graph extension. Python: `pip install vec-graph`.
+  Node.js: `npm install vec-graph`. C: download amalgamation from GitHub Releases.
+metadata:
+  author: joshpeak
+  version: "{{VERSION}}"
+  repository: https://github.com/user/sqlite-vector-graph
+allowed-tools: Bash(sqlite3:*), Bash(python:*), Bash(node:*)
+---
+
+# vec_graph — HNSW Vector Search + Graph Traversal for SQLite
+
+Zero-dependency C11 SQLite extension. Three subsystems in one `.load`:
+HNSW approximate nearest neighbor search, graph traversal TVFs, and Node2Vec.
+
+## Installation Check
+
+!`python -c "import vec_graph; print(f'vec_graph {vec_graph.__version__} installed')" 2>/dev/null || echo "Not installed. Run: pip install vec-graph"`
+
+## Quick Start (Python)
+
+```python
+import sqlite3
+import vec_graph
+
+db = sqlite3.connect(":memory:")
+db.enable_load_extension(True)
+vec_graph.load(db)
+db.enable_load_extension(False)
+```
+
+## Quick Start (Node.js)
+
+```javascript
+import Database from "better-sqlite3";
+import { load } from "vec-graph";
+
+const db = new Database(":memory:");
+load(db);
+```
+
+## Quick Start (SQLite CLI)
+
+```sql
+.load ./vec_graph
+```
+
+## HNSW Vector Index
+
+### Create an index
+
+```sql
+CREATE VIRTUAL TABLE my_embeddings USING hnsw_index(
+    id INTEGER PRIMARY KEY,
+    embedding FLOAT32[384],       -- dimension MUST match your vectors
+    metric_type TEXT DEFAULT 'L2'  -- L2 | cosine | inner_product
+);
+```
+
+### Insert vectors
+
+Vectors are raw float32 blobs (little-endian). In Python:
+```python
+import struct
+dim = 384
+vector = [0.1, 0.2, ...]  # len == dim
+blob = struct.pack(f'{dim}f', *vector)
+db.execute("INSERT INTO my_embeddings(id, embedding) VALUES (?, ?)", (1, blob))
+```
+
+In Node.js:
+```javascript
+const dim = 384;
+const vector = new Float32Array([0.1, 0.2, /* ... */]);  // length == dim
+const blob = Buffer.from(vector.buffer);
+db.prepare("INSERT INTO my_embeddings(id, embedding) VALUES (?, ?)").run(1, blob);
+```
+
+### Search (k-nearest neighbors)
+
+```sql
+SELECT id, distance
+FROM my_embeddings
+WHERE embedding MATCH ?    -- query vector as float32 blob
+  AND k = 10;             -- return top-10 nearest
+```
+
+## Graph Traversal TVFs
+
+Graph TVFs operate on ANY existing SQLite table with source/target columns.
+They do NOT require HNSW — they work on plain relational edge tables.
+
+### BFS traversal
+
+```sql
+SELECT * FROM bfs(
+    'edges',        -- table name
+    'source',       -- source column
+    'target',       -- target column
+    1               -- start node ID
+);
+```
+
+### Shortest path
+
+```sql
+SELECT * FROM shortest_path(
+    'edges', 'source', 'target',
+    1,              -- from node
+    42              -- to node
+);
+```
+
+### Available TVFs
+
+| Function | Purpose |
+|----------|---------|
+| `bfs(table, src_col, dst_col, start)` | Breadth-first traversal |
+| `dfs(table, src_col, dst_col, start)` | Depth-first traversal |
+| `shortest_path(table, src_col, dst_col, from, to)` | Shortest path between two nodes |
+| `connected_components(table, src_col, dst_col)` | Find all connected components |
+| `pagerank(table, src_col, dst_col)` | Compute PageRank scores |
+
+## Node2Vec Embedding Generation
+
+Generate graph embeddings and store them directly in an HNSW index:
+
+```sql
+-- Create an HNSW index to receive the embeddings
+CREATE VIRTUAL TABLE node_embeddings USING hnsw_index(
+    id INTEGER PRIMARY KEY,
+    embedding FLOAT32[64]
+);
+
+-- Train Node2Vec on an edge table, write embeddings into the HNSW index
+SELECT node2vec_train(
+    'edges',            -- edge table
+    'source',           -- source column
+    'target',           -- target column
+    'node_embeddings',  -- destination HNSW table
+    64                  -- embedding dimension
+);
+```
+
+## Common Mistakes
+
+- **DO NOT** pass vectors as JSON arrays — they must be raw float32 blobs
+- **DO NOT** forget `db.enable_load_extension(True)` before loading (Python)
+- **DO NOT** mismatch vector dimensions — insert dim must match CREATE TABLE dim
+- **DO NOT** use on macOS system Python without Homebrew Python or pysqlite3-binary
+  (Apple's SQLite has `SQLITE_OMIT_LOAD_EXTENSION`)
+- **DO** call `enable_load_extension(False)` after loading for security
+- **DO** use `struct.pack(f'{dim}f', *values)` for vector encoding in Python
+- **DO** use `Buffer.from(new Float32Array(values).buffer)` for vectors in Node.js
+
+## Platform Notes
+
+- macOS: System Python's sqlite3 disables load_extension(). Use Homebrew Python
+  (`brew install python`) or install `pysqlite3-binary`.
+- All platforms: The extension is a native binary (.so/.dylib/.dll) — it must match
+  your OS and architecture.
+
+## Further Reading
+
+See `references/` for detailed per-language cookbooks:
+- [cookbook-python.md](references/cookbook-python.md) — Semantic search, RAG, batch loading
+- [cookbook-node.md](references/cookbook-node.md) — Express endpoints, Bun, buffer helpers
+- [cookbook-c.md](references/cookbook-c.md) — Static linking, sqlite3_auto_extension
+- [cookbook-sql.md](references/cookbook-sql.md) — Pure SQL workflows, graph pipelines
+- [vector-encoding.md](references/vector-encoding.md) — Cross-language float32 blob format
+- [platform-caveats.md](references/platform-caveats.md) — macOS, Windows, glibc details
+````
+
+### Claude Code Plugin Manifest
+
+Following the QMD `.claude-plugin/marketplace.json` pattern, we register vec_graph as a Claude Code plugin:
+
+```json
+{
+  "name": "vec_graph",
+  "owner": {
+    "name": "joshpeak",
+    "email": "josh@example.com"
+  },
+  "plugins": [
+    {
+      "name": "vec_graph",
+      "source": "./",
+      "description": "HNSW vector search, graph traversal, and Node2Vec for SQLite.",
+      "version": "0.1.0",
+      "author": { "name": "joshpeak" },
+      "repository": "https://github.com/user/sqlite-vector-graph",
+      "license": "MIT",
+      "keywords": ["sqlite", "vector", "hnsw", "graph", "node2vec", "search"],
+      "skills": ["./skills/"]
+    }
+  ]
+}
+```
+
+This enables Claude Code to discover the skill when the plugin is installed, making the full `SKILL.md` and all `references/` files available as context when a user's task matches the trigger phrases.
+
+### Per-Language Reference Cookbooks
+
+The `references/` directory contains deeper patterns for each language ecosystem. These are the recipes an AI coding tool needs to solve real tasks — not just toy examples, but production patterns with error handling and performance considerations.
+
+#### `references/cookbook-python.md`
+
+| Pattern | What the AI learns |
+|---------|-------------------|
+| **Semantic search over documents** | Embed text with sentence-transformers, `struct.pack` vectors, store in HNSW, search by query vector |
+| **Knowledge graph + vector hybrid** | Store entities as nodes with embeddings, query by both graph traversal and vector similarity |
+| **Node2Vec → clustering** | Generate graph embeddings, extract as numpy arrays, feed to scikit-learn |
+| **Batch vector insert** | Efficient bulk loading with `executemany()`, pre-packed struct buffers |
+| **RAG retrieval** | Retrieve top-k similar chunks, expand context with BFS over citation graph |
+| **Incremental index updates** | Insert/delete/update vectors in a live HNSW index |
+
+#### `references/cookbook-node.md`
+
+| Pattern | What the AI learns |
+|---------|-------------------|
+| **Express.js search endpoint** | API route: receive query → embed → HNSW search → JSON response |
+| **Bun SQLite integration** | `bun:sqlite` with `vec_graph` for edge-native search |
+| **`Float32Array` ↔ `Buffer`** | Correct vector encoding/decoding for insert and search |
+| **better-sqlite3 transactions** | Batch inserts with `db.transaction()` for performance |
+
+#### `references/cookbook-c.md`
+
+| Pattern | What the AI learns |
+|---------|-------------------|
+| **Static linking** | Compile vec_graph into your application with `sqlite3_auto_extension()` |
+| **Loadable extension** | `sqlite3_load_extension()` with proper error handling |
+| **Vector preparation** | Allocating `float[]` buffers, binding as `SQLITE_BLOB` with `sqlite3_bind_blob()` |
+| **Thread safety** | One `sqlite3*` connection per thread; HNSW index is connection-scoped |
+
+#### `references/cookbook-sql.md`
+
+| Pattern | What the AI learns |
+|---------|-------------------|
+| **Interactive exploration** | `.load`, create index, insert sample vectors, search — a full CLI session |
+| **Graph analysis pipeline** | Create edge table → PageRank → Node2Vec → similarity search — end to end |
+| **Hybrid query** | Combine HNSW vector search with graph BFS in a single workflow |
+
+#### `references/vector-encoding.md`
+
+Cross-language reference for the float32 blob format — the single biggest source of errors when AI tools generate vec_graph code:
+
+| Language | Encode | Decode |
+|----------|--------|--------|
+| Python | `struct.pack(f'{dim}f', *values)` | `struct.unpack(f'{dim}f', blob)` |
+| Node.js | `Buffer.from(new Float32Array(values).buffer)` | `new Float32Array(buffer.buffer, buffer.byteOffset, dim)` |
+| C | `float vec[dim]; sqlite3_bind_blob(stmt, col, vec, dim*sizeof(float), SQLITE_TRANSIENT);` | `const float *vec = sqlite3_column_blob(stmt, col);` |
+| Rust | `bytemuck::cast_slice::<f32, u8>(&vec)` | `bytemuck::cast_slice::<u8, f32>(blob)` |
+| Go | `math.Float32bits()` → `binary.LittleEndian.PutUint32()` | `binary.LittleEndian.Uint32()` → `math.Float32frombits()` |
+
+### Distribution Integration
+
+The `skills/` directory and its contents must ship inside every package, not just live in the repo:
+
+#### Python (PyPI)
+
+```
+vec_graph/
+    __init__.py
+    vec_graph.so              # platform binary
+    skills/
+        vec_graph/
+            SKILL.md
+            references/
+                cookbook-python.md
+                vector-encoding.md
+                platform-caveats.md
+```
+
+Include in `pyproject.toml`:
+```toml
+[tool.setuptools.package-data]
+vec_graph = ["skills/**/*.md"]
+```
+
+#### Node.js (NPM)
+
+```
+vec-graph/
+    index.mjs
+    index.cjs
+    index.d.ts
+    skills/
+        vec_graph/
+            SKILL.md
+            references/
+                cookbook-node.md
+                vector-encoding.md
+                platform-caveats.md
+```
+
+Include in `package.json`:
+```json
+{
+  "files": ["index.mjs", "index.cjs", "index.d.ts", "skills/**/*.md"]
+}
+```
+
+#### C/C++ (Amalgamation Tarball)
+
+```
+vec_graph-amalgamation/
+    vec_graph.c
+    vec_graph.h
+    skills/
+        vec_graph/
+            SKILL.md
+            references/
+                cookbook-c.md
+                cookbook-sql.md
+                vector-encoding.md
+                platform-caveats.md
+```
+
+#### GitHub Repo (Source)
+
+The repo is the source of truth. All files live at `skills/vec_graph/` at the repo root. Each language package includes the full `SKILL.md` plus only the relevant reference files for that ecosystem.
+
+### Cross-Tool Compatibility
+
+Different AI tools discover instructions differently. The `SKILL.md` with YAML frontmatter is the canonical format; tool-specific files can be generated from it:
+
+| Tool | Discovery Mechanism | How vec_graph Gets Found |
+|------|---------------------|--------------------------|
+| **Claude Code** | `.claude-plugin/` + `skills/` | Native plugin discovery; `SKILL.md` frontmatter parsed directly |
+| **Claude Code (manual)** | `CLAUDE.md` in consumer project | `python -m vec_graph init --claude` generates snippet |
+| **Cursor** | `.cursorrules` in consumer project | `python -m vec_graph init --cursor` generates rules |
+| **GitHub Copilot** | README + adjacent files | README links to `skills/vec_graph/SKILL.md` |
+| **Aider** | `.aider.conf.yml` conventions | Link to SKILL.md in conventions file |
+| **Windsurf** | `.windsurfrules` | `python -m vec_graph init --windsurf` generates rules |
+| **Context7** | Indexed documentation | Published docs include SKILL.md patterns |
+| **Any tool** | Reads files adjacent to imported package | `skills/` directory discoverable next to `__init__.py` or `index.mjs` |
+
+**`vec-graph init` CLI helper** (future):
+
+```bash
+# Generate tool-specific instruction files from canonical SKILL.md
+python -m vec_graph init --claude    # → prints CLAUDE.md snippet to stdout
+python -m vec_graph init --cursor    # → prints .cursorrules content
+python -m vec_graph init --windsurf  # → prints .windsurfrules content
+python -m vec_graph init --all       # → writes all tool-specific files
+```
+
+### Maintenance Strategy
+
+The skill files are **release artifacts** — versioned and validated alongside the code:
+
+1. **Source of truth:** `skills/vec_graph/` at the repo root (human-editable, reviewed in PRs)
+2. **Build step:** `make skill` copies the skills directory into each package, stamping the version in YAML frontmatter
+3. **CI validation:** A job extracts and executes every code block from `SKILL.md` and all `references/*.md` files against the built extension
+4. **Versioned with releases:** The `SKILL.md` in version 0.2.0's PyPI package describes 0.2.0's API, not trunk
+
+```makefile
+skill: skills/vec_graph/SKILL.md                ## Stamp version into skill files
+	@VERSION=$$(cat VERSION); \
+	for f in skills/vec_graph/SKILL.md skills/vec_graph/references/*.md; do \
+	    sed "s/{{VERSION}}/$$VERSION/g" "$$f" > "dist/$${f}"; \
+	done
+```
+
+### CI Validation: Executable Documentation
+
+The most dangerous failure mode is a `SKILL.md` that contains wrong SQL syntax. AI tools will faithfully reproduce the wrong syntax, and developers will file bugs saying "the AI told me to do X and it didn't work."
+
+**Prevention:** Extract and execute every fenced code block from `SKILL.md` and all reference files:
+
+```yaml
+validate-skill-md:
+  runs-on: ubuntu-22.04
+  steps:
+    - uses: actions/checkout@v4
+    - run: make all
+    - name: Validate skill examples
+      run: python scripts/validate_skill_examples.py skills/vec_graph/
+```
+
+The validation script:
+1. Recursively finds all `.md` files under `skills/vec_graph/`
+2. Parses fenced code blocks (```sql, ```python, ```javascript)
+3. Runs SQL blocks against a fresh SQLite connection with vec_graph loaded
+4. Runs Python blocks in a subprocess with vec_graph importable
+5. Reports any blocks that error out (with file path and line number)
+
+This ensures that every code example across the entire skill directory **actually works** against the current build. When a contributor changes the SQL interface, CI will catch the stale skill docs before they ship.
+
+### Why This Is a Competitive Advantage
+
+Most SQLite extensions (and most libraries in general) rely on:
+- README files that AI tools may or may not find
+- Documentation sites that require web fetching
+- Stack Overflow answers that may be outdated
+
+By shipping a structured `skills/` directory **inside every package**, `vec_graph` becomes the path of least resistance for any AI coding tool. When a developer says "add vector search to my SQLite app," the AI tool that can find and read `vec_graph`'s `SKILL.md` will produce correct, working code on the first attempt — while competitors require multiple rounds of debugging hallucinated syntax.
+
+This is especially powerful for a niche category (SQLite extensions) where AI training data is sparse. The `SKILL.md` essentially **injects correct knowledge** at the point of use, bypassing the training data gap entirely.
+
+The QMD project demonstrates this works in practice — its skill file makes `qmd` trivially usable by Claude Code despite being a relatively new, niche CLI tool. We're applying the same pattern to a SQLite extension, where the knowledge gap is even wider.
+
+---
+
 ## Recommended Implementation Order
 
 ### Phase 1: CI Foundation (No Publishing)
@@ -1275,13 +1756,27 @@ _Ship `vec-graph-wasm` for browser and edge runtimes._
 29. **Add `publish-wasm` job** to `release.yml`
 30. **Test in browser** — Verify HNSW + graph TVFs work end-to-end in WASM
 
-### Phase 6: Ecosystem (Optional)
+### Phase 6: Agent-Ready Documentation (SKILL.md + Skills Directory)
 
-31. **Homebrew formula** — Custom tap for `brew install vec-graph`
-32. **Fuzz testing** — libFuzzer harnesses for `hnsw_algo` and `graph_tvf`
-33. **Performance regression tracking** — Bencher or github-action-benchmark
-34. **Bundled SQLite package** — `vec-graph-sqlite` with baked-in extension
-35. **vcpkg / Conan ports** — When demand warrants
+_Make vec_graph the easiest SQLite extension for AI coding tools to use correctly. Follows the [QMD skills pattern](https://github.com/tobi/qmd)._
+
+31. **Create `skills/vec_graph/SKILL.md`** — YAML frontmatter (name, description, triggers, allowed-tools, compatibility) + structured usage guide with Quick Starts, SQL reference, and Common Mistakes
+32. **Create `skills/vec_graph/references/`** — Per-language cookbooks: `cookbook-python.md`, `cookbook-node.md`, `cookbook-c.md`, `cookbook-sql.md`, plus cross-cutting `vector-encoding.md` and `platform-caveats.md`
+33. **Create `.claude-plugin/marketplace.json`** — Claude Code plugin manifest pointing to `skills/` directory
+34. **Add `make skill` target** — Version-stamp `{{VERSION}}` in all skill markdown files during build
+35. **Write `scripts/validate_skill_examples.py`** — Recursively extract and execute all fenced code blocks from `skills/vec_graph/**/*.md` against the built extension
+36. **Add `validate-skill-md` CI job** — Ensure agent documentation never drifts from the actual API
+37. **Include `skills/` in package manifests** — Add to `pyproject.toml` package-data, `package.json` files array, and amalgamation tarball (each ecosystem gets SKILL.md + relevant reference files only)
+38. **Build `python -m vec_graph init` CLI** — Generate tool-specific instruction files (CLAUDE.md, .cursorrules, .windsurfrules) from canonical SKILL.md
+39. **Submit to Context7** — Ensure SKILL.md patterns are indexed for tools that use Context7 documentation lookup
+
+### Phase 7: Ecosystem (Optional)
+
+40. **Homebrew formula** — Custom tap for `brew install vec-graph`
+41. **Fuzz testing** — libFuzzer harnesses for `hnsw_algo` and `graph_tvf`
+42. **Performance regression tracking** — Bencher or github-action-benchmark
+43. **Bundled SQLite package** — `vec-graph-sqlite` with baked-in extension
+44. **vcpkg / Conan ports** — When demand warrants
 
 ---
 
@@ -1297,6 +1792,7 @@ _Ship `vec-graph-wasm` for browser and edge runtimes._
 | [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) | N/A | N-API + prebuild-install | Bundles SQLite amalgamation |
 | [sql.js](https://github.com/sql-js/sql.js) | N/A | WASM (Emscripten) | SQLite in WebAssembly; no dynamic extensions |
 | [esbuild](https://github.com/evanw/esbuild) | N/A | Platform optionalDeps | Pioneered the pattern at scale |
+| [QMD](https://github.com/tobi/qmd) | N/A | N/A | Pioneered `skills/` directory + `SKILL.md` + `.claude-plugin/` pattern for AI-native distribution |
 
 ### Key Tools
 

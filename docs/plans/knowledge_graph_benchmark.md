@@ -11,18 +11,16 @@ A benchmark for **combined vector search + graph traversal** workflows — the G
 1. [Vision](#vision)
 2. [Research: State of the Art](#research-state-of-the-art)
    - [Vector-Seeded Graph Traversal](#vector-seeded-graph-traversal-the-graphrag-pattern)
-   - [Community Detection: Louvain and Leiden](#community-detection-louvain-and-leiden)
-   - [Graph Centrality Measures](#graph-centrality-measures)
-   - [Node2Vec Deep Dive and Alternatives](#node2vec-deep-dive-and-alternatives)
-   - [Knowledge Graph Embeddings (KGE)](#knowledge-graph-embeddings-kge)
+   - [Graph Algorithms (extracted)](#graph-algorithms-community-detection-centrality-node2vec)
    - [Entity Coalescing and Synonym Merging](#entity-coalescing-and-synonym-merging)
+   - [Temporal Knowledge Graphs](#temporal-knowledge-graphs)
 3. [Entity Extraction Approaches](#entity-extraction-approaches)
    - [NER Models for Entity Extraction](#approach-1-ner-models-for-entity-extraction)
    - [Noun-Verb-Noun SVO Pattern](#approach-2-noun-verb-noun-svo-pattern-extraction)
    - [FTS5/BM25 for Concept Discovery](#approach-3-fts5bm25-for-concept-discovery)
    - [Hybrid Pipeline Recommendation](#hybrid-pipeline-recommendation)
 4. [HuggingFace Model Recommendations](#huggingface-model-recommendations)
-5. [Dataset: Wealth of Nations](#dataset-the-wealth-of-nations-as-a-knowledge-graph)
+5. [Dataset: Economics Texts from Project Gutenberg](#dataset-economics-texts-from-project-gutenberg)
 6. [Benchmark Workflow](#benchmark-workflow)
 7. [Metrics](#metrics)
 8. [New Graph Capabilities Required](#new-graph-capabilities-required)
@@ -108,144 +106,21 @@ Query "How does division of labour affect wages?"
 
 ---
 
-### Community Detection: Louvain and Leiden
+### Graph Algorithms (Community Detection, Centrality, Node2Vec)
 
-#### What is Louvain?
-
-The **Louvain algorithm** (Blondel et al., 2008) detects communities in large networks by optimizing **modularity** — a measure of how densely connected nodes within a community are compared to random connections.
-
-**Algorithm (two phases, iterated):**
-
-1. **Local moving**: Each node is moved to the neighboring community that maximizes modularity gain. Repeat until no improvement.
-2. **Aggregation**: Collapse each community into a single supernode. Build a new graph of supernodes. Return to phase 1.
-
-**Modularity** Q measures the fraction of edges within communities minus the expected fraction if edges were random:
-
-```
-Q = (1/2m) Σ [A_ij - (k_i × k_j)/(2m)] × δ(c_i, c_j)
-```
-
-where `A_ij` is the adjacency matrix, `k_i` is the degree of node i, `m` is total edges, and δ is 1 when nodes i,j are in the same community.
-
-**Complexity**: O(n log n) — fast enough for million-node graphs.
-
-**Problem**: Louvain can produce **badly connected or even disconnected communities**. In experiments, up to 25% of communities are badly connected and up to 16% are disconnected (Traag et al., 2019). This happens because the greedy local moving phase can trap nodes in communities they shouldn't belong to.
-
-#### What is Leiden?
-
-The **Leiden algorithm** (Traag, Waltman & van Eck, 2019) fixes Louvain's connectivity guarantees by adding a **refinement phase**:
-
-1. **Local moving** (same as Louvain)
-2. **Refinement**: Communities may be split to guarantee all communities are **well-connected**. Only nodes well-connected within their community are retained.
-3. **Aggregation** (based on the *refined* partition, not the local-moving partition)
-
-**Key improvements:**
-- **Guaranteed connectivity**: All identified communities are both well-separated and well-connected
-- **Faster convergence**: Actually runs faster than Louvain in practice
-- **Better partitions**: Higher modularity scores at convergence
-- **Subset optimality**: When converged, all vertices are optimally assigned
-
-**For vec_graph**: Microsoft GraphRAG uses Leiden for community hierarchy. Adding Leiden to `graph_components` (or as a new `graph_communities` TVF) would enable the hierarchical retrieval pattern in Phase C of the benchmark. Connected components (what we have now) only finds disconnected subgraphs — Louvain/Leiden finds *densely-connected clusters within a single connected component*.
-
-**Implementation consideration**: The simplest C implementation of Louvain is ~300 lines. Leiden adds ~100 more for the refinement phase. Both fit naturally as a new algorithm option in `graph_components` or as a separate `graph_louvain` / `graph_leiden` TVF.
-
----
-
-### Graph Centrality Measures
-
-#### Betweenness Centrality
-
-**What it is**: Betweenness centrality measures how often a node lies on the shortest path between other node pairs. Nodes with high betweenness are "bridge" concepts connecting otherwise separate clusters.
-
-```
-BC(v) = Σ_{s≠v≠t} [σ_st(v) / σ_st]
-```
-
-where σ_st is the total number of shortest paths from s to t, and σ_st(v) is the number of those paths passing through v.
-
-**Why it matters for knowledge graphs**: In a Wealth of Nations KG, "market price" would have high betweenness because it bridges the labour/wages cluster to the rent/profit cluster. Identifying these bridge concepts helps:
-
-1. **Retrieval**: Prioritize bridge nodes in context assembly (they connect disparate topics)
-2. **Graph summarization**: Bridge nodes are natural candidates for community summaries
-3. **Query routing**: If a query touches two clusters, the bridge concept is likely relevant
-
-**Algorithm**: Brandes' algorithm computes betweenness for all nodes in O(VE) time (unweighted) or O(VE + V² log V) (weighted). For our ~3K node / ~10K edge KG, this runs in milliseconds.
-
-**Implementation for vec_graph**: A new `graph_betweenness` TVF returning `(node TEXT, centrality REAL)`. Uses Brandes' algorithm internally. Could also expose `graph_closeness` and `graph_degree` in the same pass.
-
-#### Other Centrality Measures
-
-| Measure | Formula | Meaning | Use in KG |
-|---------|---------|---------|-----------|
-| **Degree centrality** | `deg(v) / (N-1)` | How many direct connections | Hub entities (most-referenced concepts) |
-| **Closeness centrality** | `(N-1) / Σ d(v,u)` | Average distance to all other nodes | Central concepts accessible from everywhere |
-| **Eigenvector centrality** | `x_v ∝ Σ A_{vu} × x_u` | Connected to other well-connected nodes | Authoritative concepts (like PageRank but undirected) |
-| **PageRank** | Power iteration with damping | Random walk stationary distribution | **Already implemented** in vec_graph |
-
-**Benchmark plan**: Compare centrality-guided retrieval (use betweenness to prioritize nodes after BFS expansion) vs uniform retrieval (all BFS-discovered nodes weighted equally). The hypothesis is that centrality-guided retrieval achieves better precision with fewer nodes.
-
----
-
-### Node2Vec Deep Dive and Alternatives
-
-#### How Node2Vec Works (Already in vec_graph)
-
-Node2Vec (Grover & Leskovec, 2016) learns vector embeddings for graph nodes using a two-step process:
-
-1. **Biased random walks**: Simulate walks on the graph where the bias is controlled by two parameters:
-   - **p** (return parameter): Controls likelihood of returning to the previous node. Low p → stay local (BFS-like). High p → explore (DFS-like).
-   - **q** (in-out parameter): Controls preference for inward vs outward nodes. Low q → explore outward (DFS-like). High q → stay close (BFS-like).
-
-2. **Skip-gram with Negative Sampling (SGNS)**: Treat random walk sequences as "sentences" and node IDs as "words". Train a Word2Vec-style model to predict context nodes from target nodes.
-
-**What the parameters capture:**
-- **p=1, q=1**: Equivalent to DeepWalk (uniform random walks). Captures a balance of structural and community information.
-- **Low p, high q**: BFS-like walks. Captures **homophily** — nodes in the same community get similar embeddings.
-- **High p, low q**: DFS-like walks. Captures **structural equivalence** — nodes with similar structural roles (e.g., all "hub" nodes) get similar embeddings, even if they're in different communities.
-
-**Our implementation** (`src/node2vec.c`):
-- Full biased random walk with second-order Markov chain
-- Skip-gram with negative sampling using frequency^0.75 distribution
-- Sigmoid lookup table (1000 entries) for speed
-- L2-normalized output embeddings (ready for cosine similarity in HNSW)
-- Linear learning rate decay
-- Supports undirected graphs, ~10K nodes max (linear node lookup)
-
-#### Alternatives to Node2Vec
-
-| Method | Type | Advantages | Disadvantages | Best For |
-|--------|------|-----------|---------------|----------|
-| **DeepWalk** (2014) | Shallow / random walks | Simplest implementation, uniform walks | No bias control (p,q); less expressive | Simple graphs where you don't need homophily/structural tuning |
-| **LINE** (2015) | Shallow / edge sampling | Explicitly optimizes 1st+2nd order proximity; scales to millions | Doesn't capture higher-order structure | Very large graphs; when memory is limited |
-| **GraphSAGE** (2017) | Deep / GNN | **Inductive** — generalizes to unseen nodes; uses node features | Requires node feature vectors as input; heavier to train | Dynamic graphs with new nodes; when node features exist |
-| **GAT** (2018) | Deep / GNN | Attention mechanism highlights important neighbors; best quality | Heavy compute (GPU needed); not easily portable to C | When quality matters more than portability |
-| **GCN** (2017) | Deep / GNN | Simple, strong baseline for node classification | Fixed aggregation (mean), not inductive | Static graphs with labels for supervised learning |
-| **TransE** (2013) | KGE / translational | Specifically designed for (head, relation, tail) triples | Requires typed relations; can't model symmetric relations | Knowledge graphs with typed edges (not our case) |
-| **RotatE** (2019) | KGE / rotational | Handles symmetry, antisymmetry, inversion, composition | More complex; still requires typed relations | Complex relation patterns in KGs |
-
-**Why Node2Vec is the right choice for vec_graph:**
-
-1. **Zero-dependency**: Runs in pure C with no ML framework. GraphSAGE/GAT require PyTorch/TensorFlow.
-2. **No node features needed**: Node2Vec works from graph topology alone. GraphSAGE needs feature vectors.
-3. **Tunable**: The p,q parameters let us control what the embeddings capture.
-4. **Compatible with HNSW**: Output embeddings go directly into our HNSW index for similarity search.
-5. **Fast for small graphs**: For ~3K nodes, Node2Vec trains in seconds. GNNs would be overkill.
-
-**When to consider alternatives**: If vec_graph ever needs to support graphs >100K nodes or inductive settings (embedding new nodes without retraining), GraphSAGE would be worth investigating. For now, Node2Vec is ideal.
-
-**Benchmark opportunity**: Sweep p,q values on the Wealth of Nations KG and measure how different walk biases affect retrieval quality. Hypothesis: low p (BFS-like) captures the economic concept clusters best, while high p (DFS-like) captures structural roles (all "institution" nodes get similar embeddings regardless of which cluster they're in).
-
----
-
-### Knowledge Graph Embeddings (KGE)
-
-KGE methods differ from Node2Vec in that they explicitly model **typed relations** between entities:
-
-- **TransE**: Models relations as translations: `head + relation ≈ tail` in vector space. "England" + "TRADES_WITH" ≈ "Holland". Simple but can't model symmetric relations (if A trades with B, B trades with A — but TransE would need two different vectors).
-- **RotatE**: Models relations as rotations in complex vector space. Handles symmetry, antisymmetry, inversion, and composition patterns.
-- **ComplEx**: Uses complex-valued embeddings with Hermitian dot product. Good for symmetric and antisymmetric relations.
-
-**Relevance to our benchmark**: The Wealth of Nations KG has typed relations (CAUSES, COMPOSED_OF, etc.). KGE methods could produce better embeddings for relation-aware retrieval. However, they require a training pipeline that's harder to implement in pure C. The pragmatic approach: use Node2Vec for structure-only embeddings stored in HNSW, and handle relation types at the query level (e.g., filter BFS expansion by relation type).
+> **Full research and implementation plans extracted to [Graph Algorithms Plan](graph_algorithms.md).**
+>
+> That document covers:
+> - **Community detection**: Louvain algorithm (modularity optimization, O(n log n)), Leiden refinement (guaranteed connectivity), implementation sketches (~300 lines C)
+> - **Centrality measures**: Betweenness (Brandes' O(VE) algorithm), closeness, degree centrality — TVF interfaces and implementation plans
+> - **Node2Vec deep dive**: How our p,q biased walks work, comparison with DeepWalk/LINE/GraphSAGE/GAT, why Node2Vec is the right choice for zero-dependency C
+> - **Knowledge Graph Embeddings (KGE)**: TransE, RotatE, ComplEx — relation-aware alternatives and why we defer them
+>
+> **KG benchmark dependencies on these algorithms:**
+> - **Phase C** (Graph Analytics) requires `graph_betweenness` and `graph_louvain`
+> - **Phase D** (Hierarchical Retrieval) requires `graph_louvain` or `graph_leiden`
+> - **Phase E** (Node2Vec Sweep) uses the existing `node2vec_train()`
+> - Centrality-guided retrieval (betweenness to prioritize BFS-expanded nodes) vs uniform retrieval is a key benchmark comparison
 
 ---
 
@@ -280,6 +155,101 @@ Cascade approach (cheap → expensive):
 - Select canonical form: most frequent surface form, or the form from the manual seed list.
 
 **For our benchmark**: The HNSW-based blocking step is a compelling use case — it demonstrates vec_graph eating its own dog food. Entity surface forms get embedded, inserted into an HNSW index, then nearest-neighbor search finds candidates for merging. This is a vector-search-to-graph-construction pipeline that exercises the full vec_graph stack.
+
+### Temporal Knowledge Graphs
+
+#### The Problem: Knowledge Changes Over Time
+
+A standard knowledge graph is a snapshot — it tells you what is currently true. But in real-world applications, facts evolve:
+
+- An agent session at 2pm establishes "the auth module uses JWT"
+- A session at 4pm discovers "the auth module was refactored to use OAuth"
+- A schema change in the data warehouse renames `user_id` to `account_id` on March 1st
+- A cloud infrastructure audit shows a VPC peering was added last Tuesday
+
+Without temporal awareness, later facts silently overwrite earlier ones and history is lost. With it, you can ask both "what is true now?" and "what was true at time X?"
+
+#### Bi-Temporal Data Model
+
+The state of the art (used by Zep/Graphiti, arXiv:2501.13956) tracks **two** time dimensions per edge:
+
+| Timestamp | Meaning | Example |
+|-----------|---------|---------|
+| **Valid time** | When the fact was true in the real world | "Auth module used JWT from Jan to March 2025" |
+| **Transaction time** | When the system recorded this fact | "We learned this from session log #47 on Feb 3" |
+
+This enables four classes of queries:
+
+1. **Current state**: What is true right now? (standard graph query)
+2. **Point-in-time**: What was true on date X? (valid time filter)
+3. **As-of**: What did the system know at time T? (transaction time filter)
+4. **Audit trail**: When did fact X enter/leave the graph? (bi-temporal join)
+
+#### Schema Pattern for vec_graph
+
+Temporal awareness does not require changes to the C extension. It's a schema pattern on the edge table, combined with application-level query construction:
+
+```sql
+-- Temporal edge table: adds valid_from/valid_to + recorded_at
+CREATE TABLE kg_edges_temporal (
+    src INTEGER NOT NULL,
+    dst INTEGER NOT NULL,
+    relation TEXT NOT NULL,
+    weight REAL DEFAULT 1.0,
+    valid_from TEXT NOT NULL,         -- ISO 8601 timestamp
+    valid_to TEXT DEFAULT '9999-12-31T23:59:59Z',  -- NULL = still valid
+    recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    source_session TEXT               -- which agent session recorded this
+);
+CREATE INDEX idx_kg_temporal_src ON kg_edges_temporal(src, valid_to);
+CREATE INDEX idx_kg_temporal_dst ON kg_edges_temporal(dst, valid_to);
+
+-- View: current edges only (for standard graph traversal)
+CREATE VIEW kg_edges_current AS
+SELECT src, dst, relation, weight
+FROM kg_edges_temporal
+WHERE valid_to >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now');
+
+-- View: edges valid at a specific point in time
+-- (parameterized via application code, not possible as a static view)
+-- SELECT src, dst, relation, weight
+-- FROM kg_edges_temporal
+-- WHERE valid_from <= ?1 AND valid_to >= ?1;
+```
+
+The existing graph TVFs work unchanged — they accept any edge table, so pointing them at `kg_edges_current` gives current-state traversal, while a point-in-time temp table gives historical traversal:
+
+```sql
+-- Current-state traversal (standard)
+SELECT node, depth FROM graph_bfs
+WHERE edge_table = 'kg_edges_current' AND src_col = 'src' AND dst_col = 'dst'
+  AND start_node = ? AND max_depth = 2;
+
+-- Point-in-time traversal (via temp table)
+CREATE TEMP TABLE kg_edges_at_t AS
+SELECT src, dst, relation, weight FROM kg_edges_temporal
+WHERE valid_from <= '2025-01-15T00:00:00Z' AND valid_to >= '2025-01-15T00:00:00Z';
+
+SELECT node, depth FROM graph_bfs
+WHERE edge_table = 'kg_edges_at_t' AND src_col = 'src' AND dst_col = 'dst'
+  AND start_node = ? AND max_depth = 2;
+```
+
+#### Why This Matters for Agent Memory
+
+When indexing agent session logs, the same fact can appear multiple times with different values across sessions. The bi-temporal model provides:
+
+- **Contradiction resolution**: Session #50 says "uses 3.11", session #55 says "uses 3.12" → not a conflict, but a state change over time
+- **Decision reconstruction**: What did the agent know when it made decision X? Query as-of the decision's transaction time
+- **Lineage tracking**: For database schemas and data warehouse query logs, understanding *when* a schema changed or *when* a query pattern shifted is the core value proposition
+- **Memory decay**: Old, unconfirmed facts can be flagged or downweighted based on valid_to proximity, enabling a natural "forgetting" mechanism
+
+#### Prior Art
+
+- **Zep/Graphiti** (arXiv:2501.13956): Bi-temporal knowledge graph engine for AI agent memory. Uses Neo4j. The temporal model described above is adapted from their approach.
+- **SQl:2011 temporal tables**: The SQL standard includes `PERIOD FOR` and `SYSTEM_TIME` versioning. SQLite does not implement these, but the schema pattern above achieves the same semantics.
+- **Datomic**: Immutable database where every fact is timestamped. The transaction-time dimension is built into the storage engine. Influential on the bi-temporal approach.
+- **Event sourcing**: The broader pattern of storing state changes rather than current state. Temporal edges are event-sourced facts.
 
 ---
 
@@ -518,20 +488,157 @@ REBEL extracts Wikidata-typed relations (220+ types including `country_of_origin
 
 ---
 
-## Dataset: The Wealth of Nations as a Knowledge Graph
+## Dataset: Economics Texts from Project Gutenberg
 
-Adam Smith's *The Wealth of Nations* (Gutenberg #3300) is already available as a text dataset in the benchmark suite (~2,500 passage chunks). For the KG benchmark, these passages become the source for entity and relation extraction.
+The benchmark pipeline is **generalizable** — it builds a knowledge graph from any economics text, not just a single hard-coded book. The primary dataset is Adam Smith's *The Wealth of Nations* (Gutenberg #3300), which is already available in the benchmark suite. Additionally, the benchmark can pull a **random book from Project Gutenberg's economics category** and run the identical concept mapping pipeline, validating that the approach generalizes beyond one text.
+
+### Primary Dataset: Wealth of Nations (Gutenberg #3300)
+
+Already available as ~2,500 passage chunks. Serves as the **reference dataset** — all metric baselines and ground-truth annotations are built against this text.
+
+### Random Economics Book: Project Gutenberg Integration
+
+The benchmark can fetch a random economics text from Project Gutenberg's catalog (~400+ English-language books) and perform the same entity extraction, relation mapping, and graph construction pipeline.
+
+**Source catalog**: The [Gutendex API](https://gutendex.com/) provides JSON access to Project Gutenberg metadata. The `topic=economics` parameter matches books tagged with the "Economics" bookshelf or LCSH subject.
+
+**Example economics texts in the catalog:**
+
+| Gutenberg ID | Title | Author | Era |
+|---|---|---|---|
+| 3300 | An Inquiry into the Nature and Causes of the Wealth of Nations | Adam Smith | 1776 |
+| 33310 | On The Principles of Political Economy, and Taxation | David Ricardo | 1817 |
+| 30107 | Principles of Political Economy (Abridged) | John Stuart Mill | 1848 |
+| 61 | The Communist Manifesto | Karl Marx & Friedrich Engels | 1848 |
+| 833 | The Theory of the Leisure Class | Thorstein Veblen | 1899 |
+| 15776 | The Economic Consequences of the Peace | John Maynard Keynes | 1919 |
+| 55308 | Progress and Poverty, Volumes I and II | Henry George | 1879 |
+| 46423 | A Contribution to the Critique of Political Economy | Karl Marx | 1859 |
+| 40077 | The Principles of Economics | Frank A. Fetter | 1905 |
+| 24518 | Memoirs of Extraordinary Popular Delusions and the Madness of Crowds | Charles Mackay | 1841 |
+
+**Book selection and download pipeline:**
+
+```python
+import random
+import re
+import time
+import requests
+
+GUTENDEX_BASE = "https://gutendex.com/books"
+ECONOMICS_KEYWORDS = {
+    "economics", "political economy", "economic", "capitalism",
+    "finance", "wealth", "commerce", "trade", "marxian",
+}
+DELAY = 2  # seconds between requests (Gutenberg robot policy)
+
+
+def fetch_economics_catalog() -> list[dict]:
+    """Fetch all English economics books from Gutendex, filtering out 'Home Economics' etc."""
+    books = []
+    url = GUTENDEX_BASE
+    params = {"topic": "economics", "languages": "en"}
+
+    while url:
+        resp = requests.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+        for book in data["results"]:
+            # Require a plain-text download URL
+            text_url = next(
+                (u for mime, u in book["formats"].items()
+                 if "text/plain" in mime and "utf-8" in mime),
+                None,
+            )
+            if not text_url:
+                continue
+
+            # Filter to genuine economics (exclude "Home Economics", cookbooks, etc.)
+            all_tags = [s.lower() for s in book.get("subjects", []) + book.get("bookshelves", [])]
+            if not any(kw in tag for tag in all_tags for kw in ECONOMICS_KEYWORDS):
+                continue
+
+            books.append({
+                "id": book["id"],
+                "title": book["title"],
+                "authors": [a["name"] for a in book["authors"]],
+                "text_url": text_url,
+                "download_count": book.get("download_count", 0),
+            })
+
+        url = data.get("next")
+        params = {}  # next URL includes params
+        if url:
+            time.sleep(DELAY)
+
+    return books
+
+
+def download_and_clean(text_url: str) -> str:
+    """Download plain text and strip Gutenberg header/footer boilerplate."""
+    time.sleep(DELAY)
+    raw = requests.get(text_url).text
+
+    start = re.search(r"\*\*\*\s*START OF (?:THE |THIS )PROJECT GUTENBERG EBOOK.*?\*\*\*",
+                       raw, re.IGNORECASE)
+    end = re.search(r"\*\*\*\s*END OF (?:THE |THIS )PROJECT GUTENBERG EBOOK.*?\*\*\*",
+                     raw, re.IGNORECASE)
+
+    body = raw[start.end():end.start()] if start and end else raw
+    # Strip "Produced by ..." preamble
+    body = re.sub(r"^(?:Produced|Transcribed|E-text prepared) by .+?\n\n",
+                  "", body.strip(), count=1, flags=re.DOTALL | re.IGNORECASE)
+    return body.strip()
+
+
+def select_random_economics_book(exclude_ids: set[int] | None = None) -> tuple[dict, str]:
+    """Select a random economics book and return (metadata, clean_text)."""
+    catalog = fetch_economics_catalog()
+    if exclude_ids:
+        catalog = [b for b in catalog if b["id"] not in exclude_ids]
+    book = random.choice(catalog)
+    text = download_and_clean(book["text_url"])
+    return book, text
+```
+
+**Usage in the benchmark:**
+
+```python
+# Default: use Wealth of Nations (cached locally)
+book_id = 3300
+
+# Or: pull a random economics book for generalization testing
+book, text = select_random_economics_book(exclude_ids={3300})
+passages = chunk_text(text, chunk_size=500)  # Same chunking as WoN
+# → Same entity extraction → same graph construction → same benchmark queries
+```
+
+**Caching strategy**: Downloaded texts are cached in `benchmarks/texts/{gutenberg_id}.txt` to avoid re-downloading. The Gutendex catalog response is cached for 24 hours (see project caching rules). The benchmark records the Gutenberg ID in its JSONL output for reproducibility.
+
+### Why Random Book Selection Matters
+
+Running the same pipeline on an **unseen text** validates that:
+
+1. **The extraction pipeline generalizes** — GLiNER entity types and SVO patterns work on Ricardo, Mill, Keynes, not just Smith
+2. **Graph structure varies meaningfully** — different authors produce different concept topologies (Marx's KG will have different clusters than Smith's)
+3. **Benchmark metrics are robust** — retrieval quality shouldn't depend on one specific text's structure
+4. **The HNSW + graph composition pattern works on arbitrary KGs** — not just the one we tuned for
+
+This also enables a **cross-book comparison**: build KGs from two economics texts, then use Node2Vec embeddings to find structurally similar concepts across books (e.g., Smith's "division of labour" ↔ Ricardo's "comparative advantage").
 
 ### Entity Types
 
-| Type | Examples | Expected Count | Extraction Source |
-|------|----------|---------------|-------------------|
-| **Concept** | division of labour, market price, natural price, rent, profit, wages | ~200 | GLiNER + FTS5 |
-| **Actor** | labourer, merchant, sovereign, landlord | ~50 | GLiNER + SVO subjects |
-| **Institution** | East India Company, Bank of England, Parliament | ~30 | GLiNER |
-| **Place** | England, Holland, Bengal, China, North America | ~40 | GLiNER |
-| **Work** | (chapter/book references within the text) | ~50 | Pattern matching |
-| **Commodity** | corn, silver, gold, wool, linen | ~30 | GLiNER + FTS5 |
+These entity types are **domain-generic for economics texts** — they apply to any book in the catalog:
+
+| Type | WoN Examples | Generic Examples | Expected Count | Extraction Source |
+|------|-------------|-----------------|---------------|-------------------|
+| **Concept** | division of labour, market price, natural price | comparative advantage, surplus value, marginal utility | ~100-300 | GLiNER + FTS5 |
+| **Actor** | labourer, merchant, sovereign | capitalist, proletarian, consumer | ~30-80 | GLiNER + SVO subjects |
+| **Institution** | East India Company, Bank of England | Federal Reserve, guilds, unions | ~10-50 | GLiNER |
+| **Place** | England, Holland, Bengal | Europe, colonies, factories | ~20-60 | GLiNER |
+| **Work** | (chapter/book references) | (chapter/section references) | ~20-80 | Pattern matching |
+| **Commodity** | corn, silver, gold, wool | iron, cotton, machinery | ~15-50 | GLiNER + FTS5 |
 
 ### Relation Types
 
@@ -545,13 +652,15 @@ Adam Smith's *The Wealth of Nations* (Gutenberg #3300) is already available as a
 | `TRADES_WITH` | Commerce | england TRADES_WITH holland | SVO (verb: "trades", "exports") |
 | `MENTIONED_WITH` | Co-occurrence | labour MENTIONED_WITH wages | FTS5 co-occurrence |
 
-### Graph Structure
+### Graph Structure (Per Book)
 
-- **Nodes**: ~400 entities + ~2,500 passage chunks = ~2,900 nodes
-- **Edges**: ~5,000-10,000 relations (entity-entity + entity-passage links)
-- **Chapter hierarchy**: Book -> Chapter -> Passage as a tree backbone
+- **Nodes**: ~200-500 entities + ~500-3,000 passage chunks (varies by book length)
+- **Edges**: ~2,000-15,000 relations (entity-entity + entity-passage links)
+- **Chapter hierarchy**: Book → Chapter → Passage as a tree backbone
 - **Properties**: Each entity node has a text description + embedding; each passage node has original text + embedding
 - **Node types**: `entity` (extracted concepts/people/places) and `passage` (text chunks)
+
+Graph size varies significantly by text — *The Communist Manifesto* (~30 pages) produces a much smaller graph than *Wealth of Nations* (~400 pages). The benchmark records `n_entities`, `n_passages`, and `n_edges` in its JSONL output so results can be normalized by graph size.
 
 ---
 
@@ -682,6 +791,53 @@ for p in [0.25, 0.5, 1.0, 2.0, 4.0]:
 
 **Hypothesis**: Low p (BFS-like walks, stay local) captures economic concept clusters best. The KG has natural clusters (labour/wages, rent/land, commerce/trade) and BFS-like walks keep embeddings within these clusters.
 
+### Phase F: Temporal Knowledge Graph Queries
+
+Test the bi-temporal schema pattern for agent memory use cases. This phase operates on a temporally-annotated version of the KG where edges carry `valid_from`, `valid_to`, and `recorded_at` timestamps.
+
+```sql
+-- 1. Create temporal edge table
+CREATE TABLE kg_edges_temporal (
+    src INTEGER NOT NULL,
+    dst INTEGER NOT NULL,
+    relation TEXT NOT NULL,
+    weight REAL DEFAULT 1.0,
+    valid_from TEXT NOT NULL,
+    valid_to TEXT DEFAULT '9999-12-31T23:59:59Z',
+    recorded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    source_session TEXT
+);
+
+-- 2. Current-state view for standard traversal
+CREATE VIEW kg_edges_current AS
+SELECT src, dst, relation, weight
+FROM kg_edges_temporal
+WHERE valid_to >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now');
+
+-- 3. Point-in-time snapshot traversal
+CREATE TEMP TABLE kg_edges_snapshot AS
+SELECT src, dst, relation, weight FROM kg_edges_temporal
+WHERE valid_from <= ? AND valid_to >= ?;
+
+SELECT node, depth FROM graph_bfs
+WHERE edge_table = 'kg_edges_snapshot' AND src_col = 'src' AND dst_col = 'dst'
+  AND start_node = ? AND max_depth = 2;
+
+-- 4. Temporal diff: what edges changed between two points in time?
+SELECT src, dst, relation,
+       CASE WHEN valid_from > ?1 THEN 'added' ELSE 'removed' END AS change_type
+FROM kg_edges_temporal
+WHERE (valid_from > ?1 AND valid_from <= ?2)       -- newly added
+   OR (valid_to > ?1 AND valid_to <= ?2);           -- newly expired
+```
+
+**Benchmark questions:**
+
+- How does point-in-time filtering affect traversal performance vs the current-state view?
+- What is the storage overhead of temporal edges vs non-temporal (extra columns + index)?
+- Can Node2Vec embeddings trained on the current graph still retrieve relevant nodes from a historical snapshot, or do embeddings need retraining per time period?
+- How does graph density change over time as edges accumulate (temporal graphs grow monotonically)?
+
 ---
 
 ## Metrics
@@ -716,6 +872,16 @@ for p in [0.25, 0.5, 1.0, 2.0, 4.0]:
 | **Node2Vec training time** | One-time cost for embedding generation |
 | **Memory** | Peak RSS during combined operation |
 
+### Temporal Performance
+
+| Metric | Description |
+|--------|-------------|
+| **Snapshot creation time** | Time to materialize a point-in-time temp table from temporal edges |
+| **Temporal vs current traversal** | Latency ratio: traversal on snapshot table vs current-state view |
+| **Storage overhead** | Size of temporal edge table vs non-temporal (extra columns + indices) |
+| **Temporal edge accumulation** | Edge count growth rate as sessions add new temporal facts |
+| **Embedding staleness** | Retrieval quality of Node2Vec embeddings trained at time T when querying at T+delta |
+
 ### Comparison Baselines
 
 | Baseline | Description |
@@ -731,43 +897,18 @@ for p in [0.25, 0.5, 1.0, 2.0, 4.0]:
 
 ## New Graph Capabilities Required
 
-### Priority 1: Betweenness Centrality
-
-**TVF**: `graph_betweenness(edge_table, src_col, dst_col, weight_col, normalized)`
-
-**Output**: `(node TEXT, centrality REAL)`
-
-**Algorithm**: Brandes' algorithm — O(VE) unweighted, O(VE + V² log V) weighted.
-
-**Implementation sketch** (~200 lines of C):
-1. For each node s: run BFS/Dijkstra from s, tracking shortest path counts and predecessors
-2. Backward accumulation: propagate dependency scores from leaves to root
-3. Normalize: divide by (N-1)(N-2) for undirected or (N-1)(N-2)/2 for directed
-
-**Why it's valuable**: Identifies "bridge" concepts between KG clusters. In the Wealth of Nations, high-betweenness nodes like "market price" connect the labour/wages cluster to the rent/profit cluster — exactly the concepts needed for cross-topic retrieval.
-
-### Priority 2: Louvain Community Detection
-
-**TVF**: `graph_louvain(edge_table, src_col, dst_col, weight_col, resolution)`
-
-**Output**: `(node TEXT, community_id INTEGER, modularity REAL)`
-
-**Algorithm**: Louvain — O(n log n) average case.
-
-**Implementation sketch** (~300 lines of C):
-1. Initialize: each node in its own community
-2. Local moving: for each node, compute modularity gain for moving to each neighbor's community. Move to best.
-3. Repeat until no improvement.
-4. Aggregation: collapse communities into supernodes, build new graph. Return to step 2.
-
-**Upgrade path**: Leiden adds a refinement phase (~100 more lines) guaranteeing connected communities. Start with Louvain, upgrade to Leiden later.
-
-### Nice-to-Have: Degree/Closeness Centrality
-
-These are simpler and could be exposed alongside betweenness:
-
-- **Degree centrality**: Just count edges per node. Trivial.
-- **Closeness centrality**: Run BFS from each node, compute average distance. O(V(V+E)).
+> **Full implementation plans, algorithm details, and TVF interface designs extracted to [Graph Algorithms Plan](graph_algorithms.md).**
+>
+> Summary of what the KG benchmark needs from that plan:
+>
+> | Algorithm | TVF | KG Benchmark Phase | Priority |
+> |-----------|-----|-------------------|----------|
+> | Betweenness centrality | `graph_betweenness` | Phase C (Graph Analytics) | P1 |
+> | Louvain community detection | `graph_louvain` | Phase C + D (Hierarchical Retrieval) | P2 |
+> | Leiden refinement | `graph_leiden` | Phase D (upgrade from Louvain) | P3 |
+> | Degree/closeness centrality | `graph_degree`, `graph_closeness` | Nice-to-have | P4 |
+>
+> **Key insight**: Betweenness centrality identifies "bridge" concepts between KG clusters (e.g., "market price" connecting the labour/wages cluster to the rent/profit cluster). Louvain/Leiden community detection enables hierarchical retrieval — search community supernodes first, then drill into the matching community.
 
 ---
 
@@ -831,6 +972,19 @@ These are simpler and could be exposed alongside betweenness:
 - 220+ Wikidata relation types
 - **Relevance**: Alternative to SVO extraction for relation typing
 
+### Vesper-Memory (2025)
+- AI agent memory with semantic search + knowledge graphs + multi-hop reasoning
+- Uses **Personalized PageRank** for retrieval ranking — similar to our centrality-guided approach
+- Docker-based Python service architecture
+- **Relevance**: Validates PageRank-based ranking in the retrieval pipeline. Our benchmark tests the same pattern (centrality-guided retrieval vs uniform) but natively inside SQLite rather than as a separate service. Vesper-Memory is a key comparison target for the "embedded vs service" performance question.
+
+### Zep/Graphiti (2025) — Temporal Agent Memory
+- Temporally-aware knowledge graph engine for AI agent memory (arXiv:2501.13956)
+- Bi-temporal data model: valid time (when fact was true) + transaction time (when system recorded it)
+- Hybrid retrieval: semantic embeddings + BM25 + graph traversal
+- Requires Neo4j + Python server
+- **Relevance**: The temporal KG schema pattern in Phase F is adapted from Graphiti's approach. Our benchmark tests whether the same bi-temporal semantics work efficiently as a pure SQLite schema pattern without a dedicated temporal graph engine.
+
 ---
 
 ## Prerequisites
@@ -864,6 +1018,7 @@ Before implementing this benchmark:
    - `spacy` + `en_core_web_lg` — dependency parsing and SVO
    - `textacy` — SVO triple extraction
    - `sentence-transformers` — node embeddings (already present)
+   - `requests` — Gutendex API access for random book selection (already present)
    - `keybert` — keyword extraction (optional)
 
 ---
@@ -873,15 +1028,21 @@ Before implementing this benchmark:
 ### File Structure
 
 ```
-python/
-  benchmark_kg.py              # KG benchmark runner
-  benchmark_kg_analyze.py      # KG benchmark analysis + charts
-  kg_extract.py                # Entity/relation extraction pipeline
-  kg_coalesce.py               # Entity resolution + synonym merging
 benchmarks/
-  kg/                          # Cached knowledge graph (SQLite DB + metadata)
-  results/kg_*.jsonl           # KG benchmark results
-  vectors/kg_*.npy             # Pre-computed entity embeddings
+  scripts/
+    benchmark_kg.py            # KG benchmark runner (works on any economics text)
+    benchmark_kg_analyze.py    # KG benchmark analysis + charts
+    kg_extract.py              # Entity/relation extraction pipeline
+    kg_coalesce.py             # Entity resolution + synonym merging
+    kg_gutenberg.py            # Project Gutenberg catalog + download + caching
+  kg/                          # Cached knowledge graphs (one SQLite DB per book)
+    kg_3300.db                 # Wealth of Nations KG (reference)
+    kg_33310.db                # Ricardo's Principles (example random pick)
+  texts/                       # Cached plain text downloads
+    3300.txt                   # Wealth of Nations (stripped boilerplate)
+    33310.txt                  # Ricardo's Principles
+  results/kg_*.jsonl           # KG benchmark results (includes gutenberg_id)
+  vectors/kg_*.npy             # Pre-computed entity embeddings per book
 ```
 
 ### JSONL Schema
@@ -890,6 +1051,9 @@ benchmarks/
 {
     "timestamp": "...",
     "benchmark_type": "knowledge_graph",
+    "gutenberg_id": 3300,
+    "book_title": "An Inquiry into the Nature and Causes of the Wealth of Nations",
+    "book_author": "Smith, Adam",
     "workflow": "vss_then_expand",
     "vss_engine": "vec_graph",
     "graph_engine": "vec_graph",
@@ -918,20 +1082,26 @@ benchmarks/
 }
 ```
 
-### Makefile Targets
+### Makefile Targets (in `benchmarks/Makefile`)
 
 ```makefile
-benchmark-kg-extract:                          ## Extract KG from Wealth of Nations
-	.venv/bin/python python/kg_extract.py
+kg-extract:                                    ## Extract KG from Wealth of Nations (reference)
+	../.venv/bin/python scripts/kg_extract.py --book-id 3300
 
-benchmark-kg-coalesce:                         ## Entity resolution + dedup
-	.venv/bin/python python/kg_coalesce.py
+kg-extract-random:                             ## Extract KG from a random Gutenberg economics book
+	../.venv/bin/python scripts/kg_extract.py --random-economics --exclude 3300
 
-benchmark-kg: vec_graph$(EXT)                  ## Run KG benchmark
-	.venv/bin/python python/benchmark_kg.py
+kg-extract-book:                               ## Extract KG from a specific book (BOOK_ID=...)
+	../.venv/bin/python scripts/kg_extract.py --book-id $(BOOK_ID)
 
-benchmark-kg-analyze:                          ## Analyze KG results → charts
-	.venv/bin/python python/benchmark_kg_analyze.py
+kg-coalesce:                                   ## Entity resolution + dedup (all cached KGs)
+	../.venv/bin/python scripts/kg_coalesce.py
+
+kg: vec_graph                                  ## Run KG benchmark on all cached KGs
+	../.venv/bin/python scripts/benchmark_kg.py
+
+kg-analyze:                                    ## Analyze KG results → charts
+	../.venv/bin/python scripts/benchmark_kg_analyze.py
 ```
 
 ---
@@ -957,3 +1127,13 @@ benchmark-kg-analyze:                          ## Analyze KG results → charts
 9. **Entity coalescing threshold**: What cosine similarity threshold should trigger entity merging? Too low → over-merging ("wages" ≈ "prices"), too high → fragmentation. Need to experiment.
 
 10. **Graph density impact**: How does KG edge density affect retrieval? A sparse graph (only high-confidence edges) vs a dense graph (including co-occurrence edges) likely have very different retrieval characteristics.
+
+11. **Random book text quality**: Project Gutenberg economics texts span 1776-1920s. Older texts have more archaic language. How well does the NER/SVO pipeline handle texts from different eras? The `topic=economics` filter also catches some "Home Economics" (cookbooks) — the keyword filter in `kg_gutenberg.py` handles this, but edge cases may slip through.
+
+12. **Cross-book concept alignment**: When building KGs from two different economics books, can Node2Vec embeddings identify structurally equivalent concepts across graphs? (e.g., Smith's "division of labour" ↔ Ricardo's "comparative advantage"). This requires a shared embedding space or alignment step.
+
+13. **Book length normalization**: *The Communist Manifesto* (~30 pages) vs *Wealth of Nations* (~400 pages) produce vastly different graph sizes. Should benchmark metrics be normalized by graph size, or should we set a minimum text length threshold for the random book selection?
+
+14. **Temporal edge simulation**: The Wealth of Nations doesn't naturally have temporal data — it's a static text. How should we simulate temporal edges for the Phase F benchmark? Options: (a) assign chapter-order timestamps to edges (earlier chapters = earlier valid_from), (b) simulate agent sessions that progressively build the KG, (c) use a real agent session log corpus instead. Approach (b) is most realistic for the agent memory use case.
+
+15. **Gutendex API reliability**: The Gutendex API is a third-party service (not run by Project Gutenberg). If it becomes unavailable, the fallback is the [offline CSV catalog](https://www.gutenberg.org/cache/epub/feeds/pg_catalog.csv.gz) (~14 MB). Should both code paths exist from the start?
