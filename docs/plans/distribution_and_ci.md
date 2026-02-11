@@ -1,7 +1,8 @@
-# Distribution & CI/CD Plan
+# Distribution & CI/CD Plan (SUPERSEDED)
 
-> **Status:** Research / Proposal
+> **Status:** Superseded
 > **Date:** 2026-02-11
+> **Superseded by:** [`ci_and_packaging.md`](ci_and_packaging.md) (CI) and [`cd_and_distribution.md`](cd_and_distribution.md) (CD)
 > **Scope:** Publishing `sqlite-muninn` to PyPI and NPM with cross-platform CI/CD
 
 ---
