@@ -45,7 +45,13 @@ export function getLoadablePath(): string {
     throw new Error(`Unsupported platform: ${platform}-${arch}. Supported: ${Object.keys(EXT_MAP).join(", ")}`);
   }
 
-  // Try repo root first (git install / local dev)
+  // Try build output dir first (git install / local dev)
+  const buildPath = join(REPO_ROOT, "build", `muninn.${ext}`);
+  if (statSync(buildPath, { throwIfNoEntry: false })) {
+    return buildPath;
+  }
+
+  // Try repo root (legacy / manual placement)
   const localPath = join(REPO_ROOT, `muninn.${ext}`);
   if (statSync(localPath, { throwIfNoEntry: false })) {
     return localPath;

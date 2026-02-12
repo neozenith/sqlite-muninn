@@ -110,7 +110,8 @@ jobs:
       - name: Python integration tests
         if: runner.os != 'Windows'
         run: |
-          pip install pytest pytest-cov pysqlite3-binary
+          pip install pytest pytest-cov
+          pip install pysqlite3-binary 2>/dev/null || pip install pysqlite3
           python -m pytest pytests/ -v
 
       # ── Node.js tests ──────────────────────────────────
@@ -231,7 +232,8 @@ jobs:
 
       - name: Run install integration tests
         run: |
-          pip install pytest pysqlite3-binary
+          pip install pytest
+          pip install pysqlite3-binary 2>/dev/null || pip install pysqlite3
           python -m pytest pytests/test_install.py -v -m integration --override-ini="addopts="
 
   # ── WASM Build ───────────────────────────────────────────
