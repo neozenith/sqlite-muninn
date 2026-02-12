@@ -31,6 +31,7 @@ if [ ! -f "$SQLITE_SRC" ]; then
     unzip -o /tmp/sqlite.zip -d /tmp/sqlite_amal
     cp /tmp/sqlite_amal/sqlite-amalgamation-*/sqlite3.c "$SQLITE_SRC"
     cp /tmp/sqlite_amal/sqlite-amalgamation-*/sqlite3.h "$OUTDIR/sqlite3.h"
+    cp /tmp/sqlite_amal/sqlite-amalgamation-*/sqlite3ext.h "$OUTDIR/sqlite3ext.h"
     rm -rf /tmp/sqlite.zip /tmp/sqlite_amal
 fi
 

@@ -58,6 +58,11 @@ cat > "$OUT" <<HEADER
  *   gcc -O2 myapp.c muninn.c -lsqlite3 -lm -o myapp
  */
 
+/* Enable POSIX functions (strdup) on strict C11 compilers */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 /* SQLite extension API — required for all builds */
 #include "sqlite3ext.h"
 SQLITE_EXTENSION_INIT1

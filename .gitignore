@@ -1,11 +1,9 @@
 # Build artifacts
+build/
 muninn.dylib
 muninn.so
 muninn.dll
-vec_graph.dylib
-vec_graph.so
-vec_graph.dll
-test_runner
+test_runner*
 *.o
 *.dSYM/
 dist/
@@ -37,6 +35,7 @@ coverage/
 # Node.js
 node_modules/
 package-lock.json
+!npm/package-lock.json
 npm/dist/
 npm/node_modules/
 

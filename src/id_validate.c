@@ -1,11 +1,15 @@
 /*
  * id_validate.c — SQL identifier validation
  *
- * This module is used both from extension code and from tests that link
- * directly against libsqlite3, so it uses sqlite3.h rather than sqlite3ext.h.
+ * When compiled as part of the extension (SQLITE_CORE not defined),
+ * sqlite3ext.h redirects sqlite3_mprintf through the extension API
+ * function pointer table. The C test runner links libsqlite3 directly
+ * and provides a NULL sqlite3_api pointer (id_quote is not called in tests).
  */
+#include "sqlite3ext.h"
+SQLITE_EXTENSION_INIT3
+
 #include "id_validate.h"
-#include <sqlite3.h>
 #include <stddef.h>
 
 int id_validate(const char *identifier) {

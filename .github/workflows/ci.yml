@@ -84,7 +84,12 @@ jobs:
       - name: SQLite CLI smoke test
         if: runner.os != 'Windows'
         run: |
-          sqlite3 :memory: ".load ./muninn" "SELECT 1"
+          if [ "$(uname -s)" = "Darwin" ]; then
+            SQLITE3="$(brew --prefix sqlite)/bin/sqlite3"
+          else
+            SQLITE3="sqlite3"
+          fi
+          "$SQLITE3" :memory: ".load ./build/muninn" "SELECT 1"
 
       # ── Windows build ───────────────────────────────────
       - name: Setup MSVC
@@ -124,7 +129,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: muninn-${{ matrix.name }}
-          path: muninn.${{ matrix.ext }}
+          path: build/muninn.${{ matrix.ext }}
 
   # ── macOS Universal Binary ──────────────────────────────
   build-macos-universal:
@@ -136,24 +141,23 @@ jobs:
       - name: Build arm64
         run: make ARCH=arm64 all
 
-      - name: Rename arm64 binary
-        run: mv muninn.dylib muninn_arm64.dylib
+      - name: Save arm64 binary
+        run: cp build/muninn.dylib muninn_arm64.dylib
 
       - name: Build x86_64
         run: make clean all ARCH=x86_64
 
-      - name: Rename x86_64 binary
-        run: mv muninn.dylib muninn_x86_64.dylib
-
       - name: Create universal binary
         run: |
-          lipo -create muninn_arm64.dylib muninn_x86_64.dylib -output muninn.dylib
-          lipo -info muninn.dylib
+          lipo -create muninn_arm64.dylib build/muninn.dylib -output build/muninn_universal.dylib
+          mv build/muninn_universal.dylib build/muninn.dylib
+          rm -f muninn_arm64.dylib
+          lipo -info build/muninn.dylib
 
       - uses: actions/upload-artifact@v4
         with:
           name: muninn-macos-universal
-          path: muninn.dylib
+          path: build/muninn.dylib
 
   # ── Sanitizers (Linux only) ──────────────────────────────
   sanitize:

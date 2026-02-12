@@ -12,7 +12,7 @@ from collections.abc import Generator
 import pytest
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
-EXTENSION_PATH = str(PROJECT_ROOT / "muninn")
+EXTENSION_PATH = str(PROJECT_ROOT / "build" / "muninn")
 
 
 @pytest.fixture(scope="session", autouse=True)

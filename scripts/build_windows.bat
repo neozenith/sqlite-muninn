@@ -3,6 +3,8 @@ REM Build muninn.dll with MSVC
 REM Requires: Visual Studio or Build Tools with MSVC
 REM Usage: Run from "Developer Command Prompt for VS" or after ilammy/msvc-dev-cmd in CI
 
+if not exist build mkdir build
+
 cl.exe /O2 /MT /W4 /LD /Isrc ^
     src\muninn.c ^
     src\hnsw_vtab.c ^
@@ -15,11 +17,11 @@ cl.exe /O2 /MT /W4 /LD /Isrc ^
     src\vec_math.c ^
     src\priority_queue.c ^
     src\id_validate.c ^
-    /Fe:muninn.dll
+    /Fe:build\muninn.dll
 
 if %ERRORLEVEL% neq 0 (
     echo Build failed with error %ERRORLEVEL%
     exit /b %ERRORLEVEL%
 )
 
-echo Built muninn.dll successfully
+echo Built build\muninn.dll successfully

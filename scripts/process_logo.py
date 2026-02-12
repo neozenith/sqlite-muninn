@@ -175,9 +175,7 @@ def _auto_crop(arr: np.ndarray, pad: int = 4) -> np.ndarray:
         cmin = max(0, cmin - pad)
         cmax = min(w - 1, cmax + pad)
         arr = arr[rmin : rmax + 1, cmin : cmax + 1]
-        log.info(
-            "Auto-cropped to [%d:%d, %d:%d] → %dx%d", rmin, rmax + 1, cmin, cmax + 1, arr.shape[1], arr.shape[0]
-        )
+        log.info("Auto-cropped to [%d:%d, %d:%d] → %dx%d", rmin, rmax + 1, cmin, cmax + 1, arr.shape[1], arr.shape[0])
     return arr
 
 
@@ -541,7 +539,8 @@ def segment_layers(
     Image.fromarray((darkness * 255).astype(np.uint8), mode="L").save(output_dir / "03e_alpha_darkness.png")
     Image.fromarray((edge_signal * 255).astype(np.uint8), mode="L").save(output_dir / "03f_edge_refined.png")
     log.info(
-        "Saved: 03c-f (grey/warmth/darkness/refined alpha, grey_ref=%d)", grey_reference,
+        "Saved: 03c-f (grey/warmth/darkness/refined alpha, grey_ref=%d)",
+        grey_reference,
     )
 
     # --- Layer 4: Semantic foreground only ---
@@ -614,7 +613,12 @@ def segment_layers(
     rescued = fg_combined - fg_u2net
     log.info(
         "Pixel counts — U2-Net: %d, color: %d, edge: %d, combined: %d, rescued: %d (%.1f%%)",
-        fg_u2net, fg_color_count, fg_edge, fg_combined, rescued, 100.0 * rescued / (h * w),
+        fg_u2net,
+        fg_color_count,
+        fg_edge,
+        fg_combined,
+        rescued,
+        100.0 * rescued / (h * w),
     )
 
     return final_path

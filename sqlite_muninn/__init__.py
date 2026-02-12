@@ -24,10 +24,10 @@ def loadable_path() -> str:
     if any(_PKG_DIR.glob("muninn.*")):
         return str(pkg_path)
 
-    # Development / git install: binary is at the repo root
-    repo_root = _PKG_DIR.parent
-    if any(repo_root.glob("muninn.*")):
-        return str(repo_root / "muninn")
+    # Development / git install: binary is in the build directory
+    build_dir = _PKG_DIR.parent / "build"
+    if any(build_dir.glob("muninn.*")):
+        return str(build_dir / "muninn")
 
     raise FileNotFoundError("muninn extension not found. Build it with: make all")
 

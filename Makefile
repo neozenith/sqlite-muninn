@@ -1,5 +1,5 @@
 CC ?= cc
-CFLAGS_BASE = -O2 -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC
+CFLAGS_BASE = -O2 -Wall -Wextra -Wpedantic -Werror -std=c11 -fPIC -D_POSIX_C_SOURCE=200809L
 CFLAGS_EXTRA ?=
 LDFLAGS = -lm
 
@@ -65,21 +65,22 @@ version:                                       ## Print version
 # BUILD
 ######################################################################
 
-all: muninn$(EXT)                              ## Build the extension
+all: build/muninn$(EXT)                        ## Build the extension
 
-muninn$(EXT): $(SRC)
+build/muninn$(EXT): $(SRC)
+	@mkdir -p build
 	$(CC) $(CFLAGS_BASE) $(CFLAGS_EXTRA) $(SHARED_FLAGS) -Isrc -o $@ $^ $(LDFLAGS)
 
 debug: CFLAGS_BASE += -g -fsanitize=address,undefined -DDEBUG -O0
 debug: LDFLAGS += -fsanitize=address,undefined
-debug: muninn$(EXT)                            ## Build with ASan + UBSan
+debug: build/muninn$(EXT)                      ## Build with ASan + UBSan
 
 ######################################################################
 # TEST
 ######################################################################
 
-test: test_runner                              ## Run C unit tests + coverage
-	./test_runner
+test: build/test_runner                        ## Run C unit tests + coverage
+	./build/test_runner
 	@GCOVR=$$(command -v gcovr 2>/dev/null || echo .venv/bin/gcovr); \
 	if [ -x "$$GCOVR" ]; then \
 		$$GCOVR --root . --filter 'src/' --exclude 'src/sqlite3' \
@@ -88,10 +89,11 @@ test: test_runner                              ## Run C unit tests + coverage
 		echo "gcovr not installed — skipping C coverage report"; \
 	fi
 
-test_runner: $(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c src/id_validate.c src/graph_load.c
+build/test_runner: $(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c src/id_validate.c src/graph_load.c
+	@mkdir -p build
 	$(CC) $(CFLAGS_BASE) $(CFLAGS_EXTRA) --coverage -Isrc -o $@ $^ $(LDFLAGS_TEST)
 
-test-python: muninn$(EXT)                      ## Run Python integration tests + coverage
+test-python: build/muninn$(EXT)                ## Run Python integration tests + coverage
 	.venv/bin/python -m pytest pytests/ -v
 
 test-js:                                       ## Run TypeScript tests + coverage
@@ -106,12 +108,7 @@ test-all: test test-python test-js docs-build  ## Run all tests
 format: format-c format-python format-js       ## Format all code
 
 format-c:                                      ## Format C code with clang-format
-	@if command -v clang-format >/dev/null 2>&1; then \
-		clang-format -i src/*.c src/*.h test/*.c test/*.h 2>/dev/null; \
-		echo "C code formatted"; \
-	else \
-		echo "clang-format not installed — skipping C formatting"; \
-	fi
+	clang-format -i src/*.c src/*.h test/*.c test/*.h
 
 format-python:                                 ## Format Python code with ruff
 	.venv/bin/ruff format .
@@ -163,9 +160,9 @@ version-stamp:                                 ## Stamp VERSION into skill files
 
 PREFIX ?= /usr/local
 
-install: muninn$(EXT)                          ## Install extension and header
+install: build/muninn$(EXT)                    ## Install extension and header
 	install -d $(DESTDIR)$(PREFIX)/lib
-	install -m 755 muninn$(EXT) $(DESTDIR)$(PREFIX)/lib/
+	install -m 755 build/muninn$(EXT) $(DESTDIR)$(PREFIX)/lib/
 	install -d $(DESTDIR)$(PREFIX)/include
 	install -m 644 src/muninn.h $(DESTDIR)$(PREFIX)/include/
 
@@ -173,7 +170,7 @@ uninstall:                                     ## Remove installed files
 	rm -f $(DESTDIR)$(PREFIX)/lib/muninn$(EXT)
 	rm -f $(DESTDIR)$(PREFIX)/include/muninn.h
 
-test-install: muninn$(EXT)                     ## Run install integration tests (pip + npm)
+test-install: build/muninn$(EXT)               ## Run install integration tests (pip + npm)
 	.venv/bin/python -m pytest pytests/test_install.py -v -m integration --no-cov
 
 ######################################################################
@@ -202,6 +199,8 @@ ci: lint typecheck test test-python test-js    ## Full CI pipeline
 ######################################################################
 
 clean: docs-clean                              ## Clean build artifacts
-	rm -f muninn$(EXT) test_runner
 	rm -rf dist/
+	rm -rf build/
+	rm -rf *.egg-info
+	rm -rf .coverage
 	rm -f *.gcda *.gcno src/*.gcda src/*.gcno test/*.gcda test/*.gcno

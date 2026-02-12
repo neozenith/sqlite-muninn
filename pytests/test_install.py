@@ -37,7 +37,7 @@ class TestPipInstall:
     def test_pip_install_version(self, tmp_path: pathlib.Path) -> None:
         """pip install from source should produce a package with the correct version."""
         # Copy the binary into the package so the wheel includes it
-        ext_glob = list(PROJECT_ROOT.glob("muninn.*"))
+        ext_glob = list((PROJECT_ROOT / "build").glob("muninn.*"))
         ext_files = [f for f in ext_glob if f.suffix in (".so", ".dylib", ".dll")]
         if not ext_files:
             pytest.skip("Extension not built — run `make all` first")
@@ -78,7 +78,7 @@ class TestNpmInstall:
         if not (npm_dir / "dist" / "index.js").exists():
             pytest.skip("npm package not built — run `npm --prefix npm run build` first")
 
-        ext_glob = list(PROJECT_ROOT.glob("muninn.*"))
+        ext_glob = list((PROJECT_ROOT / "build").glob("muninn.*"))
         ext_files = [f for f in ext_glob if f.suffix in (".so", ".dylib", ".dll")]
         if not ext_files:
             pytest.skip("Extension not built — run `make all` first")
