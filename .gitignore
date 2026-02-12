@@ -1,17 +1,36 @@
+# Build artifacts
+muninn.dylib
+muninn.so
+muninn.dll
 vec_graph.dylib
 vec_graph.so
 vec_graph.dll
 test_runner
 *.o
 *.dSYM/
+dist/
+
+# MSVC artifacts
+*.obj
+*.lib
+*.exp
+
+# Python
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+*.egg-info/
+build/
+sqlite_muninn/muninn.*
+!sqlite_muninn/__init__.py
 
+# Node.js
+node_modules/
+package-lock.json
 
+# Documentation
 site/
-uv.lock
 
 # Benchmark artifacts (generated, not committed)
 benchmarks/charts/*.html
@@ -21,29 +40,13 @@ benchmarks/vectors/*.npy
 benchmarks/texts/
 # NOTE: benchmarks/charts/*.json is NOT ignored — those Plotly specs
 # are required by mkdocs-plotly-plugin during static site build.
+
+# IDE / OS
+.DS_Store
+
+# Project-local
 .claude/
 CLAUDE.md
-.DS_Store
-*.dylib
-*.so
-*.dll
 tmp/
 docs/logo/
 
-# Build output
-dist/
-
-# Node.js
-node_modules/
-package-lock.json
-
-# Python package build
-*.egg-info/
-build/
-sqlite_muninn/muninn.*
-!sqlite_muninn/__init__.py
-
-# MSVC artifacts
-*.obj
-*.lib
-*.exp

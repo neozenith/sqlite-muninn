@@ -1,11 +1,15 @@
 ######################################################################
 # benchmarks/Makefile — invoke via: make -C benchmarks {target}
-#   Override storage: make -C benchmarks saturation STORAGE=disk
+#   Override storage: make -C benchmarks vss-embeddings STORAGE=memory
 ######################################################################
 
 PYTHON = ../.venv/bin/python
-BENCH = $(PYTHON) scripts/benchmark_vss.py
-BENCH_GRAPH = $(PYTHON) scripts/benchmark_graph.py
+BENCH_VSS_SRC = scripts/benchmark_vss.py
+BENCH_VSS_ANALYZE_SRC = scripts/benchmark_vss_analyze.py
+BENCH_GRAPH_SRC = scripts/benchmark_graph.py
+BENCH_GRAPH_ANALYZE_SRC = scripts/benchmark_graph_analyze.py
+BENCH_VSS = $(PYTHON) $(BENCH_VSS_SRC)
+BENCH_GRAPH = $(PYTHON) $(BENCH_GRAPH_SRC)
 STORAGE ?= disk
 BENCH_FLAGS = --storage $(STORAGE)
 
@@ -21,10 +25,13 @@ endif
 
 EXTENSION = ../muninn$(EXT)
 
-.PHONY: help compare saturation \
-        models-prep models-prep-manifest models vss-analyze clean \
+.PHONY: help \
+        models-prep models-prep-manifest models vss-analyze clean clean-all \
         graph-small graph-medium graph-large graph-scale-free graph-analyze \
-        vss-manifest graph-manifest manifest analyze
+        vss-manifest graph-manifest manifest analyze analyze-vss analyze-graph \
+		vss-embeddings-prep vss-embeddings \
+		vss-embeddings-agnews-all-MiniLM-L6-v2 vss-embeddings-agnews-all-mpnet-base-v2 vss-embeddings-agnews-BAAI-bge-large-en-v1.5 \
+		vss-embeddings-wealth-of-nations-all-models vss-embeddings-all 
 
 help:                                              ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -37,65 +44,61 @@ $(EXTENSION):
 # VECTOR BENCHMARKS
 ######################################################################
 
-compare: $(EXTENSION)                              ## Comparative benchmark vs sqlite-vector
-	$(BENCH) $(BENCH_FLAGS)
+vss-embeddings-prep:                                       ## Download models + datasets, pre-build all .npy embedding caches
+	$(BENCH_VSS) --prep-models --prep-model MiniLM --prep-dataset ag_news
+	$(BENCH_VSS) --prep-models --prep-model MPNet --prep-dataset ag_news
+	$(BENCH_VSS) --prep-models --prep-model BGE-Large --prep-dataset ag_news
+	$(BENCH_VSS) --prep-models --prep-model MiniLM --prep-dataset wealth_of_nations
+	$(BENCH_VSS) --prep-models --prep-model MPNet --prep-dataset wealth_of_nations
+	$(BENCH_VSS) --prep-models --prep-model BGE-Large --prep-dataset wealth_of_nations
 
-vss-embeddings-prep:                                       ## Download models + datasets, pre-build all .npy caches
-	$(BENCH) --prep-models --prep-model MiniLM --prep-dataset ag_news
-	$(BENCH) --prep-models --prep-model MPNet --prep-dataset ag_news
-	$(BENCH) --prep-models --prep-model BGE-Large --prep-dataset ag_news
-	$(BENCH) --prep-models --prep-model MiniLM --prep-dataset wealth_of_nations
-	$(BENCH) --prep-models --prep-model MPNet --prep-dataset wealth_of_nations
-	$(BENCH) --prep-models --prep-model BGE-Large --prep-dataset wealth_of_nations
-
-vss-embeddings-prep-manifest:                              ## Show models-prep cache completeness
-	$(PYTHON) scripts/benchmark_vss_analyze.py --prep-manifest
-
-vss-embeddings: $(EXTENSION)                               ## Profile: 3 models x 2 datasets, N<=250K
+vss-embeddings-agnews-all-MiniLM-L6-v2: $(EXTENSION)
 	# AG News (120K passages)
-# 	$(BENCH) --source model:all-MiniLM-L6-v2 --sizes 1000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-MiniLM-L6-v2 --sizes 5000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-MiniLM-L6-v2 --sizes 10000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-MiniLM-L6-v2 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-MiniLM-L6-v2 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-MiniLM-L6-v2 --sizes 250000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-mpnet-base-v2 --sizes 1000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-mpnet-base-v2 --sizes 5000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-mpnet-base-v2 --sizes 10000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-mpnet-base-v2 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
-	$(BENCH) --source model:all-mpnet-base-v2 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-mpnet-base-v2 --sizes 250000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:BAAI/bge-large-en-v1.5 --sizes 1000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:BAAI/bge-large-en-v1.5 --sizes 5000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:BAAI/bge-large-en-v1.5 --sizes 10000 --dataset ag_news $(BENCH_FLAGS)
-	$(BENCH) --source model:BAAI/bge-large-en-v1.5 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
-	$(BENCH) --source model:BAAI/bge-large-en-v1.5 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
-# 	$(BENCH) --source model:BAAI/bge-large-en-v1.5 --sizes 250000 --dataset ag_news $(BENCH_FLAGS)
-# 	# Wealth of Nations (~2.5K passages)
-# 	$(BENCH) --source model:all-MiniLM-L6-v2 --sizes 1000 --dataset wealth_of_nations $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-MiniLM-L6-v2 --sizes 2500 --dataset wealth_of_nations $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-mpnet-base-v2 --sizes 1000 --dataset wealth_of_nations $(BENCH_FLAGS)
-# 	$(BENCH) --source model:all-mpnet-base-v2 --sizes 2500 --dataset wealth_of_nations $(BENCH_FLAGS)
-# 	$(BENCH) --source model:BAAI/bge-large-en-v1.5 --sizes 1000 --dataset wealth_of_nations $(BENCH_FLAGS)
-# 	$(BENCH) --source model:BAAI/bge-large-en-v1.5 --sizes 2500 --dataset wealth_of_nations $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 1000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 5000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 10000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 250000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 1000 --dataset ag_news $(BENCH_FLAGS)
 
-vss-analyze:                                       ## Analyze vector results -> tables + plotly charts
-	$(PYTHON) scripts/benchmark_vss_analyze.py
+vss-embeddings-agnews-all-mpnet-base-v2: $(EXTENSION)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 5000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 10000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 250000 --dataset ag_news $(BENCH_FLAGS)
 
-clean:                                             ## Remove generated charts (keeps JSONL results)
-	rm -rf charts/*.html charts/*.json
+vss-embeddings-agnews-BAAI-bge-large-en-v1.5: $(EXTENSION)
+	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 1000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 5000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 10000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 250000 --dataset ag_news $(BENCH_FLAGS)
+
+vss-embeddings-wealth-of-nations-all-models: $(EXTENSION)											# 	# Wealth of Nations (~2.5K passages)
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 1000 --dataset wealth_of_nations $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 2500 --dataset wealth_of_nations $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 1000 --dataset wealth_of_nations $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 2500 --dataset wealth_of_nations $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 1000 --dataset wealth_of_nations $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 2500 --dataset wealth_of_nations $(BENCH_FLAGS)
+
+vss-embeddings-all: vss-embeddings-agnews-all-MiniLM-L6-v2 vss-embeddings-agnews-all-mpnet-base-v2 vss-embeddings-agnews-BAAI-bge-large-en-v1.5 vss-embeddings-wealth-of-nations-all-models  ## Run all VSS embedding benchmarks
+
 
 ######################################################################
 # GRAPH BENCHMARKS
 ######################################################################
 
 graph-small: $(EXTENSION)                          ## Graph: small profile (N<=1K)
-# 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 100 --avg-degree 5 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 100 --avg-degree 5 $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 100 --avg-degree 20 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 500 --avg-degree 5 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 500 --avg-degree 20 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 1000 --avg-degree 5 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 1000 --avg-degree 20 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 500 --avg-degree 5 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 500 --avg-degree 20 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 1000 --avg-degree 5 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 1000 --avg-degree 20 $(BENCH_FLAGS)
 
 graph-medium: $(EXTENSION)                         ## Graph: medium profile (N<=10K)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 1000 --avg-degree 5 $(BENCH_FLAGS)
@@ -117,32 +120,54 @@ graph-large: $(EXTENSION)                          ## Graph: large profile (N<=1
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 100000 --avg-degree 20 $(BENCH_FLAGS)
 
 graph-scale-free: $(EXTENSION)                     ## Graph: Barabasi-Albert scale-free topology
-# 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 1000 --avg-degree 3 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 1000 --avg-degree 5 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 1000 --avg-degree 10 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 5000 --avg-degree 3 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 5000 --avg-degree 5 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 5000 --avg-degree 10 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 10000 --avg-degree 3 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 10000 --avg-degree 5 $(BENCH_FLAGS)
-# 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 10000 --avg-degree 10 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 1000 --avg-degree 3 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 1000 --avg-degree 5 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 1000 --avg-degree 10 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 5000 --avg-degree 3 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 5000 --avg-degree 5 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 5000 --avg-degree 10 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 10000 --avg-degree 3 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 10000 --avg-degree 5 $(BENCH_FLAGS)
+	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 10000 --avg-degree 10 $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 50000 --avg-degree 3 $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 50000 --avg-degree 5 $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model barabasi_albert --nodes 50000 --avg-degree 10 $(BENCH_FLAGS)
 
-graph-analyze:                                     ## Analyze graph results -> tables + charts
-	$(PYTHON) scripts/benchmark_graph_analyze.py
+
 
 ######################################################################
 # AGGREGATED TARGETS
 ######################################################################
+analyze-vss:                                       ## Analyze vector results -> tables + plotly charts
+	$(PYTHON) scripts/benchmark_vss_analyze.py
 
-analyze: vss-analyze graph-analyze                 ## Analyze all benchmark results
+analyze-graph:                                     ## Analyze graph results -> tables + charts
+	$(PYTHON) scripts/benchmark_graph_analyze.py
 
-vss-manifest:                                      ## Show VSS benchmark completeness
+analyze: analyze-vss analyze-graph                 ## Analyze all benchmark results
+
+######################################################################
+# BENCHMARK MANIFESTS
+######################################################################
+# Each benchmarking script is self describing about the benchmarks it SHOULD run and the outputs
+# The manifest targets are a self check to see which are missing to be able to run individual benchmarks in isolation.
+
+manifest-vss-embeddings-prep:                              ## Show models-prep cache completeness
+	$(PYTHON) scripts/benchmark_vss_analyze.py --prep-manifest
+
+manifest-vss:                                      ## Show VSS benchmark completeness
 	$(PYTHON) scripts/benchmark_vss_analyze.py --manifest
 
-graph-manifest:                                    ## Show graph benchmark completeness
+manifest-graph:                                    ## Show graph benchmark completeness
 	$(PYTHON) scripts/benchmark_graph_analyze.py --manifest
 
-manifest: vss-manifest graph-manifest              ## Show overall benchmark completeness
+manifest: manifest-vss manifest-graph              ## Show overall benchmark completeness
+
+
+clean:                                             ## Remove generated charts (keeps JSONL results)
+	rm -rf $(CURDIR)/charts/*.html 
+	rm -rf $(CURDIR)/charts/*.json
+
+clean-all: clean                                   ## Remove all generated files (including JSONL results)
+	rm -rf $(CURDIR)/results/**/*.sqlite 
+	rm -rf $(CURDIR)/results/*.jsonl

@@ -51,7 +51,10 @@ RESULTS_DIR = PROJECT_ROOT / "benchmarks" / "results"
 
 N_PER_QUERY_OPS = 50  # random start nodes for per-query operations
 
-ALL_OPERATIONS = ["bfs", "dfs", "shortest_path", "components", "pagerank"]
+ALL_OPERATIONS = [
+    "bfs", "dfs", "shortest_path", "components", "pagerank",
+    "degree", "betweenness", "closeness", "leiden",
+]
 
 # Profile definitions (mirrors Makefile targets for manifest tracking)
 GRAPH_PROFILES = {
@@ -406,6 +409,49 @@ def run_graph_muninn(conn, operation, adj, start_nodes, end_nodes=None):
         result = {int(r[0]): r[1] for r in rows}
         return result, [elapsed]
 
+    if operation == "degree":
+        t0 = time.perf_counter()
+        rows = conn.execute(
+            "SELECT node, in_degree, out_degree, degree, centrality FROM graph_degree"
+            " WHERE edge_table = 'bench_edges' AND src_col = 'src' AND dst_col = 'dst'",
+        ).fetchall()
+        elapsed = time.perf_counter() - t0
+        result = {int(r[0]): r[4] for r in rows}  # centrality column
+        return result, [elapsed]
+
+    if operation == "betweenness":
+        t0 = time.perf_counter()
+        rows = conn.execute(
+            "SELECT node, centrality FROM graph_betweenness"
+            " WHERE edge_table = 'bench_edges' AND src_col = 'src' AND dst_col = 'dst'"
+            " AND direction = 'both'",
+        ).fetchall()
+        elapsed = time.perf_counter() - t0
+        result = {int(r[0]): r[1] for r in rows}
+        return result, [elapsed]
+
+    if operation == "closeness":
+        t0 = time.perf_counter()
+        rows = conn.execute(
+            "SELECT node, centrality FROM graph_closeness"
+            " WHERE edge_table = 'bench_edges' AND src_col = 'src' AND dst_col = 'dst'"
+            " AND direction = 'both'",
+        ).fetchall()
+        elapsed = time.perf_counter() - t0
+        result = {int(r[0]): r[1] for r in rows}
+        return result, [elapsed]
+
+    if operation == "leiden":
+        t0 = time.perf_counter()
+        rows = conn.execute(
+            "SELECT node, community_id, modularity FROM graph_leiden"
+            " WHERE edge_table = 'bench_edges' AND src_col = 'src' AND dst_col = 'dst'",
+        ).fetchall()
+        elapsed = time.perf_counter() - t0
+        result = {int(r[0]): r[1] for r in rows}
+        modularity = rows[0][2] if rows else None
+        return result, [elapsed], {"modularity": modularity, "n_communities": len(set(r[1] for r in rows))}
+
     log.error("Unknown operation: %s", operation)
     return None, []
 
@@ -501,9 +547,9 @@ def run_graph_cte(conn, operation, adj, start_nodes, end_nodes=None):
         elapsed = time.perf_counter() - t0
         return result, [elapsed]
 
-    # DFS, PageRank: skip for CTE (not expressible efficiently)
-    if operation in ("dfs", "pagerank"):
-        log.info("    CTE: skipping %s (not efficiently expressible)", operation)
+    # Operations not expressible as recursive CTEs
+    if operation in ("dfs", "pagerank", "degree", "betweenness", "closeness", "leiden"):
+        log.info("    CTE: skipping %s (not expressible as CTE)", operation)
         return None, []
 
     log.error("Unknown operation: %s", operation)
@@ -691,7 +737,15 @@ def run_graph_benchmark(
 
             for op in operations:
                 log.info("    Operation: %s", op)
-                results, times = run_graph_muninn(conn, op, adj, start_nodes, end_nodes)
+                retval = run_graph_muninn(conn, op, adj, start_nodes, end_nodes)
+
+                # leiden returns (result, times, extra_metrics); others return (result, times)
+                extra_metrics = {}
+                if len(retval) == 3:
+                    results, times, extra_metrics = retval
+                else:
+                    results, times = retval
+
                 if results is None:
                     continue
 
@@ -706,6 +760,8 @@ def run_graph_benchmark(
                     nodes_visited = len(results)
                 elif op == "dfs" and isinstance(results, list):
                     nodes_visited = sum(len(r) for r in results) / len(results) if results else 0
+                elif op in ("degree", "betweenness", "closeness", "leiden"):
+                    nodes_visited = len(results)
 
                 record = make_graph_record(
                     engine="muninn", operation=op, graph_model=graph_model,
@@ -713,6 +769,7 @@ def run_graph_benchmark(
                     weighted=weighted, setup_time_s=setup_time,
                     query_times=times, correct=correct,
                     nodes_visited_mean=nodes_visited, storage=storage,
+                    engine_params=extra_metrics if extra_metrics else None,
                 )
                 write_jsonl_record(output_path, record)
                 log.info("      %s: %.3fms (correct=%s)", op, record["query_time_ms"], correct)
@@ -853,7 +910,7 @@ Examples:
     )
     parser.add_argument(
         "--operations",
-        help="Comma-separated operations (default: all). Options: bfs,dfs,shortest_path,components,pagerank",
+        help="Comma-separated operations (default: all). Options: " + ",".join(ALL_OPERATIONS),
     )
     parser.add_argument(
         "--storage",

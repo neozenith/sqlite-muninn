@@ -9,11 +9,12 @@ import { fileURLToPath } from "node:url";
 import { platform, arch } from "node:process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(__dirname, "..");
 
 const EXT_MAP = { darwin: "dylib", linux: "so", win32: "dll" };
 
 /** @returns {string} version string from VERSION file */
-export const version = readFileSync(join(__dirname, "VERSION"), "utf8").trim();
+export const version = readFileSync(join(ROOT, "VERSION"), "utf8").trim();
 
 /**
  * Get the path to the muninn loadable extension binary.
@@ -33,7 +34,7 @@ export function getLoadablePath() {
   }
 
   // Try repo root first (git install / local dev)
-  const localPath = join(__dirname, `muninn.${ext}`);
+  const localPath = join(ROOT, `muninn.${ext}`);
   if (statSync(localPath, { throwIfNoEntry: false })) {
     return localPath;
   }
@@ -41,7 +42,7 @@ export function getLoadablePath() {
   // Try platform-specific package (npm registry install)
   const pkgName = `@sqlite-muninn/${platform}-${arch === "arm64" ? "arm64" : "x64"}`;
   try {
-    const pkgPath = join(__dirname, "node_modules", pkgName, `muninn.${ext}`);
+    const pkgPath = join(ROOT, "node_modules", pkgName, `muninn.${ext}`);
     if (statSync(pkgPath, { throwIfNoEntry: false })) {
       return pkgPath;
     }

@@ -83,7 +83,7 @@ test_runner: $(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c src
 test-python: muninn$(EXT)                      ## Run Python integration tests
 	.venv/bin/python -m pytest pytests/ -v
 
-test-all: test test-python                     ## Run all tests
+test-all: test test-python docs-build                     ## Run all tests
 
 ######################################################################
 # PACKAGING
@@ -126,6 +126,7 @@ docs-serve: docs-build                         ## Serve docs locally with live r
 
 docs-build:                                    ## Build documentation site
 	uv sync --all-groups
+	make -C benchmarks analyze
 	uv run mkdocs build --strict
 
 docs-clean:                                    ## Clean documentation build

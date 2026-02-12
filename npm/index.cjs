@@ -9,9 +9,11 @@ const { readFileSync, statSync } = require("node:fs");
 const { join } = require("node:path");
 const { platform, arch } = require("node:process");
 
+const ROOT = join(__dirname, "..");
+
 const EXT_MAP = { darwin: "dylib", linux: "so", win32: "dll" };
 
-const version = readFileSync(join(__dirname, "VERSION"), "utf8").trim();
+const version = readFileSync(join(ROOT, "VERSION"), "utf8").trim();
 
 function getLoadablePath() {
   const ext = EXT_MAP[platform];
@@ -23,7 +25,7 @@ function getLoadablePath() {
   }
 
   // Try repo root first (git install / local dev)
-  const localPath = join(__dirname, `muninn.${ext}`);
+  const localPath = join(ROOT, `muninn.${ext}`);
   if (statSync(localPath, { throwIfNoEntry: false })) {
     return localPath;
   }
@@ -32,7 +34,7 @@ function getLoadablePath() {
   const pkgName = `@sqlite-muninn/${platform}-${arch === "arm64" ? "arm64" : "x64"}`;
   try {
     const pkgPath = join(
-      __dirname,
+      ROOT,
       "node_modules",
       pkgName,
       `muninn.${ext}`

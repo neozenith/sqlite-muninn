@@ -56,6 +56,10 @@ OPERATION_LABELS = {
     "shortest_path": "Shortest Path",
     "components": "Connected Components",
     "pagerank": "PageRank",
+    "degree": "Degree Centrality",
+    "betweenness": "Betweenness Centrality",
+    "closeness": "Closeness Centrality",
+    "leiden": "Leiden Community Detection",
 }
 
 
@@ -524,6 +528,10 @@ def generate_docs():
         "shortest_path": "Shortest Path",
         "components": "Components",
         "pagerank": "PageRank",
+        "degree": "Degree Centrality",
+        "betweenness": "Betweenness Centrality",
+        "closeness": "Closeness Centrality",
+        "leiden": "Leiden Community Detection",
     }
     operations = [
         {"key": op, "label": operation_labels.get(op, op.replace("_", " ").title())}

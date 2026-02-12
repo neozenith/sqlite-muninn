@@ -21,8 +21,9 @@ allowed-tools: Bash(sqlite3:*), Bash(python:*), Bash(node:*)
 
 # muninn — HNSW Vector Search + Graph Traversal for SQLite
 
-Zero-dependency C11 SQLite extension. Three subsystems in one `.load`:
-HNSW approximate nearest neighbor search, graph traversal TVFs, and Node2Vec.
+Zero-dependency C11 SQLite extension. Five subsystems in one `.load`:
+HNSW approximate nearest neighbor search, graph traversal TVFs, centrality measures,
+Leiden community detection, and Node2Vec.
 
 ## Quick Start (Python)
 

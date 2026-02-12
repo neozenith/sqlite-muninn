@@ -21,7 +21,7 @@ make -C benchmarks analyze
 ## Results
 
 - **[Vector Search](benchmarks/vss.md)** — HNSW vs brute-force across 3 embedding models, 2 datasets, and 4 SQLite extensions
-- **[Graph Traversal](benchmarks/graph.md)** — BFS, DFS, shortest path, components, and PageRank across muninn TVFs, recursive CTEs, and GraphQLite
+- **[Graph](benchmarks/graph.md)** — BFS, DFS, shortest path, components, PageRank, degree/betweenness/closeness centrality, and Leiden community detection across muninn TVFs, recursive CTEs, and GraphQLite
 
 ## Completeness
 

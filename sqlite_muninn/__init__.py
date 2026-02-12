@@ -7,15 +7,30 @@ HNSW approximate nearest neighbor search, graph traversal TVFs, and Node2Vec.
 import pathlib
 import sqlite3
 
-__version__ = (pathlib.Path(__file__).parent.parent / "VERSION").read_text().strip()
+_PKG_DIR = pathlib.Path(__file__).parent
+_REPO_ROOT = _PKG_DIR.parent
+
+__version__ = (_REPO_ROOT / "VERSION").read_text().strip()
 
 
 def loadable_path() -> str:
     """Return path to the muninn loadable extension (without file extension).
 
     SQLite's load_extension() automatically appends .so/.dylib/.dll.
+    Searches in package directory first (wheel install), then repo root (dev / git install).
     """
-    return str(pathlib.Path(__file__).parent / "muninn")
+    # Wheel install: binary is inside the package directory
+    pkg_path = _PKG_DIR / "muninn"
+    if any(_PKG_DIR.glob("muninn.*")):
+        return str(pkg_path)
+
+    # Development / git install: binary is at the repo root
+    if any(_REPO_ROOT.glob("muninn.*")):
+        return str(_REPO_ROOT / "muninn")
+
+    raise FileNotFoundError(
+        "muninn extension not found. Build it with: make all"
+    )
 
 
 def load(conn: sqlite3.Connection) -> None:

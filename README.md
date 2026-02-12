@@ -1,6 +1,8 @@
 # sqlite-muninn
 
-![Muninn Raven Logo](docs/assets/munnin_logo.png)
+<div align="center">
+    <img src="docs/assets/munnin_logo.png" alt="Muninn Raven Logo" width=320px/>
+</div>
 
 A zero-dependency C extension for SQLite to add an advanced collection of knowledge graph primitives like Vector Similarity Search, HNSW Indexes, Graph database, Community Detection, Node2Vec capabilities.
 
@@ -12,10 +14,14 @@ graph LR
         direction TB
         HNSW["HNSW Virtual Table<br/><i>hnsw_index</i>"]
         GTVF["Graph TVFs<br/><i>bfs, dfs, shortest_path,<br/>components, pagerank</i>"]
+        CENT["Centrality TVFs<br/><i>degree, betweenness,<br/>closeness</i>"]
+        COMM["Community Detection<br/><i>graph_leiden</i>"]
         N2V["Node2Vec Training<br/><i>node2vec_train()</i>"]
     end
 
     ET["Any Edge Table<br/><i>src, dst columns</i>"] --> GTVF
+    ET --> CENT
+    ET --> COMM
     ET --> N2V
     N2V -->|embeddings| HNSW
     APP["Application<br/><i>embeddings from<br/>any source</i>"] -->|INSERT| HNSW
@@ -26,6 +32,8 @@ graph LR
 
 - **HNSW Vector Index** &mdash; O(log N) approximate nearest neighbor search with incremental insert/delete
 - **Graph Traversal** &mdash; BFS, DFS, shortest path, connected components, PageRank on any edge table
+- **Centrality Measures** &mdash; Degree, betweenness (Brandes), and closeness centrality with weighted/temporal support
+- **Community Detection** &mdash; Leiden algorithm for discovering graph communities with modularity scoring
 - **Node2Vec** &mdash; Learn structural node embeddings from graph topology, store in HNSW for similarity search
 - **Zero dependencies** &mdash; Pure C11, compiles to a single `.dylib`/`.so`/`.dll`
 - **SIMD accelerated** &mdash; ARM NEON and x86 SSE distance functions
@@ -80,6 +88,16 @@ WHERE edge_table = 'friendships' AND src_col = 'user_a' AND dst_col = 'user_b';
 SELECT node, rank FROM graph_pagerank
 WHERE edge_table = 'citations' AND src_col = 'citing' AND dst_col = 'cited'
   AND damping = 0.85 AND iterations = 20;
+
+-- Betweenness centrality (find bridge nodes)
+SELECT node, centrality FROM graph_betweenness
+WHERE edge_table = 'friendships' AND src_col = 'user_a' AND dst_col = 'user_b'
+  AND direction = 'both'
+ORDER BY centrality DESC LIMIT 10;
+
+-- Community detection (Leiden algorithm)
+SELECT node, community_id, modularity FROM graph_leiden
+WHERE edge_table = 'friendships' AND src_col = 'user_a' AND dst_col = 'user_b';
 
 -- Learn structural embeddings from graph topology
 SELECT node2vec_train(
@@ -229,6 +247,76 @@ WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
 | `node` | TEXT | Node identifier |
 | `rank` | REAL | PageRank score (sums to ~1.0) |
 
+#### `graph_degree`
+
+Degree centrality for all nodes.
+
+```sql
+SELECT node, in_degree, out_degree, degree, centrality FROM graph_degree
+WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst';
+```
+
+| Output Column | Type | Description |
+|---------------|------|-------------|
+| `node` | TEXT | Node identifier |
+| `in_degree` | REAL | Count (or weighted sum) of incoming edges |
+| `out_degree` | REAL | Count (or weighted sum) of outgoing edges |
+| `degree` | REAL | Total degree (in + out) |
+| `centrality` | REAL | Normalized degree centrality |
+
+Optional constraints: `weight_col`, `direction`, `normalized`, `timestamp_col`, `time_start`, `time_end`.
+
+#### `graph_betweenness`
+
+Betweenness centrality via Brandes' O(VE) algorithm.
+
+```sql
+SELECT node, centrality FROM graph_betweenness
+WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+  AND direction = 'both';
+```
+
+| Output Column | Type | Description |
+|---------------|------|-------------|
+| `node` | TEXT | Node identifier |
+| `centrality` | REAL | Betweenness centrality score |
+
+Optional constraints: `weight_col`, `direction`, `normalized`, `timestamp_col`, `time_start`, `time_end`.
+
+#### `graph_closeness`
+
+Closeness centrality with Wasserman-Faust normalization for disconnected graphs.
+
+```sql
+SELECT node, centrality FROM graph_closeness
+WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+  AND direction = 'both';
+```
+
+| Output Column | Type | Description |
+|---------------|------|-------------|
+| `node` | TEXT | Node identifier |
+| `centrality` | REAL | Closeness centrality score |
+
+Optional constraints: `weight_col`, `direction`, `timestamp_col`, `time_start`, `time_end`.
+
+#### `graph_leiden`
+
+Community detection via the Leiden algorithm (Traag et al., 2019).
+
+```sql
+SELECT node, community_id, modularity FROM graph_leiden
+WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst';
+```
+
+| Output Column | Type | Description |
+|---------------|------|-------------|
+| `node` | TEXT | Node identifier |
+| `community_id` | INTEGER | Community assignment (0-based) |
+| `modularity` | REAL | Global modularity score of the partition |
+
+Optional constraints: `weight_col`, `resolution` (default 1.0), `timestamp_col`, `time_start`, `time_end`.
+
 ### `node2vec_train()`
 
 Learn vector embeddings from graph structure using biased random walks (Node2Vec) and Skip-gram with Negative Sampling (SGNS).
@@ -305,6 +393,8 @@ make docs-build    # Build static site
 | HNSW | Malkov & Yashunin, TPAMI 2020 |
 | MN-RU insert repair | arXiv:2407.07871, 2024 |
 | Patience early termination | SISAP 2025 |
+| Betweenness centrality | Brandes, J. Math. Sociol. 2001 |
+| Leiden community detection | Traag, Waltman & van Eck, Sci. Rep. 2019 |
 | Node2Vec | Grover & Leskovec, KDD 2016 |
 | SGNS | Mikolov et al., 2013 |
 
