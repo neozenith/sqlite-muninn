@@ -1,0 +1,197 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  # ── Build All Platforms ──────────────────────────────────
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux-x86_64
+            ext: so
+          - os: ubuntu-22.04-arm
+            target: linux-arm64
+            ext: so
+          - os: windows-2022
+            target: windows-x86_64
+            ext: dll
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.target }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
+        run: make all
+
+      - name: Setup MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: scripts\build_windows.bat
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y libsqlite3-dev
+          make test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: build/muninn.${{ matrix.ext }}
+
+  # ── macOS Universal Binary ─────────────────────────────
+  build-macos:
+    runs-on: macos-15
+    name: Build (macos-universal)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build arm64
+        run: make ARCH=arm64 all
+
+      - name: Save arm64 binary
+        run: cp build/muninn.dylib muninn_arm64.dylib
+
+      - name: Build x86_64
+        run: make clean all ARCH=x86_64
+
+      - name: Create universal binary
+        run: |
+          lipo -create muninn_arm64.dylib build/muninn.dylib -output build/muninn_universal.dylib
+          mv build/muninn_universal.dylib build/muninn.dylib
+          rm -f muninn_arm64.dylib
+          lipo -info build/muninn.dylib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: build/muninn.dylib
+
+  # ── Amalgamation ─────────────────────────────────────────
+  amalgamation:
+    runs-on: ubuntu-22.04
+    name: Amalgamation
+    steps:
+      - uses: actions/checkout@v4
+      - run: make amalgamation
+      - run: tar czf muninn-amalgamation.tar.gz -C dist muninn.c muninn.h
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amalgamation
+          path: muninn-amalgamation.tar.gz
+
+  # ── WASM Build ───────────────────────────────────────────
+  wasm-build:
+    runs-on: ubuntu-22.04
+    name: WASM Build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Build WASM
+        run: make -C wasm dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: |
+            dist/muninn_sqlite3.js
+            dist/muninn_sqlite3.wasm
+
+  # ── Publish to PyPI ──────────────────────────────────────
+  publish-pypi:
+    needs: [build, build-macos]
+    runs-on: ubuntu-latest
+    name: Publish to PyPI
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python scripts/build_wheels.py
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # ── Publish to NPM ──────────────────────────────────────
+  publish-npm:
+    needs: [build, build-macos]
+    runs-on: ubuntu-latest
+    name: Publish to NPM
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - name: Publish platform packages
+        run: |
+          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
+            npm publish npm/platforms/$target --provenance --access public
+          done
+      - name: Publish main package
+        run: npm publish npm/ --provenance --access public
+
+  # ── Publish WASM to NPM ─────────────────────────────────
+  publish-wasm:
+    needs: wasm-build
+    runs-on: ubuntu-latest
+    name: Publish WASM to NPM
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm
+          path: npm/wasm/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - run: npm publish npm/wasm --provenance --access public
+
+  # ── Upload to GitHub Release ─────────────────────────────
+  upload-release:
+    needs: [build, build-macos, amalgamation, wasm-build]
+    runs-on: ubuntu-latest
+    name: Upload Release Assets
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Rename artifacts for unique asset names
+        run: |
+          mv linux-x86_64/muninn.so muninn-linux-x86_64.so
+          mv linux-arm64/muninn.so muninn-linux-arm64.so
+          mv macos-universal/muninn.dylib muninn-macos-universal.dylib
+          mv windows-x86_64/muninn.dll muninn-windows-x86_64.dll
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            muninn-linux-x86_64.so
+            muninn-linux-arm64.so
+            muninn-macos-universal.dylib
+            muninn-windows-x86_64.dll
+            amalgamation/muninn-amalgamation.tar.gz
+            wasm/muninn_sqlite3.js
+            wasm/muninn_sqlite3.wasm

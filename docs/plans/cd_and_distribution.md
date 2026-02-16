@@ -355,160 +355,25 @@ upload-release:
 
 ## Publish Workflow (`publish.yml`)
 
-File: `.github/workflows/publish.yml`
+**Implemented:** [`.github/workflows/publish.yml`](../../.github/workflows/publish.yml)
 
-```yaml
-name: Publish
-on:
-  release:
-    types: [published]
+Triggered by `release: [published]`. Jobs:
 
-jobs:
-  # ── Build All Platforms ──────────────────────────────────
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            target: linux-x86_64
-            ext: so
-          - os: ubuntu-22.04-arm
-            target: linux-arm64
-            ext: so
-          - os: macos-15
-            target: macos-universal
-            ext: dylib
-          - os: windows-2022
-            target: windows-x86_64
-            ext: dll
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
+| Job | Depends on | What it does |
+|-----|-----------|--------------|
+| `build` | — | Matrix build: Linux x86_64, Linux ARM64, Windows x86_64 |
+| `build-macos` | — | macOS universal binary via `lipo` (arm64 + x86_64) |
+| `amalgamation` | — | Single-file `muninn.c` + `muninn.h` tarball |
+| `wasm-build` | — | WASM module via `make -C wasm dist` + Emscripten |
+| `publish-pypi` | build, build-macos | Assemble platform wheels, publish via OIDC trusted publisher |
+| `publish-npm` | build, build-macos | Publish `sqlite-muninn` + 5 `@neozenith/sqlite-muninn-*` platform packages |
+| `publish-wasm` | wasm-build | Publish `@neozenith/sqlite-muninn-wasm` |
+| `upload-release` | build, build-macos, amalgamation, wasm-build | Attach all binaries to GitHub Release |
 
-      - name: Build (Unix)
-        if: runner.os != 'Windows'
-        run: make all
-
-      - name: Setup MSVC
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: scripts\build_windows.bat
-
-      - name: Test (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          sudo apt-get install -y libsqlite3-dev 2>/dev/null || true
-          make test
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}
-          path: build/muninn.${{ matrix.ext }}
-
-  # ── Amalgamation ─────────────────────────────────────────
-  amalgamation:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: make amalgamation
-      - run: tar czf muninn-amalgamation.tar.gz -C dist muninn.c muninn.h
-      - uses: actions/upload-artifact@v4
-        with:
-          name: amalgamation
-          path: muninn-amalgamation.tar.gz
-
-  # ── WASM Build ───────────────────────────────────────────
-  wasm-build:
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mymindstorm/setup-emsdk@v14
-      - run: make amalgamation
-      - run: bash scripts/build_wasm.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wasm
-          path: "dist/muninn_sqlite3.*"
-
-  # ── Publish to PyPI ──────────────────────────────────────
-  publish-pypi:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - run: python scripts/build_wheels.py
-      - uses: pypa/gh-action-pypi-publish@release/v1
-
-  # ── Publish to NPM ──────────────────────────────────────
-  publish-npm:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          registry-url: https://registry.npmjs.org
-      - name: Publish platform packages
-        run: |
-          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            npm publish npm/platforms/$target --provenance --access public
-          done
-      - name: Publish main package
-        run: npm publish npm/ --provenance --access public
-
-  # ── Publish WASM to NPM ─────────────────────────────────
-  publish-wasm:
-    needs: wasm-build
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: wasm
-          path: npm/wasm/
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          registry-url: https://registry.npmjs.org
-      - run: npm publish npm/wasm --provenance --access public
-
-  # ── Upload to GitHub Release ─────────────────────────────
-  upload-release:
-    needs: [build, amalgamation, wasm-build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            linux-x86_64/muninn.so
-            linux-arm64/muninn.so
-            macos-universal/muninn.dylib
-            windows-x86_64/muninn.dll
-            amalgamation/muninn-amalgamation.tar.gz
-            wasm/muninn_sqlite3.js
-            wasm/muninn_sqlite3.wasm
-```
+Key implementation details vs. original plan:
+- macOS is a **separate job** (not a matrix entry) because universal binary requires two builds + `lipo`
+- WASM build uses `make -C wasm dist` (not `scripts/build_wasm.sh` which was removed)
+- Release assets are renamed for uniqueness (e.g., `muninn-linux-x86_64.so`)
 
 ---
 
