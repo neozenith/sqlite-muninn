@@ -162,8 +162,3 @@
 ```
 
 
-## Vector Space Saturation
-
-```plotly
---8<-- "benchmarks/charts/saturation.json"
-```

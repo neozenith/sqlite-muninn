@@ -37,10 +37,13 @@ from benchmark_vss import (
     EMBEDDING_MODELS,
     MAX_N_BY_DIM,
     PROFILES,
-    RESULTS_DIR as VSS_RESULTS_DIR,
     VECTORS_DIR,
     make_scenario_name,
 )
+from benchmark_vss import (
+    RESULTS_DIR as VSS_RESULTS_DIR,
+)
+
 log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
