@@ -188,6 +188,20 @@ jobs:
           node-version: "22"
           registry-url: https://registry.npmjs.org
 
+      - name: Determine npm dist-tag
+        id: npm-tag
+        run: |
+          VERSION=$(cat VERSION)
+          if echo "$VERSION" | grep -q "alpha"; then
+            echo "tag=alpha" >> "$GITHUB_OUTPUT"
+          elif echo "$VERSION" | grep -q "beta"; then
+            echo "tag=beta" >> "$GITHUB_OUTPUT"
+          elif echo "$VERSION" | grep -q "rc"; then
+            echo "tag=rc" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Copy binaries into platform packages
         run: |
           cp linux-x86_64/muninn.so    npm/platforms/linux-x64/muninn.so
@@ -200,11 +214,11 @@ jobs:
       - name: Publish platform packages
         run: |
           for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            npm publish ./npm/platforms/$target --provenance --access public
+            npm publish ./npm/platforms/$target --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
           done
 
       - name: Publish main package
-        run: npm publish ./npm --provenance --access public
+        run: npm publish ./npm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
   # ── Publish WASM to NPM ─────────────────────────────────
   publish-wasm:
@@ -226,7 +240,21 @@ jobs:
           node-version: "22"
           registry-url: https://registry.npmjs.org
 
-      - run: npm publish ./npm/wasm --provenance --access public
+      - name: Determine npm dist-tag
+        id: npm-tag
+        run: |
+          VERSION=$(cat VERSION)
+          if echo "$VERSION" | grep -q "alpha"; then
+            echo "tag=alpha" >> "$GITHUB_OUTPUT"
+          elif echo "$VERSION" | grep -q "beta"; then
+            echo "tag=beta" >> "$GITHUB_OUTPUT"
+          elif echo "$VERSION" | grep -q "rc"; then
+            echo "tag=rc" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: npm publish ./npm/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
   # ── Upload to GitHub Release ─────────────────────────────
   upload-release:

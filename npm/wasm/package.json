@@ -1,10 +1,10 @@
 {
   "name": "@sqlite-muninn/wasm",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.5",
   "description": "sqlite-muninn WebAssembly build — SQLite with HNSW, graph, and Node2Vec in the browser",
   "repository": {
     "type": "git",
-    "url": "https://github.com/neozenith/sqlite-muninn.git"
+    "url": "git+https://github.com/neozenith/sqlite-muninn.git"
   },
   "license": "MIT",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "sqlite-muninn",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.5",
   "description": "HNSW vector search + graph traversal + Node2Vec for SQLite",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -16,7 +16,7 @@
   "keywords": ["sqlite", "vector", "hnsw", "graph", "node2vec", "search"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/neozenith/sqlite-muninn.git"
+    "url": "git+https://github.com/neozenith/sqlite-muninn.git"
   },
   "scripts": {
     "build": "tsup",
@@ -32,11 +32,11 @@
     "VERSION"
   ],
   "optionalDependencies": {
-    "@sqlite-muninn/darwin-arm64": "0.1.0-alpha.3",
-    "@sqlite-muninn/darwin-x64": "0.1.0-alpha.3",
-    "@sqlite-muninn/linux-x64": "0.1.0-alpha.3",
-    "@sqlite-muninn/linux-arm64": "0.1.0-alpha.3",
-    "@sqlite-muninn/win32-x64": "0.1.0-alpha.3"
+    "@sqlite-muninn/darwin-arm64": "0.1.0-alpha.5",
+    "@sqlite-muninn/darwin-x64": "0.1.0-alpha.5",
+    "@sqlite-muninn/linux-x64": "0.1.0-alpha.5",
+    "@sqlite-muninn/linux-arm64": "0.1.0-alpha.5",
+    "@sqlite-muninn/win32-x64": "0.1.0-alpha.5"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
