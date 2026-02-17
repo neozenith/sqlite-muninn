@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "sqlite-muninn"
 dynamic = ["version"]
 description = "HNSW vector search + graph traversal + Node2Vec for SQLite"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 license = "MIT"
 readme = "README.md"
 keywords = ["sqlite", "vector", "hnsw", "graph", "node2vec", "search"]
@@ -35,7 +35,9 @@ sqlite_muninn = ["*.so", "*.dylib", "*.dll"]
 # Development dependency groups (not package dependencies)
 [dependency-groups]
 benchmark = [
-    "numpy>=2.4.2",
+    "numpy>=2.0",
+    "numba>=0.60",
+    "umap-learn>=0.5.7",
     "plotly>=6.5.2",
     "jinja2>=3.1.0",
     "sqliteai-vector>=0.9.70",

@@ -39,6 +39,13 @@ export function useGraphRAGQuery() {
   })
 }
 
+export function useKGSearch() {
+  return useMutation({
+    mutationFn: ({ query, k }: { query: string; k?: number }) =>
+      kgService.queryKGSearch(query, k),
+  })
+}
+
 /** Embeddings for KG stages: stage 2 → chunks_vec, stage 7 → node2vec_emb */
 const STAGE_EMBEDDING_INDEX: Record<number, string> = {
   2: 'chunks_vec',

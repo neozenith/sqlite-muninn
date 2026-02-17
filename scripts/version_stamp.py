@@ -35,12 +35,6 @@ TARGETS: list[tuple[str, re.Pattern[str], str]] = [
     ),
     ("npm/package.json", _VERSION_RE, _VERSION_REPL),
     ("npm/package.json", _OPTIONAL_DEP_RE, _OPTIONAL_DEP_REPL),
-    ("npm/platforms/darwin-arm64/package.json", _VERSION_RE, _VERSION_REPL),
-    ("npm/platforms/darwin-x64/package.json", _VERSION_RE, _VERSION_REPL),
-    ("npm/platforms/linux-x64/package.json", _VERSION_RE, _VERSION_REPL),
-    ("npm/platforms/linux-arm64/package.json", _VERSION_RE, _VERSION_REPL),
-    ("npm/platforms/win32-x64/package.json", _VERSION_RE, _VERSION_REPL),
-    ("npm/wasm/package.json", _VERSION_RE, _VERSION_REPL),
 ]
 
 

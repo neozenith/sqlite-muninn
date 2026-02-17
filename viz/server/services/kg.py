@@ -3,12 +3,41 @@
 import logging
 from typing import Any
 
+import numpy as np
+
 try:
     import pysqlite3 as sqlite3  # type: ignore[import-not-found]
 except ImportError:
     import sqlite3
 
+try:
+    from sentence_transformers import SentenceTransformer
+
+    _HAS_SENTENCE_TRANSFORMERS = True
+except ImportError:
+    _HAS_SENTENCE_TRANSFORMERS = False
+
 log = logging.getLogger(__name__)
+
+# ── Embedding model cache ─────────────────────────────────────────────
+
+_embedding_model: Any = None
+
+
+def _get_embedding_model() -> Any:
+    """Lazy-load and cache the sentence-transformers model."""
+    global _embedding_model
+    if _embedding_model is None:
+        if not _HAS_SENTENCE_TRANSFORMERS:
+            raise RuntimeError("sentence-transformers not installed. pip install sentence-transformers")
+        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+        log.info("Loaded embedding model: all-MiniLM-L6-v2")
+    return _embedding_model
+
+
+def _pack_vector(v: np.ndarray) -> bytes:
+    """Pack a numpy array into a float32 blob for SQLite."""
+    return v.astype(np.float32).tobytes()
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -564,5 +593,170 @@ def run_graphrag_query(
         "total_passages": len(unique_passages),
         "top_passages": unique_passages[:10],
     }
+
+    return result
+
+
+# ── KG Search (with Python embedding + CTE graph query) ──────────────
+
+
+_CTE_NODES_SQL = """
+WITH
+vss_matches AS (
+    SELECT rowid AS vec_rowid, distance AS cosine_distance
+    FROM entities_vec
+    WHERE vector MATCH ? AND k = ?
+),
+vss_entities AS (
+    SELECT m.name, v.cosine_distance, (1.0 - v.cosine_distance) AS similarity
+    FROM vss_matches v
+    JOIN entity_vec_map m ON m.rowid = v.vec_rowid
+),
+anchor AS (
+    SELECT name FROM vss_entities ORDER BY cosine_distance ASC LIMIT 1
+),
+bfs_neighbors AS (
+    SELECT node, depth
+    FROM graph_bfs
+    WHERE edge_table = 'relations' AND src_col = 'src' AND dst_col = 'dst'
+      AND start_node = (SELECT name FROM anchor)
+      AND max_depth = ? AND direction = 'both'
+),
+scored AS (
+    SELECT b.node, b.depth,
+           COALESCE(v.cosine_distance, 1.0) AS cosine_distance,
+           COALESCE(v.similarity, 0.0) AS similarity
+    FROM bfs_neighbors b
+    LEFT JOIN vss_entities v ON v.name = b.node
+)
+SELECT node AS name, depth, similarity FROM scored
+"""
+
+
+def run_kg_search(
+    conn: sqlite3.Connection,
+    query_text: str,
+    *,
+    k: int = 10,
+) -> dict[str, Any]:
+    """Run a KG search with server-side embedding, FTS, VSS + UMAP, and CTE graph query.
+
+    Degrades gracefully: FTS always works; VSS and graph need sentence-transformers.
+    """
+    result: dict[str, Any] = {"query": query_text}
+
+    # Embed query if model available; VSS + graph need this
+    query_blob: bytes | None = None
+    try:
+        model = _get_embedding_model()
+        embedding = model.encode([query_text], normalize_embeddings=True)[0]
+        query_blob = _pack_vector(embedding)
+    except RuntimeError:
+        log.warning("sentence-transformers not available; VSS and graph search disabled")
+
+    # 1. FTS results (no embedding needed)
+    fts_results: list[dict[str, Any]] = []
+    if _table_exists(conn, "chunks_fts"):
+        try:
+            rows = conn.execute(
+                "SELECT chunk_id, text FROM chunks WHERE chunk_id IN "
+                "(SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 20)",
+                (query_text,),
+            ).fetchall()
+            fts_results = [{"chunk_id": r["chunk_id"], "text": r["text"]} for r in rows]
+        except Exception as e:
+            log.warning("FTS search failed: %s", e)
+    result["fts_results"] = fts_results
+
+    # 2. VSS results on chunks_vec + UMAP coords (needs embedding)
+    vss_results: list[dict[str, Any]] = []
+    if query_blob is not None and _table_exists(conn, "chunks_vec_nodes"):
+        try:
+            rows = conn.execute(
+                "SELECT cv.rowid, cv.distance FROM chunks_vec cv WHERE cv.vector MATCH ? AND cv.k = ?",
+                (query_blob, k),
+            ).fetchall()
+            rowids = [r["rowid"] for r in rows]
+            distances = {r["rowid"]: r["distance"] for r in rows}
+
+            if rowids:
+                placeholders = ",".join("?" * len(rowids))
+                # Join with chunks for text and umap for 3D coords
+                chunk_rows = conn.execute(
+                    f"SELECT chunk_id, text FROM chunks WHERE chunk_id IN ({placeholders})",
+                    rowids,
+                ).fetchall()
+                chunk_map = {r["chunk_id"]: r["text"] for r in chunk_rows}
+
+                umap_map: dict[int, dict[str, float]] = {}
+                if _table_exists(conn, "chunks_vec_umap"):
+                    umap_rows = conn.execute(
+                        f"SELECT id, x3d, y3d, z3d FROM chunks_vec_umap WHERE id IN ({placeholders})",
+                        rowids,
+                    ).fetchall()
+                    umap_map = {r["id"]: {"x3d": r["x3d"], "y3d": r["y3d"], "z3d": r["z3d"]} for r in umap_rows}
+
+                for rid in rowids:
+                    dist = distances[rid]
+                    coords = umap_map.get(rid, {})
+                    vss_results.append(
+                        {
+                            "chunk_id": rid,
+                            "similarity": round(1.0 - dist, 4),
+                            "distance": round(dist, 4),
+                            "text": chunk_map.get(rid, ""),
+                            "x3d": coords.get("x3d"),
+                            "y3d": coords.get("y3d"),
+                            "z3d": coords.get("z3d"),
+                        }
+                    )
+        except Exception as e:
+            log.warning("VSS search failed: %s", e)
+    result["vss_results"] = vss_results
+
+    # 3. CTE graph search: VSS on entities_vec → anchor → BFS → scored nodes
+    #    Split into two queries to avoid UNION ALL + virtual table CTE bug in SQLite
+    #    (CTEs referencing virtual tables aren't reliably materialized across UNION ALL)
+    graph_nodes: list[dict[str, Any]] = []
+    graph_edges: list[dict[str, Any]] = []
+    if query_blob is not None and _table_exists(conn, "entities_vec_nodes") and _table_exists(conn, "entity_vec_map"):
+        try:
+            # Query 1: Get nodes via CTE (references virtual tables once)
+            rows = conn.execute(
+                _CTE_NODES_SQL,
+                (query_blob, 50, 1),
+            ).fetchall()
+            node_names: list[str] = []
+            for row in rows:
+                graph_nodes.append(
+                    {
+                        "name": row["name"],
+                        "depth": row["depth"],
+                        "similarity": round(float(row["similarity"]), 4),
+                        "is_anchor": row["depth"] == 0,
+                    }
+                )
+                node_names.append(row["name"])
+
+            # Query 2: Get edges using collected node names (plain SQL, no virtual tables)
+            if len(node_names) > 1:
+                placeholders = ",".join("?" * len(node_names))
+                edge_rows = conn.execute(
+                    f"SELECT src, rel_type, dst FROM relations "
+                    f"WHERE src IN ({placeholders}) AND dst IN ({placeholders})",
+                    node_names + node_names,
+                ).fetchall()
+                for row in edge_rows:
+                    graph_edges.append(
+                        {
+                            "src": row["src"],
+                            "rel": row["rel_type"],
+                            "dst": row["dst"],
+                        }
+                    )
+        except Exception as e:
+            log.warning("CTE graph search failed: %s", e)
+    result["graph_nodes"] = graph_nodes
+    result["graph_edges"] = graph_edges
 
     return result

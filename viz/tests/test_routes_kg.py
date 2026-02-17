@@ -56,21 +56,24 @@ def test_stage_unavailable_returns_gracefully(client: TestClient) -> None:
     assert data.get("available") is False
 
 
-def test_graphrag_query(client: TestClient) -> None:
-    """POST /api/kg/query returns a result dict with stages."""
+def test_kg_search_query(client: TestClient) -> None:
+    """POST /api/kg/query returns a result dict with search results."""
     resp = client.post("/api/kg/query", json={"query": "test query"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["query"] == "test query"
-    assert "stages" in data
+    assert "fts_results" in data
+    assert "vss_results" in data
+    assert "graph_nodes" in data
+    assert "graph_edges" in data
 
 
-def test_graphrag_query_error_handling(client: TestClient) -> None:
-    """POST /api/kg/query returns 500 when graphrag execution fails."""
-    with patch("server.services.kg.run_graphrag_query", side_effect=RuntimeError("forced error")):
+def test_kg_search_error_handling(client: TestClient) -> None:
+    """POST /api/kg/query returns 500 when KG search fails."""
+    with patch("server.routes.kg.run_kg_search", side_effect=RuntimeError("forced error")):
         resp = client.post("/api/kg/query", json={"query": "test query"})
         assert resp.status_code == 500
-        assert "GraphRAG query failed" in resp.json()["detail"]
+        assert "KG search failed" in resp.json()["detail"]
 
 
 def test_stage_items_invalid_stage(client: TestClient) -> None:

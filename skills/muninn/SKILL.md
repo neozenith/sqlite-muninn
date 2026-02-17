@@ -14,7 +14,7 @@ compatibility: >
   Node.js: `npm install sqlite-muninn`. C: download amalgamation from GitHub Releases.
 metadata:
   author: joshpeak
-  version: "0.1.0-alpha.8"
+  version: "0.1.0-alpha.10"
   repository: https://github.com/user/sqlite-muninn
 allowed-tools: Bash(sqlite3:*), Bash(python:*), Bash(node:*)
 ---

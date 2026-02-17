@@ -45,21 +45,40 @@ test.describe('KG Pipeline Explorer', () => {
     await checkpoint(page, 'kg-funnel-visible');
   });
 
-  test('has GraphRAG query page', async ({ page }) => {
+  test('3-panel KG search with matching checkpoints', async ({ page }) => {
     setupConsoleMonitor(page);
 
     // Navigate directly to the KG query page
     await page.goto('/kg/query/');
-    await checkpoint(page, 'kg-query-page-loaded');
 
-    // Search input should be visible
+    // 1. Initial state — 3-panel layout before search
     const queryInput = page.locator('input[placeholder*="knowledge graph"]');
     await expect(queryInput).toBeVisible({ timeout: 10_000 });
-
-    // Search button should be present
     const searchButton = page.getByRole('button', { name: 'Search' });
     await expect(searchButton).toBeVisible();
+    await checkpoint(page, 'viz-checkpoint-01-initial-state');
 
-    await checkpoint(page, 'kg-graphrag-ready');
+    // 2. Type query character by character for video
+    await queryInput.pressSequentially('trade and commerce between nations', { delay: 50 });
+    await searchButton.click();
+
+    // 3. Wait for FTS results in left panel
+    const ftsCard = page.locator('.border.rounded.p-2').first();
+    await expect(ftsCard).toBeVisible({ timeout: 30_000 });
+    await checkpoint(page, 'viz-checkpoint-02-fts-results');
+
+    // 4. Check embedding panel shows points count
+    const embeddingCount = page.getByText(/\d+ points/);
+    await expect(embeddingCount).toBeVisible({ timeout: 30_000 });
+    await checkpoint(page, 'viz-checkpoint-03-embedding-results');
+
+    // 5. Check graph panel shows nodes count
+    const graphCount = page.getByText(/\d+ nodes/);
+    await expect(graphCount).toBeVisible({ timeout: 30_000 });
+    await checkpoint(page, 'viz-checkpoint-04-graph-results');
+
+    // 6. Final state — all three panels populated, hold for 6s
+    await page.waitForTimeout(6_000);
+    await checkpoint(page, 'viz-checkpoint-05-final-state');
   });
 });

@@ -9,6 +9,7 @@ export default defineConfig({
   reporter: 'list',
   use: {
     baseURL: 'http://localhost:5281',
+    colorScheme: 'dark',
     video: { mode: 'on', size: { width: 1280, height: 720 } },
     viewport: { width: 1280, height: 720 },
     screenshot: 'off', // We handle screenshots manually via checkpoint()

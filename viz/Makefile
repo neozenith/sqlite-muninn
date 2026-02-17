@@ -82,12 +82,12 @@ typecheck-frontend: install-frontend             ## Type-check TypeScript with t
 
 E2E_DIR = frontend/test-results
 
-%.mp4: %.webm                                      ## Convert .webm to .mp4 (5x speed, 10fps)
-	ffmpeg -i $< -vf "setpts=0.2*PTS,fps=10" -s 1280x720 -c:v libx264 -crf 20 -an -y $@
+%.mp4: %.webm                                      ## Convert .webm to .mp4 (2x speed, 10fps)
+	ffmpeg -i $< -vf "setpts=0.5*PTS,fps=10" -s 1280x720 -c:v libx264 -crf 20 -an -y $@
 
-%.gif: %.webm                                      ## Convert .webm to .gif (5x speed, 10fps)
-	ffmpeg -i $< -vf "setpts=0.2*PTS,fps=10,scale=1280:-1:flags=lanczos,palettegen" -y $@.palette.png
-	ffmpeg -i $< -i $@.palette.png -filter_complex "setpts=0.2*PTS,fps=10,scale=1280:-1:flags=lanczos[x];[x][1:v]paletteuse" -y $@
+%.gif: %.webm                                      ## Convert .webm to .gif (2x speed, 10fps)
+	ffmpeg -i $< -vf "setpts=0.5*PTS,fps=10,scale=1280:-1:flags=lanczos,palettegen" -y $@.palette.png
+	ffmpeg -i $< -i $@.palette.png -filter_complex "setpts=0.5*PTS,fps=10,scale=1280:-1:flags=lanczos[x];[x][1:v]paletteuse" -y $@
 	rm -f $@.palette.png
 
 e2e-videos: test-e2e                                            ## Convert all E2E videos

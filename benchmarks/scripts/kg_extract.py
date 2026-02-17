@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from umap import UMAP
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -59,6 +60,11 @@ EMBEDDING_DIM = 384
 # HNSW parameters for KG indexes
 HNSW_M = 16
 HNSW_EF_CONSTRUCTION = 200
+
+# UMAP dimensionality reduction parameters
+UMAP_PARAMS = {"random_state": 42, "n_neighbors": 15, "min_dist": 0.1}
+UMAP_SCALE = 30.0
+UMAP_MIN_SAMPLES = 20
 
 # Chunking parameters
 CHUNK_WINDOW = 256
@@ -526,6 +532,21 @@ def build_cooccurrence_edges(conn):
 # ── Embedding ─────────────────────────────────────────────────────────
 
 
+def embed_and_insert(conn, table_name, ids, texts, model):
+    """Embed texts into an HNSW table. Returns np.ndarray of embeddings."""
+    t0 = time.time()
+    embeddings = model.encode(texts, batch_size=256, normalize_embeddings=True, show_progress_bar=False)
+
+    for row_id, emb in zip(ids, embeddings, strict=True):
+        conn.execute(
+            f"INSERT INTO {table_name} (rowid, vector) VALUES (?, ?)",
+            (row_id, pack_vector(emb)),
+        )
+    conn.commit()
+    log.info("Embedded %d texts into %s (%.1fs)", len(texts), table_name, time.time() - t0)
+    return embeddings
+
+
 def embed_chunks_and_entities(conn, chunks, model_name=DEFAULT_EMBEDDING_MODEL):
     """Embed chunks and entity names into their respective HNSW tables."""
     if not HAS_SENTENCE_TRANSFORMERS:
@@ -537,16 +558,8 @@ def embed_chunks_and_entities(conn, chunks, model_name=DEFAULT_EMBEDDING_MODEL):
 
     # Embed chunks
     log.info("Embedding %d chunks...", len(chunks))
-    t0 = time.time()
-    chunk_embeddings = model.encode(chunks, batch_size=256, normalize_embeddings=True, show_progress_bar=False)
-
-    for chunk_id, emb in enumerate(chunk_embeddings, 1):
-        conn.execute(
-            "INSERT INTO chunks_vec (rowid, vector) VALUES (?, ?)",
-            (chunk_id, pack_vector(emb)),
-        )
-    conn.commit()
-    log.info("Embedded %d chunks into chunks_vec (%.1fs)", len(chunks), time.time() - t0)
+    chunk_ids = list(range(1, len(chunks) + 1))
+    embed_and_insert(conn, "chunks_vec", chunk_ids, list(chunks), model)
 
     # Embed unique entity names
     entity_names = [r[0] for r in conn.execute("SELECT DISTINCT name FROM entities").fetchall()]
@@ -555,15 +568,8 @@ def embed_chunks_and_entities(conn, chunks, model_name=DEFAULT_EMBEDDING_MODEL):
         return
 
     log.info("Embedding %d unique entity names...", len(entity_names))
-    t0 = time.time()
-    entity_embeddings = model.encode(entity_names, batch_size=256, normalize_embeddings=True, show_progress_bar=False)
-
-    for idx, (_name, emb) in enumerate(zip(entity_names, entity_embeddings, strict=True), 1):
-        conn.execute(
-            "INSERT INTO entities_vec (rowid, vector) VALUES (?, ?)",
-            (idx, pack_vector(emb)),
-        )
-    conn.commit()
+    entity_ids = list(range(1, len(entity_names) + 1))
+    embed_and_insert(conn, "entities_vec", entity_ids, entity_names, model)
 
     # Store entity name -> rowid mapping in a helper table for coalescing
     conn.execute("CREATE TABLE IF NOT EXISTS entity_vec_map (rowid INTEGER PRIMARY KEY, name TEXT NOT NULL)")
@@ -572,7 +578,91 @@ def embed_chunks_and_entities(conn, chunks, model_name=DEFAULT_EMBEDDING_MODEL):
         [(idx, name) for idx, name in enumerate(entity_names, 1)],
     )
     conn.commit()
-    log.info("Embedded %d entity names into entities_vec (%.1fs)", len(entity_names), time.time() - t0)
+    log.info("Stored %d entity name mappings in entity_vec_map", len(entity_names))
+
+
+# ── UMAP dimensionality reduction ─────────────────────────────────────
+
+
+def load_vectors_from_shadow(conn, table, dim):
+    """Load all non-deleted vectors from an HNSW shadow _nodes table."""
+    rows = conn.execute(f'SELECT id, vector FROM "{table}" WHERE deleted = 0 ORDER BY id').fetchall()
+    ids = []
+    vectors = []
+    for row_id, blob in rows:
+        floats = struct.unpack(f"<{dim}f", blob)
+        ids.append(row_id)
+        vectors.append(floats)
+    return ids, np.array(vectors, dtype=np.float32)
+
+
+def compute_umap(vectors, n_components):
+    """Run UMAP dimensionality reduction with standard parameters."""
+    n_neighbors = min(UMAP_PARAMS["n_neighbors"], len(vectors) - 1)
+    reducer = UMAP(
+        n_components=n_components,
+        n_neighbors=n_neighbors,
+        min_dist=UMAP_PARAMS["min_dist"],
+        random_state=UMAP_PARAMS["random_state"],
+    )
+    return reducer.fit_transform(vectors)
+
+
+def create_umap_tables(conn):
+    """Discover all HNSW _nodes tables and create corresponding _umap tables with 2D+3D coordinates."""
+    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%_nodes'")
+    tables = []
+    for (name,) in cursor.fetchall():
+        cols = {row[1] for row in conn.execute(f'PRAGMA table_info("{name}")').fetchall()}
+        if not {"id", "vector", "level", "deleted"}.issubset(cols):
+            continue
+        row = conn.execute(f'SELECT vector FROM "{name}" WHERE deleted = 0 LIMIT 1').fetchone()
+        if row is None:
+            continue
+        dim = len(row[0]) // 4
+        count = conn.execute(f'SELECT COUNT(*) FROM "{name}" WHERE deleted = 0').fetchone()[0]
+        tables.append({"name": name, "dim": dim, "count": count})
+
+    if not tables:
+        log.warning("No HNSW vector tables found for UMAP")
+        return
+
+    log.info("UMAP: found %d vector tables", len(tables))
+    for t in tables:
+        name, count, dim = t["name"], t["count"], t["dim"]
+        if count < UMAP_MIN_SAMPLES:
+            log.warning("  Skipping %s: only %d vectors (need >= %d)", name, count, UMAP_MIN_SAMPLES)
+            continue
+
+        log.info("  Processing %s (%d vectors, %d-dim)...", name, count, dim)
+        ids, vectors = load_vectors_from_shadow(conn, name, dim)
+
+        log.info("    Computing 2D UMAP...")
+        coords_2d = compute_umap(vectors, n_components=2) * UMAP_SCALE
+
+        log.info("    Computing 3D UMAP...")
+        coords_3d = compute_umap(vectors, n_components=3) * UMAP_SCALE
+
+        umap_table = name.replace("_nodes", "_umap")
+        conn.execute(f'DROP TABLE IF EXISTS "{umap_table}"')
+        conn.execute(f"""
+            CREATE TABLE "{umap_table}" (
+                id INTEGER PRIMARY KEY,
+                x2d REAL NOT NULL, y2d REAL NOT NULL,
+                x3d REAL NOT NULL, y3d REAL NOT NULL, z3d REAL NOT NULL
+            )
+        """)
+        data = [
+            (ids[i], float(coords_2d[i, 0]), float(coords_2d[i, 1]),
+             float(coords_3d[i, 0]), float(coords_3d[i, 1]), float(coords_3d[i, 2]))
+            for i in range(len(ids))
+        ]
+        conn.executemany(
+            f'INSERT INTO "{umap_table}" (id, x2d, y2d, x3d, y3d, z3d) VALUES (?, ?, ?, ?, ?, ?)',
+            data,
+        )
+        conn.commit()
+        log.info("    Created %s with %d rows", umap_table, len(data))
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────
@@ -658,6 +748,9 @@ def run_extraction(book_id, text_file=None, strategies=None, force=False, embedd
 
     # Embed chunks and entities
     embed_chunks_and_entities(conn, chunks, embedding_model)
+
+    # Compute UMAP projections for all HNSW tables
+    create_umap_tables(conn)
 
     # Write metadata
     conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('book_id', ?)", (str(book_id),))

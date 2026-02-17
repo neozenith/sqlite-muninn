@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from server.services.db import db_session
-from server.services.kg import get_pipeline_summary, get_stage_detail
+from server.services.kg import get_pipeline_summary, get_stage_detail, run_kg_search
 
 log = logging.getLogger(__name__)
 
@@ -202,22 +202,19 @@ def entities_by_chunk(
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-class GraphRAGRequest(BaseModel):
-    """Request body for GraphRAG query."""
+class KGQueryRequest(BaseModel):
+    """Request body for KG search query."""
 
     query: str
     k: int = 10
-    max_depth: int = 2
 
 
 @router.post("/query")
-def graphrag_query(request: GraphRAGRequest, conn: sqlite3.Connection = Depends(db_session)) -> dict[str, Any]:
-    """Execute a GraphRAG query (stages 2-7, using pre-embedded chunks)."""
+def kg_query(request: KGQueryRequest, conn: sqlite3.Connection = Depends(db_session)) -> dict[str, Any]:
+    """Execute a KG search with server-side embedding, FTS, VSS + UMAP, and CTE graph."""
 
     try:
-        from server.services.kg import run_graphrag_query
-
-        return run_graphrag_query(conn, request.query, k=request.k, max_depth=request.max_depth)
+        return run_kg_search(conn, request.query, k=request.k)
     except Exception as e:
-        log.error("GraphRAG query failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"GraphRAG query failed: {e}") from e
+        log.error("KG search failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"KG search failed: {e}") from e

@@ -113,7 +113,20 @@ export function EmbeddingCanvas({
         layers={[layer]}
         controller={true}
         getTooltip={({ object }: { object?: ScatterplotDatum }) =>
-          object ? `${object.label || `Point #${object.id}`}` : null
+          object && object.text
+            ? {
+                html: `<div style="max-width:250px">${object.text.replace(/\n/g, '<br/>')}</div>`,
+                style: {
+                  backgroundColor: 'rgba(0,0,0,0.85)',
+                  color: 'white',
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                },
+              }
+            : object
+              ? `${object.label || `Point #${object.id}`}`
+              : null
         }
       />
     </div>

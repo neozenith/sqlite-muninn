@@ -32,7 +32,7 @@
   <body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col">
     <!-- Header -->
     <header class="border-b border-gray-800 px-6 py-4">
-      <div class="flex items-center justify-between max-w-screen-xl mx-auto">
+      <div class="flex items-center justify-between max-w-screen-2xl mx-auto">
         <div class="flex items-center gap-3">
           <h1 class="text-xl font-bold tracking-tight">
             muninn <span class="text-indigo-400 font-normal">WASM Demo</span>
@@ -60,7 +60,7 @@
 
     <!-- Search Bar -->
     <div class="px-6 py-4 border-b border-gray-800">
-      <div class="max-w-screen-xl mx-auto">
+      <div class="max-w-screen-2xl mx-auto">
         <div class="relative">
           <input
             id="search-input"
@@ -79,12 +79,37 @@
       </div>
     </div>
 
-    <!-- Main Content: Split View -->
-    <main class="flex-1 px-6 py-4">
+    <!-- Main Content: 3-Panel Split View -->
+    <main class="flex-1 px-6 py-4 overflow-hidden">
       <div
-        class="max-w-screen-xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-4 h-full"
+        class="max-w-screen-2xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-4"
+        style="height: calc(100vh - 11rem)"
       >
-        <!-- Left: Deck.GL 3D Embedding Visualization -->
+        <!-- Left: FTS Search Results -->
+        <div
+          class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden flex flex-col"
+        >
+          <div
+            class="px-4 py-2 border-b border-gray-800 flex items-center justify-between"
+          >
+            <h2 class="text-sm font-medium text-gray-400">
+              FTS Results
+            </h2>
+            <span id="results-count" class="text-xs text-gray-600"
+              >0 results</span
+            >
+          </div>
+          <div id="results-list" class="flex-1 overflow-y-auto thin-scrollbar p-3 space-y-2">
+            <div
+              id="results-placeholder"
+              class="flex items-center justify-center h-full text-gray-600 text-sm"
+            >
+              Search to see text matches
+            </div>
+          </div>
+        </div>
+
+        <!-- Center: Deck.GL 3D Embedding Visualization + Results List -->
         <div
           class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden flex flex-col"
         >
@@ -98,7 +123,7 @@
               >0 points</span
             >
           </div>
-          <div id="deckgl-container" class="flex-1 relative min-h-[400px]">
+          <div id="deckgl-container" class="relative" style="flex: 6">
             <div
               id="deckgl-placeholder"
               class="absolute inset-0 flex items-center justify-center text-gray-600 text-sm"
@@ -106,6 +131,11 @@
               Search to visualize embeddings in 3D
             </div>
           </div>
+          <div
+            id="embedding-results"
+            class="overflow-y-auto thin-scrollbar border-t border-gray-800 p-2 space-y-1 hidden"
+            style="flex: 4"
+          ></div>
         </div>
 
         <!-- Right: Cytoscape Graph Visualization -->
@@ -120,26 +150,71 @@
               >0 nodes</span
             >
           </div>
-          <div id="cy" class="flex-1 min-h-[400px]"></div>
+          <div id="cy" class="flex-1 min-h-0"></div>
+          <div
+            id="graph-controls"
+            class="px-3 py-2 border-t border-gray-800 space-y-1 hidden"
+          >
+            <label
+              class="flex items-center justify-between text-xs text-gray-400"
+            >
+              <span>Node repulsion</span
+              ><span id="repulsion-val" class="font-mono">4500</span>
+            </label>
+            <input
+              type="range"
+              id="repulsion"
+              min="500"
+              max="20000"
+              step="500"
+              value="4500"
+              class="w-full h-1"
+            />
+            <label
+              class="flex items-center justify-between text-xs text-gray-400"
+            >
+              <span>Edge length</span
+              ><span id="edge-length-val" class="font-mono">50</span>
+            </label>
+            <input
+              type="range"
+              id="edge-length"
+              min="10"
+              max="200"
+              step="5"
+              value="50"
+              class="w-full h-1"
+            />
+            <label
+              class="flex items-center justify-between text-xs text-gray-400"
+            >
+              <span>Gravity</span
+              ><span id="gravity-val" class="font-mono">0.25</span>
+            </label>
+            <input
+              type="range"
+              id="gravity"
+              min="0"
+              max="2"
+              step="0.05"
+              value="0.25"
+              class="w-full h-1"
+            />
+            <button
+              id="run-layout-btn"
+              class="w-full text-xs py-1 mt-1 border border-gray-700 rounded hover:bg-gray-800 text-gray-300"
+            >
+              Re-run Layout
+            </button>
+          </div>
         </div>
       </div>
     </main>
 
-    <!-- Results Panel -->
-    <div id="results-panel" class="border-t border-gray-800 px-6 py-4 hidden">
-      <div class="max-w-screen-xl mx-auto">
-        <h3 class="text-sm font-medium text-gray-400 mb-3">Search Results</h3>
-        <div
-          id="results-list"
-          class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-64 overflow-y-auto"
-        ></div>
-      </div>
-    </div>
-
     <!-- Footer / Status Bar -->
     <footer class="border-t border-gray-800 px-6 py-2">
       <div
-        class="max-w-screen-xl mx-auto flex items-center justify-between text-xs text-gray-600"
+        class="max-w-screen-2xl mx-auto flex items-center justify-between text-xs text-gray-600"
       >
         <span id="db-status">Database: not loaded</span>
         <span>muninn SQLite extension &mdash; WASM build</span>

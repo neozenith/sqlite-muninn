@@ -68,7 +68,7 @@ build: $(WASM_JS)                                  ## Build WASM module to build
 ######################################################################
 $(DEMO_DB_BUILD):
 	make -C ../benchmarks kg-demo
-	
+
 $(DEMO_DB): $(DEMO_DB_BUILD)   ## Download demo DB if missing
 	@mkdir -p $(dir $@)
 	cp $< $@
@@ -83,11 +83,11 @@ dev: build $(DEMO_DB)                                         ## Start dev serve
 ######################################################################
 
 dist: $(WASM_JS)                                   ## Copy WASM artifacts to ../dist/
-	@mkdir -p ../dist
-	cp build/muninn_sqlite3.js ../dist/
-	cp build/muninn_sqlite3.wasm ../dist/
+	@mkdir -p ../dist/nodejs/platforms/wasm/
+	cp build/muninn_sqlite3.js ../dist/nodejs/platforms/wasm/
+	cp build/muninn_sqlite3.wasm ../dist/nodejs/platforms/wasm/
 	@echo "WASM artifacts copied to dist/"
-	@ls -lh ../dist/muninn_sqlite3.*
+	@ls -lh ../dist/nodejs/platforms/wasm/muninn_sqlite3.*
 
 ######################################################################
 # TEST

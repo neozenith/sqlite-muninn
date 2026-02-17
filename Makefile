@@ -155,12 +155,11 @@ dist/muninn.c dist/muninn.h: $(SRC) $(HEADERS)
 version-stamp:                                 ## Stamp VERSION into skill files + package.json
 	.venv/bin/python scripts/version_stamp.py
 	npm --prefix ./npm install # update package-lock.json with new version
-	make changelog
 
-dist: dist-extension dist-python dist-npm amalgamation ## Build all distributable artifacts into dist/
+dist: dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
 	@echo ""
 	@echo "All artifacts in dist/:"
-	@ls -lh dist/ dist/python/ dist/npm/ 2>/dev/null
+	@ls -lh dist/ dist/python/ dist/nodejs/ 2>/dev/null
 	@if [ -f dist/muninn_sqlite3.wasm ]; then echo ""; ls -lh dist/muninn_sqlite3.*; fi
 
 dist-extension: version-stamp build/muninn$(EXT) ## Copy native extension to dist/
@@ -171,14 +170,14 @@ dist-python: version-stamp build/muninn$(EXT)  ## Build Python wheel into dist/p
 	@mkdir -p dist/python
 	uv build --wheel --out-dir dist/python
 
-dist-npm: version-stamp                       ## Pack npm tarball into dist/npm/
-	@mkdir -p dist/npm
-	npm pack --pack-destination dist/npm npm/
+dist-nodejs: version-stamp                       ## Pack npm tarball into dist/nodejs/
+	@mkdir -p dist/nodejs/
+	npm pack --pack-destination dist/nodejs npm/
 
 dist-wasm: amalgamation                       ## Build WASM module into dist/ (requires emcc)
 	$(MAKE) -C wasm dist
 
-changelog:                                     ## Generate CHANGELOG.md from git history
+changelog: version-stamp                                     ## Generate CHANGELOG.md from git history
 	.venv/bin/git-cliff -o CHANGELOG.md
 	@echo "CHANGELOG.md updated"
 

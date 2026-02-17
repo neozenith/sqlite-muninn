@@ -253,5 +253,5 @@ jobs:
         with:
           name: wasm
           path: |
-            dist/muninn_sqlite3.js
-            dist/muninn_sqlite3.wasm
+            dist/nodejs/platforms/wasm/muninn_sqlite3.js
+            dist/nodejs/platforms/wasm/muninn_sqlite3.wasm

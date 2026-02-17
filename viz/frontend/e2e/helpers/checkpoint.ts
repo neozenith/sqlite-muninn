@@ -11,6 +11,7 @@ const BENIGN_PATTERNS = [
   'deck:',        // Deck.GL internal warnings
   'Failed to initialize WebGL',
   'Failed to load resource',  // Chrome generic 500 for background API fetches (logged via failedResponses)
+  'maxTextureDimension',  // luma.gl headless: no GPU adapter → undefined device limits
 ];
 
 function isBenign(msg: string): boolean {

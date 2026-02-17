@@ -3,7 +3,7 @@
 #   Override storage: make -C benchmarks vss-embeddings STORAGE=memory
 ######################################################################
 
-PYTHON = ../.venv/bin/python
+PYTHON = uv run
 BENCH_VSS_SRC = scripts/benchmark_vss.py
 BENCH_VSS_ANALYZE_SRC = scripts/benchmark_vss_analyze.py
 BENCH_GRAPH_SRC = scripts/benchmark_graph.py

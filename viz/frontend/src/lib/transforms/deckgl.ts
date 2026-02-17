@@ -11,6 +11,8 @@ export interface ScatterplotDatum {
   radius: number
   /** Alpha channel (0–255). Background points = 128, search results = 220, selected = 255. */
   opacity: number
+  /** Optional rich text for HTML tooltip (chunk text + similarity). */
+  text?: string
 }
 
 export interface ViewState {
@@ -117,9 +119,9 @@ export function toScatterplotData(
   const hasActiveSearch = searchIds.size > 0 || selectedId != null
 
   return points.map((p) => {
-    let color: [number, number, number] = BACKGROUND_POINT_COLOR
+    let color: [number, number, number] = p.color ? [...p.color] : BACKGROUND_POINT_COLOR
     // 25% when a search is active so results stand out; 50% otherwise
-    let opacity = hasActiveSearch ? 64 : 128
+    let opacity = p.color ? 220 : hasActiveSearch ? 64 : 128
 
     if (p.id === selectedId) {
       color = SELECTED_POINT_COLOR
@@ -138,6 +140,7 @@ export function toScatterplotData(
       color,
       radius: 5,
       opacity,
+      text: typeof p.metadata?.text === 'string' ? p.metadata.text : undefined,
     }
   })
 }

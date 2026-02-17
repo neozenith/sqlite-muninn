@@ -27,10 +27,12 @@ const fullStylesheet: cytoscape.StylesheetStyle[] = [
       label: 'data(label)',
       width: 'data(size)' as any,
       height: 'data(size)' as any,
-      'font-size': '7px',
+      'font-size': '8px',
       'text-valign': 'bottom',
       'text-margin-y': 3,
-      color: '#888',
+      color: '#e5e7eb',
+      'text-outline-width': 2,
+      'text-outline-color': '#1f2937',
     },
   },
   {
@@ -134,6 +136,7 @@ export function GraphCanvas({
         style={{ width: '100%', height: '100%' }}
         cy={(cy: cytoscape.Core) => {
           if (cyRef) cyRef.current = cy
+          cy.on('layoutstop', () => cy.fit(undefined, 20))
           if (onNodeSelect) {
             cy.on('tap', 'node', (evt: cytoscape.EventObject) => {
               onNodeSelect(evt.target.id())

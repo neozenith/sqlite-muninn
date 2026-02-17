@@ -146,8 +146,8 @@ jobs:
         with:
           name: wasm
           path: |
-            dist/muninn_sqlite3.js
-            dist/muninn_sqlite3.wasm
+            dist/nodejs/platforms/wasm/muninn_sqlite3.js
+            dist/nodejs/platforms/wasm/muninn_sqlite3.wasm
 
   # ── Publish to PyPI ──────────────────────────────────────
   publish-pypi:
@@ -210,29 +210,32 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Generate npm sub-packages
+        run: python3 scripts/generate_npm_packages.py
+
       - name: Copy binaries into platform packages
         run: |
-          cp linux-x86_64/muninn.so    npm/platforms/linux-x64/muninn.so
-          cp linux-arm64/muninn.so     npm/platforms/linux-arm64/muninn.so
-          cp windows-x86_64/muninn.dll npm/platforms/win32-x64/muninn.dll
+          cp linux-x86_64/muninn.so    dist/nodejs/platforms/linux-x64/muninn.so
+          cp linux-arm64/muninn.so     dist/nodejs/platforms/linux-arm64/muninn.so
+          cp windows-x86_64/muninn.dll dist/nodejs/platforms/win32-x64/muninn.dll
           # macOS universal binary goes to both darwin packages
-          cp macos-universal/muninn.dylib npm/platforms/darwin-arm64/muninn.dylib
-          cp macos-universal/muninn.dylib npm/platforms/darwin-x64/muninn.dylib
+          cp macos-universal/muninn.dylib dist/nodejs/platforms/darwin-arm64/muninn.dylib
+          cp macos-universal/muninn.dylib dist/nodejs/platforms/darwin-x64/muninn.dylib
 
       - name: Publish darwin-arm64
-        run: npm publish ./npm/platforms/darwin-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/darwin-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
       - name: Publish darwin-x64
-        run: npm publish ./npm/platforms/darwin-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/darwin-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
       - name: Publish linux-x64
-        run: npm publish ./npm/platforms/linux-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/linux-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
       - name: Publish linux-arm64
-        run: npm publish ./npm/platforms/linux-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/linux-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
       - name: Publish win32-x64
-        run: npm publish ./npm/platforms/win32-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/win32-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
       # Install devDependencies so tsup can build the main package's dist/
       - name: Install main package dependencies
@@ -242,14 +245,14 @@ jobs:
       - name: Publish main package
         run: npm publish ./npm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
-      # WASM package — artifact already downloaded above
+      # WASM package — artifact already downloaded, package.json generated above
       - name: Copy WASM artifacts into package
         run: |
-          cp wasm/muninn_sqlite3.js npm/wasm/muninn_sqlite3.js
-          cp wasm/muninn_sqlite3.wasm npm/wasm/muninn_sqlite3.wasm
+          cp wasm/muninn_sqlite3.js dist/nodejs/platforms/wasm/muninn_sqlite3.js
+          cp wasm/muninn_sqlite3.wasm dist/nodejs/platforms/wasm/muninn_sqlite3.wasm
 
       - name: Publish WASM package
-        run: npm publish ./npm/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
   # ── Upload to GitHub Release ─────────────────────────────
   upload-release:

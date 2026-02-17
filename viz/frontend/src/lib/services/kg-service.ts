@@ -2,6 +2,7 @@
 
 import type {
   GraphRAGResult,
+  KGSearchResult,
   PipelineSummary,
   StageDetail,
   StageItemsResponse,
@@ -22,6 +23,16 @@ export function queryGraphRAG(query: string, k: number = 10, maxDepth: number = 
   return fetchJSON<GraphRAGResult>('/api/kg/query', {
     method: 'POST',
     body: JSON.stringify({ query, k, max_depth: maxDepth }),
+  })
+}
+
+export function queryKGSearch(
+  query: string,
+  k: number = 10,
+): Promise<KGSearchResult> {
+  return fetchJSON<KGSearchResult>('/api/kg/query', {
+    method: 'POST',
+    body: JSON.stringify({ query, k }),
   })
 }
 

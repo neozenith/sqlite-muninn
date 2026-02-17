@@ -31,6 +31,8 @@ export interface EmbeddingPoint {
   z?: number
   label: string
   metadata: Record<string, unknown>
+  /** Optional per-point color override (RGB tuple). Used by KG query rank gradient. */
+  color?: readonly [number, number, number]
 }
 
 export interface EmbeddingsResponse {
@@ -150,6 +152,42 @@ export interface StageDetail {
 export interface GraphRAGResult {
   query: string
   stages: Record<string, unknown>
+}
+
+export interface KGSearchFtsResult {
+  chunk_id: number
+  text: string
+}
+
+export interface KGSearchVssResult {
+  chunk_id: number
+  similarity: number
+  distance: number
+  text: string
+  x3d: number | null
+  y3d: number | null
+  z3d: number | null
+}
+
+export interface KGSearchGraphNode {
+  name: string
+  depth: number
+  similarity: number
+  is_anchor: boolean
+}
+
+export interface KGSearchGraphEdge {
+  src: string
+  rel: string
+  dst: string
+}
+
+export interface KGSearchResult {
+  query: string
+  fts_results: KGSearchFtsResult[]
+  vss_results: KGSearchVssResult[]
+  graph_nodes: KGSearchGraphNode[]
+  graph_edges: KGSearchGraphEdge[]
 }
 
 export interface StageItemsResponse {
