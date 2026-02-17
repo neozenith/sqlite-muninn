@@ -41,8 +41,7 @@ export function useGraphRAGQuery() {
 
 export function useKGSearch() {
   return useMutation({
-    mutationFn: ({ query, k }: { query: string; k?: number }) =>
-      kgService.queryKGSearch(query, k),
+    mutationFn: ({ query, k }: { query: string; k?: number }) => kgService.queryKGSearch(query, k),
   })
 }
 

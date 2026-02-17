@@ -204,7 +204,9 @@ export function KGQueryPage() {
                       <div key={vss.chunk_id} className="border rounded p-2 text-xs space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="text-primary font-medium">Chunk #{vss.chunk_id}</span>
-                          <span className={`font-mono ${pct > 50 ? 'text-amber-400' : pct > 20 ? 'text-purple-400' : 'text-muted-foreground'}`}>
+                          <span
+                            className={`font-mono ${pct > 50 ? 'text-amber-400' : pct > 20 ? 'text-purple-400' : 'text-muted-foreground'}`}
+                          >
                             {pct.toFixed(1)}%
                           </span>
                         </div>

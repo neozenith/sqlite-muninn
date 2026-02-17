@@ -747,7 +747,9 @@ function performGraphSearch(blobPtr, blobSize, broadK, bfsDepth) {
     // Query 2: Get edges between the discovered nodes (plain SQL, no virtual tables)
     let edges = [];
     if (nodes.length > 1) {
-      const names = nodes.map((n) => `'${n.name.replace(/'/g, "''")}'`).join(",");
+      const names = nodes
+        .map((n) => `'${n.name.replace(/'/g, "''")}'`)
+        .join(",");
       const edgeResult = query(
         `SELECT src, rel_type, dst FROM relations
          WHERE src IN (${names}) AND dst IN (${names})`,

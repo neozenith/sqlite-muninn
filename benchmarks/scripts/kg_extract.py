@@ -653,8 +653,14 @@ def create_umap_tables(conn):
             )
         """)
         data = [
-            (ids[i], float(coords_2d[i, 0]), float(coords_2d[i, 1]),
-             float(coords_3d[i, 0]), float(coords_3d[i, 1]), float(coords_3d[i, 2]))
+            (
+                ids[i],
+                float(coords_2d[i, 0]),
+                float(coords_2d[i, 1]),
+                float(coords_3d[i, 0]),
+                float(coords_3d[i, 1]),
+                float(coords_3d[i, 2]),
+            )
             for i in range(len(ids))
         ]
         conn.executemany(

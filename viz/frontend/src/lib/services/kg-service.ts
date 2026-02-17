@@ -26,10 +26,7 @@ export function queryGraphRAG(query: string, k: number = 10, maxDepth: number = 
   })
 }
 
-export function queryKGSearch(
-  query: string,
-  k: number = 10,
-): Promise<KGSearchResult> {
+export function queryKGSearch(query: string, k: number = 10): Promise<KGSearchResult> {
   return fetchJSON<KGSearchResult>('/api/kg/query', {
     method: 'POST',
     body: JSON.stringify({ query, k }),
