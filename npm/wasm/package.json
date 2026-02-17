@@ -1,6 +1,6 @@
 {
   "name": "@sqlite-muninn/wasm",
-  "version": "0.1.0-alpha.7",
+  "version": "0.1.0-alpha.8",
   "description": "sqlite-muninn WebAssembly build — SQLite with HNSW, graph, and Node2Vec in the browser",
   "repository": {
     "type": "git",

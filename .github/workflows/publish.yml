@@ -236,7 +236,8 @@ jobs:
 
       # Install devDependencies so tsup can build the main package's dist/
       - name: Install main package dependencies
-        run: npm ci --prefix npm
+        working-directory: npm
+        run: npm ci
 
       - name: Publish main package
         run: npm publish ./npm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
@@ -258,6 +259,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
 
       - name: Rename artifacts for unique asset names
