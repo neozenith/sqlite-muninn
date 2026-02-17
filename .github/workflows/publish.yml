@@ -176,7 +176,7 @@ jobs:
   # Each package must have a trusted publisher configured on npmjs.com:
   #   https://www.npmjs.com/package/<name>/access → GitHub Actions → neozenith/sqlite-muninn/publish.yml
   publish-npm:
-    needs: [build, build-macos]
+    needs: [build, build-macos, wasm-build]
     runs-on: ubuntu-latest
     name: Publish to NPM
     permissions:
@@ -219,54 +219,36 @@ jobs:
           cp macos-universal/muninn.dylib npm/platforms/darwin-arm64/muninn.dylib
           cp macos-universal/muninn.dylib npm/platforms/darwin-x64/muninn.dylib
 
-      - name: Publish platform packages
-        run: |
-          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
-            npm publish ./npm/platforms/$target --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-          done
+      - name: Publish darwin-arm64
+        run: npm publish ./npm/platforms/darwin-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+
+      - name: Publish darwin-x64
+        run: npm publish ./npm/platforms/darwin-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+
+      - name: Publish linux-x64
+        run: npm publish ./npm/platforms/linux-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+
+      - name: Publish linux-arm64
+        run: npm publish ./npm/platforms/linux-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+
+      - name: Publish win32-x64
+        run: npm publish ./npm/platforms/win32-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+
+      # Install devDependencies so tsup can build the main package's dist/
+      - name: Install main package dependencies
+        run: npm ci --prefix npm
 
       - name: Publish main package
         run: npm publish ./npm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
-  # ── Publish WASM to NPM ─────────────────────────────────
-  publish-wasm:
-    needs: wasm-build
-    runs-on: ubuntu-latest
-    name: Publish WASM to NPM
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: wasm
-          path: npm/wasm/
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          registry-url: https://registry.npmjs.org
-
-      - name: Upgrade npm for Trusted Publishing
-        run: npm install -g npm@latest
-
-      - name: Determine npm dist-tag
-        id: npm-tag
+      # WASM package — artifact already downloaded above
+      - name: Copy WASM artifacts into package
         run: |
-          VERSION=$(cat VERSION)
-          if echo "$VERSION" | grep -q "alpha"; then
-            echo "tag=alpha" >> "$GITHUB_OUTPUT"
-          elif echo "$VERSION" | grep -q "beta"; then
-            echo "tag=beta" >> "$GITHUB_OUTPUT"
-          elif echo "$VERSION" | grep -q "rc"; then
-            echo "tag=rc" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
+          cp wasm/muninn_sqlite3.js npm/wasm/muninn_sqlite3.js
+          cp wasm/muninn_sqlite3.wasm npm/wasm/muninn_sqlite3.wasm
 
-      - run: npm publish ./npm/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+      - name: Publish WASM package
+        run: npm publish ./npm/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
   # ── Upload to GitHub Release ─────────────────────────────
   upload-release:
@@ -285,13 +267,15 @@ jobs:
           mv macos-universal/muninn.dylib muninn-macos-universal.dylib
           mv windows-x86_64/muninn.dll muninn-windows-x86_64.dll
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            muninn-linux-x86_64.so
-            muninn-linux-arm64.so
-            muninn-macos-universal.dylib
-            muninn-windows-x86_64.dll
-            amalgamation/muninn-amalgamation.tar.gz
-            wasm/muninn_sqlite3.js
+      - name: Upload to GitHub Release
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} \
+            muninn-linux-x86_64.so \
+            muninn-linux-arm64.so \
+            muninn-macos-universal.dylib \
+            muninn-windows-x86_64.dll \
+            amalgamation/muninn-amalgamation.tar.gz \
+            wasm/muninn_sqlite3.js \
             wasm/muninn_sqlite3.wasm
+        env:
+          GH_TOKEN: ${{ github.token }}

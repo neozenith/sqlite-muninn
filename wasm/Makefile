@@ -19,6 +19,8 @@ AMALGAMATION = ../dist/muninn.c
 SQLITE_SRC   = build/sqlite3.c
 WASM_JS      = build/muninn_sqlite3.js
 WASM_BIN     = build/muninn_sqlite3.wasm
+DEMO_DB	  	 = assets/3300.db
+DEMO_DB_BUILD = ../benchmarks/kg/3300.db
 
 $(AMALGAMATION):
 	$(MAKE) -C .. amalgamation
@@ -57,13 +59,22 @@ $(WASM_JS): $(AMALGAMATION) $(SQLITE_SRC)          ## Build WASM artifacts
 	@echo "WASM build complete:"
 	@ls -lh $(WASM_JS) $(WASM_BIN)
 
+
+
 build: $(WASM_JS)                                  ## Build WASM module to build/
 
 ######################################################################
 # DEV
 ######################################################################
+$(DEMO_DB_BUILD):
+	make -C ../benchmarks kg-demo
+	
+$(DEMO_DB): $(DEMO_DB_BUILD)   ## Download demo DB if missing
+	@mkdir -p $(dir $@)
+	cp $< $@
+	@echo "Demo DB ready at $@"
 
-dev: build                                         ## Start dev server on port 8300
+dev: build $(DEMO_DB)                                         ## Start dev server on port 8300
 	@echo "Starting dev server at http://localhost:$(PORT)"
 	python3 -m http.server $(PORT) --directory .
 
@@ -93,12 +104,12 @@ test: build                                        ## Run Playwright E2E tests
 
 E2E_DIR = test-results
 
-%.mp4: %.webm                                      ## Convert .webm to .mp4 (5x speed, 10fps)
-	ffmpeg -i $< -vf "setpts=0.2*PTS,fps=10" -s 1280x720 -c:v libx264 -crf 20 -an -y $@
+%.mp4: %.webm                                      ## Convert .webm to .mp4 (2x speed, 10fps)
+	ffmpeg -i $< -vf "setpts=0.5*PTS,fps=10" -s 1280x720 -c:v libx264 -crf 20 -an -y $@
 
-%.gif: %.webm                                      ## Convert .webm to .gif (5x speed, 10fps)
-	ffmpeg -i $< -vf "setpts=0.2*PTS,fps=10,scale=1280:-1:flags=lanczos,palettegen" -y $@.palette.png
-	ffmpeg -i $< -i $@.palette.png -filter_complex "setpts=0.2*PTS,fps=10,scale=1280:-1:flags=lanczos[x];[x][1:v]paletteuse" -y $@
+%.gif: %.webm                                      ## Convert .webm to .gif (2x speed, 10fps)
+	ffmpeg -i $< -vf "setpts=0.5*PTS,fps=10,scale=1280:-1:flags=lanczos,palettegen" -y $@.palette.png
+	ffmpeg -i $< -i $@.palette.png -filter_complex "setpts=0.5*PTS,fps=10,scale=1280:-1:flags=lanczos[x];[x][1:v]paletteuse" -y $@
 	rm -f $@.palette.png
 
 e2e-videos: test                                   ## Convert all E2E videos

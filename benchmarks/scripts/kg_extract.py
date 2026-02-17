@@ -249,7 +249,7 @@ def insert_chunks(conn, chunks):
         enumerate(chunks, 1),
     )
     # Rebuild FTS5 content-sync index
-    conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+    conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
     conn.commit()
     log.info("Inserted %d chunks + rebuilt FTS5 index", len(chunks))
 

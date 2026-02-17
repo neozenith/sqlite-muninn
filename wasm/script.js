@@ -312,7 +312,45 @@ function updateDeckGL(points) {
 
   const sphere = new luma.SphereGeometry({ radius: 1, nlat: 10, nlong: 20 });
 
+  // Compute centroid of all points
+  let cx = 0,
+    cy = 0,
+    cz = 0;
+  for (const p of points) {
+    cx += p.position[0];
+    cy += p.position[1];
+    cz += p.position[2];
+  }
+  const n = points.length || 1;
+  cx /= n;
+  cy /= n;
+  cz /= n;
+
+  // Compute bounding radius from centroid (including max sphere radius)
+  let maxR = 0;
+  for (const p of points) {
+    const dx = p.position[0] - cx;
+    const dy = p.position[1] - cy;
+    const dz = p.position[2] - cz;
+    const r = Math.sqrt(dx * dx + dy * dy + dz * dz) + p.radius;
+    if (r > maxR) maxR = r;
+  }
+
+  // Calculate zoom to fit all points in the viewport with padding
+  const container = document.getElementById("deckgl-container");
+  const viewSize =
+    Math.min(container.clientWidth, container.clientHeight) || 400;
+  const padding = 2.0; // breathing room around the point cloud
+  const effectiveRadius = maxR * padding || 1;
+  const zoom = Math.log2(viewSize / (2 * effectiveRadius));
+
   deckInstance.setProps({
+    initialViewState: {
+      target: [cx, cy, cz],
+      zoom: zoom,
+      rotationX: 30,
+      rotationOrbit: -30,
+    },
     layers: [
       new deck.SimpleMeshLayer({
         id: "embedding-points",

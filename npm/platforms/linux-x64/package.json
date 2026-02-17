@@ -1,6 +1,6 @@
 {
   "name": "@sqlite-muninn/linux-x64",
-  "version": "0.1.0-alpha.6",
+  "version": "0.1.0-alpha.7",
   "description": "sqlite-muninn native binary for linux x64",
   "repository": {
     "type": "git",
