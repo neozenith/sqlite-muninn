@@ -152,9 +152,10 @@ term           = "not" atom                       (* complement *)
                | atom { "," atom }                (* intersection *)
 atom           = ["@"] depth_spec                 (* @ operator *)
 depth_spec     = [INT "+"] selector ["+" [INT]]   (* depth-limited traversal *)
-selector       = method ":" value                 (* attribute-based *)
+selector       = method ":" column "=" value       (* attribute-based: col:type=source *)
                | value                            (* node name or glob *)
-method         = "tag" | "attr" | "col"           (* extensible *)
+method         = "col"                            (* column-based attribute lookup *)
+column         = IDENT                            (* column name in attribute table *)
 value          = GLOB_PATTERN                     (* supports * and ? wildcards *)
 ```
 
@@ -165,7 +166,9 @@ Tokens:
 - `@` — build closure operator
 - `not` — complement keyword
 - `INT` — depth limit (digits)
-- `:` — method/value separator
+- `:` — method/column separator
+- `=` — column/value separator (in attribute selectors)
+- `IDENT` — `[a-zA-Z_][a-zA-Z0-9_]*`
 - `GLOB_PATTERN` — `[a-zA-Z0-9_*?.\-]+`
 
 ### Evaluator: Set Operations on Node IDs
@@ -212,8 +215,9 @@ typedef enum {
 
 typedef struct SelectorNode {
     SelectorType type;
-    char *value;                /* node name, glob, or attr value */
-    char *method;               /* for SEL_ATTR: "tag", "col", etc. */
+    char *value;                /* node name, glob pattern, or attr value */
+    char *column;               /* for SEL_ATTR: column name in attribute table */
+    int has_wildcard;           /* 1 if value contains * or ?, 0 otherwise */
     int depth_up;               /* ancestor depth limit, -1 = unlimited */
     int depth_down;             /* descendant depth limit, -1 = unlimited */
     struct SelectorNode *left;  /* first child (or only child for complement) */
@@ -259,10 +263,32 @@ SELECT node FROM graph_select(
 
 Supported attribute methods:
 
-| Method | Syntax | Meaning |
-|--------|--------|---------|
-| `col:name=value` | Column equals value | `col:status=active` |
-| `col:name=pat*` | Column glob match | `col:type=stg_*` |
+| Method | Syntax | SQL Translation | Example |
+|--------|--------|-----------------|---------|
+| `col:name=value` | Exact match | `WHERE name = 'value'` | `col:status=active` |
+| `col:name=pat*` | Glob with wildcards | `WHERE name LIKE 'pat%'` | `col:type=stg_*` |
+
+#### Wildcard Mapping to SQL LIKE
+
+Wildcards in attribute values are translated to SQL `LIKE` patterns:
+
+| Selector Wildcard | SQL LIKE | Meaning |
+|-------------------|----------|---------|
+| `*` | `%` | Any sequence of characters |
+| `?` | `_` | Any single character |
+
+This means glob patterns compose naturally:
+
+```sql
+-- col:type=stg_*         → WHERE type LIKE 'stg_%'        (all staging models)
+-- col:type=stg_*_incr    → WHERE type LIKE 'stg_%_incr'   (incremental staging models only)
+-- col:dept=eng_?          → WHERE dept LIKE 'eng__'        (eng_a, eng_b, etc.)
+```
+
+When the value contains no wildcards, the evaluator uses `=` (exact match)
+for better index utilisation. When wildcards are present, it falls back to
+`LIKE`. The `LIKE` is executed as a sub-query against the attribute table,
+and the resulting node IDs are collected into a `NodeSet`.
 
 This keeps it simple and generic — any column in a node attributes table
 can be used as a filter.
@@ -294,16 +320,25 @@ can be used as a filter.
 
 ### Phase 2: Wildcards + Attribute Selectors
 
-- Add glob matching on node IDs (`*`, `?`)
-- Add `col:name=value` attribute selectors with optional node table parameter
-- Add `selector` output column showing which expression matched
+**Wildcards on node IDs:**
+- Extend `SEL_NODE` evaluation to detect `*` or `?` in the value
+- Iterate all `GraphData.ids[]`, match with `fnmatch()`-style glob
+- Union all matching node indices into the result `NodeSet`
 
-### Phase 3: Advanced Features
+**Attribute selectors (`col:name=value`):**
+- Parse `method:column=value` syntax into `SEL_ATTR` AST nodes
+- Evaluate by querying the attribute table:
+  - No wildcards → `SELECT node_id FROM attr_table WHERE column = ?` (parameterised)
+  - With wildcards → translate `*` → `%`, `?` → `_`, then `SELECT node_id FROM attr_table WHERE column LIKE ?`
+- Validate column name via `id_validate()` to prevent SQL injection
+- Collect result node IDs into a `NodeSet` via `graph_data_find()`
 
-- `--exclude` equivalent (second TVF parameter for exclusion expression)
-- Performance optimization: lazy evaluation, short-circuit on intersection
-- Optional `weight_col` support for weighted depth limits
-- Optional `direction` parameter (default "forward", matching existing TVFs)
+**Output enhancement:**
+- Add `selector` output column showing which sub-expression matched each node
+
+**Tests:**
+- `pytests/test_graph_select.py` — Python integration tests for wildcards and attribute selectors
+- `test/test_graph_selector.c` — C unit tests for glob-to-LIKE translation
 
 ## Example Queries (Aspirational)
 
@@ -331,24 +366,59 @@ SELECT node FROM graph_select('deps', 'src', 'dst',
 
 ## Risks & Considerations
 
-### Selector Ambiguity
+### Reserved Characters in Node Names
 
-The `+` character appears in both the depth operator and potentially in node names.
-Mitigation: node names follow `id_validate()` rules (`[a-zA-Z0-9_]` only), so `+`
-is unambiguous as an operator.
+The `+` and `@` characters are reserved by the selector parser as operators.
+This means **node names containing `+` or `@` cannot be used** in selector
+expressions. This is consistent with `id_validate()` which already restricts
+identifiers to `[a-zA-Z0-9_]`. If a graph has node IDs with these characters,
+users should use the existing `graph_bfs`/`graph_dfs` TVFs directly instead of
+`graph_select`.
 
-### Performance on Large Graphs
+### Memory: `graph_data_load()` Loads Everything
 
-The `@` operator is O(V + E) for the descendant BFS, then O(V + E) again for each
-ancestor BFS. On very large graphs (millions of nodes), this could be slow.
-Mitigation: the graph is already fully loaded into memory by `graph_data_load()`;
-bit-vector set operations are O(V/8) which is fast.
+`graph_data_load()` does a full `SELECT src, dst FROM edges` and builds the
+complete adjacency structure in memory. This works fine for small-to-medium
+graphs, but has been observed to blow out to **20GB+ on large graphs** (e.g.,
+during community detection benchmarking on a laptop).
 
-### Complement Set Size
+**Current reality:** All TVFs that depend on `graph_load.c` (centrality,
+community, and now `graph_select`) share this limitation. The entire graph
+must fit in memory.
 
-`not @X` on a large graph returns potentially millions of nodes. This is inherent
-to the semantics — the caller asked for the complement. Could add a `LIMIT` hint
-in the TVF, or let SQLite's normal `LIMIT` clause handle it.
+**Future work (separate planning spec):** A memory-controlled loading strategy
+is needed for graphs above a configurable size threshold. This would involve:
+- Paged/streaming loading that processes graph regions and releases memory
+- A size threshold heuristic (e.g., estimated edge count × ~24 bytes/edge)
+  below which full in-memory loading is still used
+- This is a cross-cutting concern that affects centrality, community, and
+  graph_select equally — it deserves its own dedicated planning document
+
+For Phase 1 of `graph_select`, we accept the full-load model and document the
+memory constraint. The selector parser and evaluator are designed to work on
+any `GraphData` regardless of how it was populated, so a future streaming
+backend can be swapped in without changing the selector layer.
+
+**See also:** `docs/plans/graph_virtual_tables.md` — the `graph_adjacency`
+virtual table plan addresses this memory concern by persisting a CSR index
+in shadow tables with incremental rebuild support. Once `graph_adjacency`
+exists, `graph_select` can read from its CSR instead of calling
+`graph_data_load()`.
+
+### Complement Set Size and Ordering
+
+`not @X` on a large graph returns potentially millions of nodes. Two concerns:
+
+1. **Deterministic ordering** — The result set must have a stable, deterministic
+   order so that `LIMIT N OFFSET M` produces consistent pagination. The natural
+   order is the insertion order of nodes in `GraphData.ids[]` (which matches the
+   `SELECT` order from the edge table). The evaluator iterates the bit vector
+   from index 0 → N, which preserves this order.
+
+2. **Efficient pagination** — `xFilter` can check for `LIMIT` in `xBestIndex`
+   and pass it through as `idxNum`/`idxStr`. The cursor then skips set bits
+   until the offset is reached and stops after the limit. This avoids
+   materialising the full complement.
 
 ### Parser Complexity
 
@@ -362,16 +432,12 @@ The BFS logic in `graph_tvf.c` is tightly coupled to the traversal TVF cursor mo
 For `graph_select`, we need a simpler BFS that just fills a NodeSet bit vector.
 This is a ~30-line function, not worth trying to share with the existing BFS.
 
-## Comparison: TVF vs Scalar Function
+### Implementation Form: TVF Only
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| **TVF** (`graph_select`) | Returns rows, composable with JOIN/WHERE, natural for sets | More boilerplate (vtab API) |
-| **Scalar** (`graph_match`) | Simpler to implement, returns JSON array | Not composable, can't join results |
-| **Both** | Maximum flexibility | Double the maintenance |
-
-**Recommendation:** TVF. It fits the existing pattern, is composable with SQL,
-and returning a result set is the natural representation of a node selection.
+`graph_select` will be implemented as a **TVF only** (no scalar function). The TVF
+form is composable with `JOIN`, `WHERE`, `LIMIT`/`OFFSET`, and `ORDER BY` — which
+is exactly what set-based node selection needs. A scalar function returning a JSON
+array would not be composable and would force materialisation of the entire result.
 
 ## References
 
