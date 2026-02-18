@@ -50,6 +50,7 @@ extern void test_hnsw_algo(void);
 extern void test_id_validate(void);
 extern void test_graph_load(void);
 extern void test_graph_csr(void);
+extern void test_graph_selector(void);
 
 int main(void) {
     printf("=== sqlite-muninn test suite ===\n\n");
@@ -71,6 +72,9 @@ int main(void) {
 
     printf("\n[graph_csr]\n");
     test_graph_csr();
+
+    printf("\n[graph_selector]\n");
+    test_graph_selector();
 
     printf("\n=== Results: %d passed, %d failed ===\n", total_passed, total_failed);
 

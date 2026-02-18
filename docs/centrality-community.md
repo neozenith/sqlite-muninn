@@ -71,7 +71,7 @@ WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
 
 ## Betweenness Centrality
 
-Identifies **bridge nodes** that sit on many shortest paths between other nodes. Computed via Brandes' algorithm in O(VE) time.
+Identifies **bridge nodes** that sit on many shortest paths between other nodes. Computed via [Brandes' algorithm](https://doi.org/10.1080/0022250X.2001.9990249) (Brandes, 2001) in O(VE) time.
 
 ```sql
 SELECT node, centrality FROM graph_betweenness
@@ -114,7 +114,7 @@ WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
 ORDER BY centrality DESC;
 ```
 
-Uses **Wasserman-Faust normalization** for disconnected graphs: if a node can only reach R out of N-1 other nodes, the score is weighted by `(R/(N-1))^2` to avoid inflating scores for small components.
+Uses **[Wasserman-Faust](https://doi.org/10.1017/CBO9780511815478) normalization** (Wasserman & Faust, 1994) for disconnected graphs: if a node can only reach R out of N-1 other nodes, the score is weighted by `(R/(N-1))^2` to avoid inflating scores for small components.
 
 ---
 
@@ -141,7 +141,7 @@ WHERE edge_table = 'events' AND src_col = 'src' AND dst_col = 'dst'
 
 ## Leiden Community Detection
 
-The Leiden algorithm (Traag, Waltman & van Eck, 2019) partitions a graph into **well-connected communities**. It improves on Louvain by guaranteeing that communities are internally connected — no "phantom" communities that fall apart on inspection.
+The [Leiden algorithm](https://arxiv.org/abs/1810.08473) (Traag, Waltman & van Eck, 2019) partitions a graph into **well-connected communities**. It improves on Louvain by guaranteeing that communities are internally connected — no "phantom" communities that fall apart on inspection.
 
 ```sql
 SELECT node, community_id, modularity FROM graph_leiden
@@ -218,6 +218,12 @@ ORDER BY nc.community_id;
 ```
 
 This identifies the **representative node** for each community — useful for summarization, sampling, or hierarchical search.
+
+## References
+
+- Brandes, U. (2001). [A Faster Algorithm for Betweenness Centrality](https://doi.org/10.1080/0022250X.2001.9990249). *Journal of Mathematical Sociology*, 25(2), 163–177.
+- Wasserman, S. & Faust, K. (1994). [Social Network Analysis: Methods and Applications](https://doi.org/10.1017/CBO9780511815478). *Cambridge University Press*.
+- Traag, V. A., Waltman, L. & van Eck, N. J. (2019). [From Louvain to Leiden: guaranteeing well-connected communities](https://arxiv.org/abs/1810.08473). *Scientific Reports*, 9(1), 5233.
 
 ## Further Reading
 

@@ -1,11 +1,11 @@
 # Node2Vec Guide
 
-Node2Vec learns vector embeddings from graph structure. Each node gets a dense vector that captures its structural role and neighborhood — nodes with similar graph positions end up close in vector space. The embeddings are stored directly in an HNSW index for similarity search.
+[Node2Vec](https://arxiv.org/abs/1607.00653) (Grover & Leskovec, 2016) learns vector embeddings from graph structure. Each node gets a dense vector that captures its structural role and neighborhood — nodes with similar graph positions end up close in vector space. The embeddings are stored directly in an HNSW index for similarity search.
 
 ## How It Works
 
 1. **Random walks**: For each node, generate multiple biased random walks through the graph
-2. **Skip-gram training**: Treat walks like sentences and train word2vec-style (SGNS) to predict context nodes from center nodes
+2. **Skip-gram training**: Treat walks like sentences and train word2vec-style ([SGNS](https://arxiv.org/abs/1310.4546); Mikolov et al., 2013) to predict context nodes from center nodes
 3. **Store in HNSW**: Write the learned embeddings into an existing `hnsw_index` virtual table
 
 The result: you can query "which nodes are structurally similar to node X?" using vector similarity search.
@@ -65,7 +65,7 @@ Controls whether walks move inward (toward the previous node's neighborhood) or 
 
 | Setting | Walk Behavior | Best For | Example Use Case |
 |---------|--------------|----------|-----------------|
-| p=1, q=1 | Uniform random (DeepWalk) | General similarity | Default starting point |
+| p=1, q=1 | Uniform random ([DeepWalk](https://arxiv.org/abs/1403.6652)) | General similarity | Default starting point |
 | p=0.25, q=1 | BFS-like, local | Community/cluster similarity | Finding nodes in the same neighborhood |
 | p=1, q=0.5 | DFS-like, exploratory | Structural role similarity | Finding hubs, bridges, periphery nodes |
 | p=0.5, q=2.0 | Very local, community-focused | Tight community detection | Identifying cliques |
@@ -168,6 +168,12 @@ If you have both content embeddings (from a language model) and graph embeddings
 3. Re-rank using centrality scores
 
 See the [GraphRAG Cookbook](graphrag-cookbook.md) for a full worked example.
+
+## References
+
+- Grover, A. & Leskovec, J. (2016). [node2vec: Scalable Feature Learning for Networks](https://arxiv.org/abs/1607.00653). *KDD '16*.
+- Perozzi, B., Al-Rfou, R. & Skiena, S. (2014). [DeepWalk: Online Learning of Social Representations](https://arxiv.org/abs/1403.6652). *KDD '14*.
+- Mikolov, T. et al. (2013). [Distributed Representations of Words and Phrases and their Compositionality](https://arxiv.org/abs/1310.4546). *NeurIPS 2013*.
 
 ## Further Reading
 

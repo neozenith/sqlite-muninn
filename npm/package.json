@@ -1,6 +1,6 @@
 {
   "name": "sqlite-muninn",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "HNSW vector search + graph traversal + Node2Vec for SQLite",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -32,11 +32,11 @@
     "VERSION"
   ],
   "optionalDependencies": {
-    "@sqlite-muninn/darwin-arm64": "0.1.0",
-    "@sqlite-muninn/darwin-x64": "0.1.0",
-    "@sqlite-muninn/linux-x64": "0.1.0",
-    "@sqlite-muninn/linux-arm64": "0.1.0",
-    "@sqlite-muninn/win32-x64": "0.1.0"
+    "@sqlite-muninn/darwin-arm64": "0.2.0",
+    "@sqlite-muninn/darwin-x64": "0.2.0",
+    "@sqlite-muninn/linux-x64": "0.2.0",
+    "@sqlite-muninn/linux-arm64": "0.2.0",
+    "@sqlite-muninn/win32-x64": "0.2.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

@@ -35,6 +35,8 @@ LDFLAGS_TEST = $(SQLITE_LIBS) $(LDFLAGS)
 SRC = src/muninn.c src/hnsw_vtab.c src/hnsw_algo.c \
       src/graph_tvf.c src/graph_load.c src/graph_centrality.c \
       src/graph_community.c src/graph_adjacency.c src/graph_csr.c \
+      src/graph_selector_parse.c src/graph_selector_eval.c \
+      src/graph_select_tvf.c \
       src/node2vec.c src/vec_math.c \
       src/priority_queue.c src/id_validate.c
 
@@ -43,11 +45,13 @@ HEADERS = src/vec_math.h src/priority_queue.h src/hnsw_algo.h \
           src/id_validate.h src/hnsw_vtab.h src/graph_common.h \
           src/graph_tvf.h src/graph_load.h src/graph_centrality.h \
           src/graph_community.h src/graph_adjacency.h src/graph_csr.h \
+          src/graph_selector_parse.h src/graph_selector_eval.h \
+          src/graph_select_tvf.h \
           src/node2vec.h src/muninn.h
 
 TEST_SRC = test/test_main.c test/test_vec_math.c test/test_priority_queue.c \
            test/test_hnsw_algo.c test/test_id_validate.c test/test_graph_load.c \
-           test/test_graph_csr.c
+           test/test_graph_csr.c test/test_graph_selector.c
 
 .PHONY: all debug test test-python test-js test-install test-all clean help \
         amalgamation install uninstall version version-stamp \
@@ -93,7 +97,7 @@ test: build/test_runner                        ## Run C unit tests + coverage
 		echo "gcovr not installed — skipping C coverage report"; \
 	fi
 
-build/test_runner: $(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c src/id_validate.c src/graph_load.c src/graph_csr.c
+build/test_runner: $(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c src/id_validate.c src/graph_load.c src/graph_csr.c src/graph_selector_parse.c src/graph_selector_eval.c
 	@mkdir -p build
 	$(CC) $(CFLAGS_BASE) $(CFLAGS_EXTRA) --coverage -Isrc -o $@ $^ $(LDFLAGS_TEST)
 

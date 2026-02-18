@@ -13,6 +13,8 @@ A zero-dependency C extension for SQLite to add an advanced collection of knowle
 - **Graph Traversal** — BFS, DFS, shortest path, connected components, PageRank on any edge table
 - **Centrality Measures** — Degree, betweenness (Brandes), and closeness centrality with weighted/temporal support
 - **Community Detection** — Leiden algorithm for discovering graph communities with modularity scoring
+- **Graph Adjacency Index** — Persistent CSR-cached adjacency with trigger-based dirty tracking and incremental rebuild
+- **Graph Select** — dbt-inspired node selection syntax for lineage queries (ancestors, descendants, closures, set operations)
 - **Node2Vec** — Learn structural node embeddings from graph topology, store in HNSW for similarity search
 - **Zero dependencies** — Pure C11, compiles to a single `.dylib`/`.so`/`.dll`
 - **SIMD accelerated** — ARM NEON and x86 SSE distance functions
@@ -56,23 +58,36 @@ ORDER BY centrality DESC LIMIT 10;
 SELECT node, community_id, modularity FROM graph_leiden
 WHERE edge_table = 'friendships' AND src_col = 'user_a'
   AND dst_col = 'user_b';
+
+-- Persistent adjacency cache (auto-rebuilds on edge changes)
+CREATE VIRTUAL TABLE g USING graph_adjacency(
+    edge_table='friendships', src_col='user_a', dst_col='user_b'
+);
+SELECT node, in_degree, out_degree FROM g ORDER BY out_degree DESC;
+
+-- dbt-style lineage query (all descendants of alice)
+SELECT node, depth FROM graph_select(
+    'friendships', 'user_a', 'user_b', 'alice+'
+);
 ```
 
 ## Available Functions
 
-| Function | Purpose | Output Columns |
-|----------|---------|----------------|
-| `graph_bfs` | Breadth-first traversal | node, depth, parent |
-| `graph_dfs` | Depth-first traversal | node, depth, parent |
-| `graph_shortest_path` | Shortest path (Dijkstra) | node, distance, path_order |
-| `graph_components` | Connected components | node, component_id, component_size |
-| `graph_pagerank` | PageRank scores | node, rank |
-| `graph_degree` | Degree centrality | node, in_degree, out_degree, degree, centrality |
-| `graph_betweenness` | Betweenness centrality | node, centrality |
-| `graph_closeness` | Closeness centrality | node, centrality |
-| `graph_leiden` | Leiden community detection | node, community_id, modularity |
-| `node2vec_train()` | Graph embedding generation | (scalar: nodes embedded) |
-| `hnsw_index` | HNSW vector virtual table | rowid, vector, distance |
+| Function | Type | Purpose | Output Columns |
+|----------|------|---------|----------------|
+| `hnsw_index` | Virtual Table | HNSW vector index | rowid, vector, distance |
+| `graph_bfs` | TVF | Breadth-first traversal | node, depth, parent |
+| `graph_dfs` | TVF | Depth-first traversal | node, depth, parent |
+| `graph_shortest_path` | TVF | Shortest path (Dijkstra) | node, distance, path_order |
+| `graph_components` | TVF | Connected components | node, component_id, component_size |
+| `graph_pagerank` | TVF | PageRank scores | node, rank |
+| `graph_degree` | TVF | Degree centrality | node, in_degree, out_degree, degree, centrality |
+| `graph_betweenness` | TVF | Betweenness centrality | node, centrality |
+| `graph_closeness` | TVF | Closeness centrality | node, centrality |
+| `graph_leiden` | TVF | Leiden community detection | node, community_id, modularity |
+| `graph_adjacency` | Virtual Table | Persistent CSR adjacency cache | node, node_idx, in/out_degree, weighted degrees |
+| `graph_select` | TVF | dbt-style node selection | node, depth, direction |
+| `node2vec_train()` | Scalar | Graph embedding generation | (scalar: nodes embedded) |
 
 ## Installation
 
@@ -99,7 +114,8 @@ See the [Getting Started guide](getting-started.md) for full installation instru
 
 ## Learn More
 
-- [Getting Started](getting-started.md) — Installation, setup, and quick tour of all five subsystems
+- [Getting Started](getting-started.md) — Installation, setup, and quick tour of all seven subsystems
+- [Architecture](architecture.md) — How the extension is organized, module layering, and design patterns
 - [API Reference](api.md) — Complete reference for all functions and virtual tables
 - [Centrality & Community Guide](centrality-community.md) — When and how to use centrality measures and Leiden
 - [Node2Vec Guide](node2vec.md) — Parameter tuning and integration with HNSW

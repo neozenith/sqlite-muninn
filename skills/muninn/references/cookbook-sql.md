@@ -67,6 +67,65 @@ SELECT * FROM graph_closeness('edges', 'source', 'target');
 SELECT * FROM graph_leiden('edges', 'source', 'target');
 ```
 
+## Graph Adjacency Cache
+
+```sql
+-- Create a persistent adjacency index over the edge table
+CREATE VIRTUAL TABLE g USING graph_adjacency(
+    edge_table='edges', src_col='source', dst_col='target', weight_col='weight'
+);
+
+-- Query pre-computed degrees (reads CSR cache, not edge table)
+SELECT node, in_degree, out_degree, weighted_in_degree, weighted_out_degree
+FROM g ORDER BY out_degree DESC;
+
+-- Point lookup
+SELECT * FROM g WHERE node = 'alice';
+
+-- Algorithm TVFs can read from the adjacency cache
+SELECT node, centrality FROM graph_degree('g', 'source', 'target', 'weight');
+
+-- Edge mutations automatically mark the cache as dirty
+INSERT INTO edges VALUES ('alice', 'frank', 1.5);
+-- Next query on g will auto-rebuild (incremental if delta is small)
+
+-- Force a manual rebuild
+INSERT INTO g(g) VALUES ('rebuild');
+```
+
+## Graph Select: Lineage Queries
+
+```sql
+-- Build a dependency DAG
+CREATE TABLE deps (src TEXT, dst TEXT);
+INSERT INTO deps VALUES ('A', 'C');
+INSERT INTO deps VALUES ('B', 'C');
+INSERT INTO deps VALUES ('C', 'D');
+INSERT INTO deps VALUES ('C', 'E');
+INSERT INTO deps VALUES ('E', 'F');
+
+-- What depends on C? (descendants)
+SELECT node, depth FROM graph_select('deps', 'src', 'dst', 'C+');
+-- C(0), D(1), E(1), F(2)
+
+-- What does C depend on? (ancestors)
+SELECT node, depth FROM graph_select('deps', 'src', 'dst', '+C');
+-- A(1), B(1), C(0)
+
+-- Build closure: what must rebuild if C changes?
+SELECT node FROM graph_select('deps', 'src', 'dst', '@C');
+
+-- Common ancestors of D and E (intersection)
+SELECT node FROM graph_select('deps', 'src', 'dst', '+D,+E');
+-- A, B, C
+
+-- Depth-limited: 1 hop in each direction from C
+SELECT node FROM graph_select('deps', 'src', 'dst', '1+C+1');
+
+-- Everything NOT downstream of C
+SELECT node FROM graph_select('deps', 'src', 'dst', 'not C+');
+```
+
 ## Node2Vec: Graph Embeddings to Vector Search
 
 ```sql

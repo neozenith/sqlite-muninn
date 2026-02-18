@@ -1164,13 +1164,11 @@ def main():
 
     log.info("Engines: %s", ", ".join(engines))
 
-    # Determine output path
+    # Timestamp for disk-storage DB paths (not for JSONL naming)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = RESULTS_DIR / f"run_{timestamp}.jsonl"
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     storage = args.storage
-    log.info("Results will be written to: %s", output_path)
     if storage == "disk":
         log.info("Storage: disk (SQLite files will be saved under benchmarks/results/)")
 
@@ -1186,6 +1184,8 @@ def main():
                 log.info("\n" + "=" * 72)
                 log.info("Model: %s (dim=%d), Dataset: %s", model_label, dim, dataset_key)
                 log.info("=" * 72)
+                output_path = RESULTS_DIR / f"vss_{model_label}_{dataset_key}.jsonl"
+                log.info("Results: %s", output_path)
                 run_benchmark(
                     model_name=model_label,
                     dim=dim,
@@ -1223,6 +1223,8 @@ def main():
         log.info("Custom run: model=%s, dim=%d, sizes=%s, dataset=%s", model_name, dim, sizes, dataset)
         log.info("=" * 72)
 
+        output_path = RESULTS_DIR / f"vss_{model_name}_{dataset}.jsonl"
+        log.info("Results: %s", output_path)
         run_benchmark(
             model_name=model_name,
             dim=dim,
@@ -1238,7 +1240,7 @@ def main():
         sys.exit(1)
 
     log.info("\n" + "=" * 72)
-    log.info("Benchmark complete. Results: %s", output_path)
+    log.info("Benchmark complete. Results in: %s", RESULTS_DIR)
     log.info("Run 'make benchmark-analyze' to generate charts and tables.")
 
 

@@ -1031,8 +1031,7 @@ def main():
     else:
         index_modes = [True]
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = RESULTS_DIR / f"graph_{timestamp}.jsonl"
+    output_path = RESULTS_DIR / f"graph_{args.graph_model}.jsonl"
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     log.info("Results: %s", output_path)

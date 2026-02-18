@@ -8,8 +8,11 @@ BENCH_VSS_SRC = scripts/benchmark_vss.py
 BENCH_VSS_ANALYZE_SRC = scripts/benchmark_vss_analyze.py
 BENCH_GRAPH_SRC = scripts/benchmark_graph.py
 BENCH_GRAPH_ANALYZE_SRC = scripts/benchmark_graph_analyze.py
+BENCH_ADJ_SRC = scripts/benchmark_adjacency.py
+BENCH_ADJ_ANALYZE_SRC = scripts/benchmark_adjacency_analyze.py
 BENCH_VSS = $(PYTHON) $(BENCH_VSS_SRC)
 BENCH_GRAPH = $(PYTHON) $(BENCH_GRAPH_SRC)
+BENCH_ADJ = $(PYTHON) $(BENCH_ADJ_SRC)
 STORAGE ?= disk
 BENCH_FLAGS = --storage $(STORAGE)
 
@@ -32,6 +35,8 @@ EXTENSION = ../muninn$(EXT)
 .PHONY: help \
         models-prep models-prep-manifest models vss-analyze clean clean-all \
         graph-small graph-medium graph-large graph-scale-free graph-analyze \
+        adjacency-xsmall adjacency-small adjacency-medium adjacency-large adjacency-xlarge adjacency-all \
+        analyze-adjacency \
         graph-centrality-small graph-centrality-medium graph-centrality-large graph-centrality-scale-free \
         graph-community-small graph-community-medium graph-community-large graph-community-scale-free \
         graph-index-small graph-index-medium graph-index-large \
@@ -67,27 +72,26 @@ vss-embeddings-agnews-all-MiniLM-L6-v2: $(EXTENSION)
 	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 5000 --dataset ag_news $(BENCH_FLAGS)
 	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 10000 --dataset ag_news $(BENCH_FLAGS)
 
-vss-embeddings-agnews-all-MiniLM-L6-v2-large: $(EXTENSION)
-	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
-	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
-
-
 vss-embeddings-agnews-all-mpnet-base-v2: $(EXTENSION)
 	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 1000 --dataset ag_news $(BENCH_FLAGS)
 	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 5000 --dataset ag_news $(BENCH_FLAGS)
 	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 10000 --dataset ag_news $(BENCH_FLAGS)
-
-vss-embeddings-agnews-all-mpnet-base-v2-large: $(EXTENSION)
-	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
-	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
 
 vss-embeddings-agnews-BAAI-bge-large-en-v1.5: $(EXTENSION)
 	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 1000 --dataset ag_news $(BENCH_FLAGS)
 	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 5000 --dataset ag_news $(BENCH_FLAGS)
 	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 10000 --dataset ag_news $(BENCH_FLAGS)
 
-vss-embeddings-agnews-BAAI-bge-large-en-v1.5-large: $(EXTENSION)
+
+vss-embeddings-50k: 
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
 	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 50000 --dataset ag_news $(BENCH_FLAGS)
+	
+
+vss-embeddings-100k: 
+	$(BENCH_VSS) --source model:all-MiniLM-L6-v2 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
+	$(BENCH_VSS) --source model:all-mpnet-base-v2 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
 	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 100000 --dataset ag_news $(BENCH_FLAGS)
 
 vss-embeddings-wealth-of-nations-all-models: $(EXTENSION)											# 	# Wealth of Nations (~2.5K passages)
@@ -98,9 +102,10 @@ vss-embeddings-wealth-of-nations-all-models: $(EXTENSION)											# 	# Wealth 
 	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 1000 --dataset wealth_of_nations $(BENCH_FLAGS)
 	$(BENCH_VSS) --source model:BAAI/bge-large-en-v1.5 --sizes 2500 --dataset wealth_of_nations $(BENCH_FLAGS)
 
+# ~ 15 minutes
 vss-embeddings-all: vss-embeddings-agnews-all-MiniLM-L6-v2 vss-embeddings-agnews-all-mpnet-base-v2 vss-embeddings-agnews-BAAI-bge-large-en-v1.5 vss-embeddings-wealth-of-nations-all-models  ## Run all VSS embedding benchmarks
 
-vss-embeddings-large: vss-embeddings-agnews-all-MiniLM-L6-v2-large vss-embeddings-agnews-all-mpnet-base-v2-large vss-embeddings-agnews-BAAI-bge-large-en-v1.5-large  ## Run only large VSS embedding benchmarks (N>=50K)
+
 
 ######################################################################
 # GRAPH BENCHMARKS
@@ -262,6 +267,38 @@ graph-index-large: $(EXTENSION)                    ## Graph: index comparison, l
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 100000 --avg-degree 5 --index-mode both $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 100000 --avg-degree 20 --index-mode both $(BENCH_FLAGS)
 
+
+# ~6 minutes
+graph-all-small: graph-small graph-centrality-small graph-community-small graph-index-small  ## Graph: all ops, small (N<=1K)
+
+graph-all-medium: graph-medium graph-centrality-medium graph-community-medium graph-index-medium  ## Graph: all ops, medium (N<=10K)
+
+graph-all-large: graph-large graph-centrality-large graph-community-large graph-index-large  ## Graph: all ops, large (N<=100K)
+
+graph-all-scale-free: graph-scale-free graph-centrality-scale-free graph-community-scale-free  ## Graph: all ops, Barabasi-Albert scale-free topology
+
+######################################################################
+# ADJACENCY BENCHMARKS
+######################################################################
+
+adjacency-xsmall: $(EXTENSION)                     ## Adjacency: xsmall profile (V=500)
+	$(BENCH_ADJ) --profile xsmall
+
+adjacency-small: $(EXTENSION)                      ## Adjacency: small profile (V=1K)
+	$(BENCH_ADJ) --profile small
+
+adjacency-medium: $(EXTENSION)                     ## Adjacency: medium profile (V=5K)
+	$(BENCH_ADJ) --profile medium
+
+adjacency-large: $(EXTENSION)                      ## Adjacency: large profile (V=10K)
+	$(BENCH_ADJ) --profile large
+
+adjacency-xlarge: $(EXTENSION)                     ## Adjacency: xlarge profile (V=50K)
+	$(BENCH_ADJ) --profile xlarge
+
+adjacency-all: $(EXTENSION)                        ## Adjacency: all profiles
+	$(BENCH_ADJ) --profile all
+
 ######################################################################
 # AGGREGATED TARGETS
 ######################################################################
@@ -271,7 +308,10 @@ analyze-vss:                                       ## Analyze vector results -> 
 analyze-graph:                                     ## Analyze graph results -> tables + charts
 	$(PYTHON) scripts/benchmark_graph_analyze.py
 
-analyze: analyze-vss analyze-graph                 ## Analyze all benchmark results
+analyze-adjacency:                                 ## Analyze adjacency results -> tables + charts
+	$(PYTHON) $(BENCH_ADJ_ANALYZE_SRC)
+
+analyze: analyze-vss analyze-graph analyze-adjacency  ## Analyze all benchmark results
 
 ######################################################################
 # BENCHMARK MANIFESTS

@@ -33,17 +33,17 @@ SQLITE_EXTENSION_INIT3
 typedef struct {
     sqlite3_vtab base;
     sqlite3 *db;
-    char *vtab_name;     /* virtual table name (for shadow table prefixes) */
+    char *vtab_name; /* virtual table name (for shadow table prefixes) */
     char *edge_table;
     char *src_col;
     char *dst_col;
-    char *weight_col;    /* NULL if unweighted */
-    int64_t generation;  /* increments on each rebuild */
+    char *weight_col;   /* NULL if unweighted */
+    int64_t generation; /* increments on each rebuild */
 } AdjVtab;
 
 typedef struct {
     sqlite3_vtab_cursor base;
-    sqlite3_stmt *stmt;  /* iterates _nodes JOIN _degree */
+    sqlite3_stmt *stmt; /* iterates _nodes JOIN _degree */
     int eof;
 } AdjCursor;
 
@@ -55,7 +55,7 @@ enum {
     ADJ_COL_OUT_DEGREE,
     ADJ_COL_W_IN_DEGREE,
     ADJ_COL_W_OUT_DEGREE,
-    ADJ_COL_COMMAND,     /* hidden: same name as table, for command pattern */
+    ADJ_COL_COMMAND, /* hidden: same name as table, for command pattern */
     ADJ_NUM_COLS
 };
 
@@ -84,8 +84,7 @@ static const char *strip_quotes(const char *val, char *buf, int bufsize) {
     return val;
 }
 
-static int parse_adjacency_params(int argc, const char *const *argv,
-                                  AdjParams *params, char **errmsg) {
+static int parse_adjacency_params(int argc, const char *const *argv, AdjParams *params, char **errmsg) {
     memset(params, 0, sizeof(AdjParams));
     char buf[256];
 
@@ -121,8 +120,7 @@ static int parse_adjacency_params(int argc, const char *const *argv,
     }
 
     /* Validate identifiers */
-    if (id_validate(params->edge_table) != 0 ||
-        id_validate(params->src_col) != 0 ||
+    if (id_validate(params->edge_table) != 0 || id_validate(params->src_col) != 0 ||
         id_validate(params->dst_col) != 0) {
         *errmsg = sqlite3_mprintf("graph_adjacency: invalid table/column identifier");
         sqlite3_free(params->edge_table);
@@ -154,64 +152,64 @@ static int create_shadow_tables(sqlite3 *db, const char *name) {
     int rc;
 
     /* Config table */
-    sql = sqlite3_mprintf(
-        "CREATE TABLE IF NOT EXISTS \"%w_config\" "
-        "(key TEXT PRIMARY KEY, value TEXT)", name);
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_config\" "
+                          "(key TEXT PRIMARY KEY, value TEXT)",
+                          name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
 
     /* Node registry: string ID ↔ integer index */
-    sql = sqlite3_mprintf(
-        "CREATE TABLE IF NOT EXISTS \"%w_nodes\" "
-        "(idx INTEGER PRIMARY KEY, id TEXT UNIQUE)", name);
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_nodes\" "
+                          "(idx INTEGER PRIMARY KEY, id TEXT UNIQUE)",
+                          name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
 
     /* Degree sequence */
-    sql = sqlite3_mprintf(
-        "CREATE TABLE IF NOT EXISTS \"%w_degree\" "
-        "(idx INTEGER PRIMARY KEY, in_deg INTEGER, out_deg INTEGER, "
-        "w_in_deg REAL, w_out_deg REAL)", name);
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_degree\" "
+                          "(idx INTEGER PRIMARY KEY, in_deg INTEGER, out_deg INTEGER, "
+                          "w_in_deg REAL, w_out_deg REAL)",
+                          name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
 
     /* Forward CSR (outgoing edges) — block_id=0 for monolithic Phase 1 */
-    sql = sqlite3_mprintf(
-        "CREATE TABLE IF NOT EXISTS \"%w_csr_fwd\" "
-        "(block_id INTEGER PRIMARY KEY, offsets BLOB, targets BLOB, weights BLOB)",
-        name);
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_csr_fwd\" "
+                          "(block_id INTEGER PRIMARY KEY, offsets BLOB, targets BLOB, weights BLOB)",
+                          name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
 
     /* Reverse CSR (incoming edges) */
-    sql = sqlite3_mprintf(
-        "CREATE TABLE IF NOT EXISTS \"%w_csr_rev\" "
-        "(block_id INTEGER PRIMARY KEY, offsets BLOB, targets BLOB, weights BLOB)",
-        name);
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_csr_rev\" "
+                          "(block_id INTEGER PRIMARY KEY, offsets BLOB, targets BLOB, weights BLOB)",
+                          name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
 
     /* Delta log for incremental merge */
-    sql = sqlite3_mprintf(
-        "CREATE TABLE IF NOT EXISTS \"%w_delta\" "
-        "(rowid INTEGER PRIMARY KEY, src TEXT, dst TEXT, weight REAL, op INTEGER)",
-        name);
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_delta\" "
+                          "(rowid INTEGER PRIMARY KEY, src TEXT, dst TEXT, weight REAL, op INTEGER)",
+                          name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     return rc;
 }
 
 static int drop_shadow_tables(sqlite3 *db, const char *name) {
-    const char *suffixes[] = {"_config", "_nodes", "_degree",
-                              "_csr_fwd", "_csr_rev", "_delta"};
+    const char *suffixes[] = {"_config", "_nodes", "_degree", "_csr_fwd", "_csr_rev", "_delta"};
     for (int i = 0; i < 6; i++) {
-        char *sql = sqlite3_mprintf("DROP TABLE IF EXISTS \"%w%s\"",
-                                    name, suffixes[i]);
+        char *sql = sqlite3_mprintf("DROP TABLE IF EXISTS \"%w%s\"", name, suffixes[i]);
         sqlite3_exec(db, sql, NULL, NULL, NULL);
         sqlite3_free(sql);
     }
@@ -222,43 +220,40 @@ static int drop_shadow_tables(sqlite3 *db, const char *name) {
  * Trigger Management
  * ═══════════════════════════════════════════════════════════════ */
 
-static int install_triggers(sqlite3 *db, const char *vtab_name,
-                            const char *edge_table, const char *src_col,
+static int install_triggers(sqlite3 *db, const char *vtab_name, const char *edge_table, const char *src_col,
                             const char *dst_col, const char *weight_col) {
     char *sql;
     int rc;
     const char *w_expr = weight_col ? weight_col : "NULL";
 
     /* AFTER INSERT */
-    sql = sqlite3_mprintf(
-        "CREATE TRIGGER IF NOT EXISTS \"%w_ai\" AFTER INSERT ON \"%w\" BEGIN "
-        "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
-        "VALUES (NEW.\"%w\", NEW.\"%w\", NEW.\"%w\", 1); END",
-        vtab_name, edge_table, vtab_name, src_col, dst_col, w_expr);
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ai\" AFTER INSERT ON \"%w\" BEGIN "
+                          "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
+                          "VALUES (NEW.\"%w\", NEW.\"%w\", NEW.\"%w\", 1); END",
+                          vtab_name, edge_table, vtab_name, src_col, dst_col, w_expr);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
 
     /* AFTER DELETE */
-    sql = sqlite3_mprintf(
-        "CREATE TRIGGER IF NOT EXISTS \"%w_ad\" AFTER DELETE ON \"%w\" BEGIN "
-        "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
-        "VALUES (OLD.\"%w\", OLD.\"%w\", OLD.\"%w\", 2); END",
-        vtab_name, edge_table, vtab_name, src_col, dst_col, w_expr);
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ad\" AFTER DELETE ON \"%w\" BEGIN "
+                          "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
+                          "VALUES (OLD.\"%w\", OLD.\"%w\", OLD.\"%w\", 2); END",
+                          vtab_name, edge_table, vtab_name, src_col, dst_col, w_expr);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
 
     /* AFTER UPDATE: log delete of old + insert of new */
-    sql = sqlite3_mprintf(
-        "CREATE TRIGGER IF NOT EXISTS \"%w_au\" AFTER UPDATE ON \"%w\" BEGIN "
-        "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
-        "VALUES (OLD.\"%w\", OLD.\"%w\", OLD.\"%w\", 2); "
-        "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
-        "VALUES (NEW.\"%w\", NEW.\"%w\", NEW.\"%w\", 1); END",
-        vtab_name, edge_table,
-        vtab_name, src_col, dst_col, w_expr,
-        vtab_name, src_col, dst_col, w_expr);
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_au\" AFTER UPDATE ON \"%w\" BEGIN "
+                          "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
+                          "VALUES (OLD.\"%w\", OLD.\"%w\", OLD.\"%w\", 2); "
+                          "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
+                          "VALUES (NEW.\"%w\", NEW.\"%w\", NEW.\"%w\", 1); END",
+                          vtab_name, edge_table, vtab_name, src_col, dst_col, w_expr, vtab_name, src_col, dst_col,
+                          w_expr);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     return rc;
@@ -267,8 +262,7 @@ static int install_triggers(sqlite3 *db, const char *vtab_name,
 static void remove_triggers(sqlite3 *db, const char *vtab_name) {
     const char *suffixes[] = {"_ai", "_ad", "_au"};
     for (int i = 0; i < 3; i++) {
-        char *sql = sqlite3_mprintf("DROP TRIGGER IF EXISTS \"%w%s\"",
-                                    vtab_name, suffixes[i]);
+        char *sql = sqlite3_mprintf("DROP TRIGGER IF EXISTS \"%w%s\"", vtab_name, suffixes[i]);
         sqlite3_exec(db, sql, NULL, NULL, NULL);
         sqlite3_free(sql);
     }
@@ -278,28 +272,23 @@ static void remove_triggers(sqlite3 *db, const char *vtab_name) {
  * Config Helpers
  * ═══════════════════════════════════════════════════════════════ */
 
-static int config_set(sqlite3 *db, const char *name,
-                      const char *key, const char *value) {
-    char *sql = sqlite3_mprintf(
-        "INSERT OR REPLACE INTO \"%w_config\"(key, value) VALUES ('%w', '%w')",
-        name, key, value);
+static int config_set(sqlite3 *db, const char *name, const char *key, const char *value) {
+    char *sql =
+        sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_config\"(key, value) VALUES ('%w', '%w')", name, key, value);
     int rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     return rc;
 }
 
-static int config_set_int(sqlite3 *db, const char *name,
-                          const char *key, int64_t value) {
+static int config_set_int(sqlite3 *db, const char *name, const char *key, int64_t value) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", (long long)value);
     return config_set(db, name, key, buf);
 }
 
-static int64_t config_get_int(sqlite3 *db, const char *name,
-                              const char *key, int64_t def) {
+static int64_t config_get_int(sqlite3 *db, const char *name, const char *key, int64_t def) {
     sqlite3_stmt *stmt;
-    char *sql = sqlite3_mprintf(
-        "SELECT value FROM \"%w_config\" WHERE key='%w'", name, key);
+    char *sql = sqlite3_mprintf("SELECT value FROM \"%w_config\" WHERE key='%w'", name, key);
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
@@ -324,7 +313,8 @@ static int64_t delta_count(sqlite3 *db, const char *name) {
     char *sql = sqlite3_mprintf("SELECT COUNT(*) FROM \"%w_delta\"", name);
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return 0;
+    if (rc != SQLITE_OK)
+        return 0;
 
     int64_t count = 0;
     if (sqlite3_step(stmt) == SQLITE_ROW)
@@ -341,37 +331,44 @@ static int delta_clear(sqlite3 *db, const char *name) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * CSR Storage (shadow table BLOBs)
+ * CSR Storage (shadow table BLOBs — Phase 3: blocked)
+ *
+ * CSR is stored as one row per block in _csr_fwd/_csr_rev.
+ * Each block covers CSR_BLOCK_SIZE nodes. Offsets are 0-based
+ * within each block; targets use global node indices.
  * ═══════════════════════════════════════════════════════════════ */
 
-static int store_csr_blob(sqlite3 *db, const char *name,
-                          const char *suffix, const CsrArray *csr) {
+/* Store a single block row */
+static int store_csr_block_row(sqlite3 *db, const char *name, const char *suffix, int block_id, const CsrArray *blk) {
     sqlite3_stmt *stmt;
-    char *sql = sqlite3_mprintf(
-        "INSERT OR REPLACE INTO \"%w%s\"(block_id, offsets, targets, weights) "
-        "VALUES (0, ?, ?, ?)", name, suffix);
+    char *sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w%s\"(block_id, offsets, targets, weights) "
+                                "VALUES (?, ?, ?, ?)",
+                                name, suffix);
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
+
+    sqlite3_bind_int(stmt, 1, block_id);
 
     /* Bind offsets BLOB */
-    int offsets_bytes = (csr->node_count + 1) * (int)sizeof(int32_t);
-    sqlite3_bind_blob(stmt, 1, csr->offsets, offsets_bytes, SQLITE_STATIC);
+    int offsets_bytes = (blk->node_count + 1) * (int)sizeof(int32_t);
+    sqlite3_bind_blob(stmt, 2, blk->offsets, offsets_bytes, SQLITE_STATIC);
 
     /* Bind targets BLOB */
-    if (csr->edge_count > 0 && csr->targets) {
-        int targets_bytes = csr->edge_count * (int)sizeof(int32_t);
-        sqlite3_bind_blob(stmt, 2, csr->targets, targets_bytes, SQLITE_STATIC);
+    if (blk->edge_count > 0 && blk->targets) {
+        int targets_bytes = blk->edge_count * (int)sizeof(int32_t);
+        sqlite3_bind_blob(stmt, 3, blk->targets, targets_bytes, SQLITE_STATIC);
     } else {
-        sqlite3_bind_blob(stmt, 2, "", 0, SQLITE_STATIC);
+        sqlite3_bind_blob(stmt, 3, "", 0, SQLITE_STATIC);
     }
 
     /* Bind weights BLOB */
-    if (csr->has_weights && csr->weights && csr->edge_count > 0) {
-        int weights_bytes = csr->edge_count * (int)sizeof(double);
-        sqlite3_bind_blob(stmt, 3, csr->weights, weights_bytes, SQLITE_STATIC);
+    if (blk->has_weights && blk->weights && blk->edge_count > 0) {
+        int weights_bytes = blk->edge_count * (int)sizeof(double);
+        sqlite3_bind_blob(stmt, 4, blk->weights, weights_bytes, SQLITE_STATIC);
     } else {
-        sqlite3_bind_null(stmt, 3);
+        sqlite3_bind_null(stmt, 4);
     }
 
     rc = sqlite3_step(stmt);
@@ -379,20 +376,61 @@ static int store_csr_blob(sqlite3 *db, const char *name,
     return (rc == SQLITE_DONE) ? SQLITE_OK : rc;
 }
 
-static int load_csr_blob(sqlite3 *db, const char *name,
-                         const char *suffix, CsrArray *csr) {
+/* Store a full CSR as blocked rows. Clears existing rows first. */
+static int store_csr_blocked(sqlite3 *db, const char *name, const char *suffix, const CsrArray *csr, int block_size) {
+    /* Clear existing blocks */
+    char *sql = sqlite3_mprintf("DELETE FROM \"%w%s\"", name, suffix);
+    sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+
+    int n_blocks = csr_block_count(csr->node_count, block_size);
+    if (n_blocks == 0) {
+        /* Empty CSR — store a single empty block */
+        CsrArray empty;
+        memset(&empty, 0, sizeof(CsrArray));
+        empty.offsets = (int32_t *)sqlite3_malloc(sizeof(int32_t));
+        if (!empty.offsets)
+            return SQLITE_NOMEM;
+        empty.offsets[0] = 0;
+        int rc = store_csr_block_row(db, name, suffix, 0, &empty);
+        sqlite3_free(empty.offsets);
+        return rc;
+    }
+
+    for (int b = 0; b < n_blocks; b++) {
+        int32_t start = (int32_t)(b * block_size);
+        int32_t count = (int32_t)block_size;
+        if (start + count > csr->node_count)
+            count = csr->node_count - start;
+
+        CsrArray blk;
+        if (csr_extract_block(csr, start, count, &blk) != 0)
+            return SQLITE_NOMEM;
+
+        int rc = store_csr_block_row(db, name, suffix, b, &blk);
+        csr_destroy(&blk);
+        if (rc != SQLITE_OK)
+            return rc;
+    }
+    return SQLITE_OK;
+}
+
+/* Load a single block from shadow table. Returns SQLITE_OK.
+ * If block doesn't exist, csr is zeroed. */
+static int load_csr_block_row(sqlite3 *db, const char *name, const char *suffix, int block_id, CsrArray *csr) {
     sqlite3_stmt *stmt;
-    char *sql = sqlite3_mprintf(
-        "SELECT offsets, targets, weights FROM \"%w%s\" WHERE block_id=0",
-        name, suffix);
+    char *sql = sqlite3_mprintf("SELECT offsets, targets, weights FROM \"%w%s\" WHERE block_id=?", name, suffix);
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
+
+    sqlite3_bind_int(stmt, 1, block_id);
 
     if (sqlite3_step(stmt) != SQLITE_ROW) {
         sqlite3_finalize(stmt);
         memset(csr, 0, sizeof(CsrArray));
-        return SQLITE_OK; /* no data yet */
+        return SQLITE_OK;
     }
 
     const void *offsets = sqlite3_column_blob(stmt, 0);
@@ -402,9 +440,44 @@ static int load_csr_blob(sqlite3 *db, const char *name,
     const void *weights = sqlite3_column_blob(stmt, 2);
     int weights_bytes = sqlite3_column_bytes(stmt, 2);
 
-    rc = csr_deserialize(csr, offsets, offsets_bytes,
-                         targets, targets_bytes, weights, weights_bytes);
+    rc = csr_deserialize(csr, offsets, offsets_bytes, targets, targets_bytes, weights, weights_bytes);
     sqlite3_finalize(stmt);
+    return (rc == 0) ? SQLITE_OK : SQLITE_ERROR;
+}
+
+/* Load all blocks and merge into a monolithic CSR */
+static int load_csr_blocked(sqlite3 *db, const char *name, const char *suffix, CsrArray *csr, int block_size,
+                            int32_t node_count) {
+    memset(csr, 0, sizeof(CsrArray));
+
+    int n_blocks = csr_block_count(node_count, block_size);
+    if (n_blocks == 0) {
+        /* Try loading as monolithic (backward compat) */
+        return load_csr_block_row(db, name, suffix, 0, csr);
+    }
+
+    /* Load each block */
+    CsrArray *blocks = (CsrArray *)sqlite3_malloc(n_blocks * (int)sizeof(CsrArray));
+    if (!blocks)
+        return SQLITE_NOMEM;
+    memset(blocks, 0, n_blocks * sizeof(CsrArray));
+
+    for (int b = 0; b < n_blocks; b++) {
+        int rc = load_csr_block_row(db, name, suffix, b, &blocks[b]);
+        if (rc != SQLITE_OK) {
+            for (int j = 0; j < b; j++)
+                csr_destroy(&blocks[j]);
+            sqlite3_free(blocks);
+            return rc;
+        }
+    }
+
+    /* Merge into monolithic CSR */
+    int rc = csr_merge_blocks(blocks, n_blocks, block_size, node_count, csr);
+    for (int b = 0; b < n_blocks; b++)
+        csr_destroy(&blocks[b]);
+    sqlite3_free(blocks);
+
     return (rc == 0) ? SQLITE_OK : SQLITE_ERROR;
 }
 
@@ -419,12 +492,12 @@ static int store_nodes(sqlite3 *db, const char *name, const GraphData *g) {
     sqlite3_free(sql);
 
     /* Insert all nodes */
-    sql = sqlite3_mprintf(
-        "INSERT INTO \"%w_nodes\"(idx, id) VALUES (?, ?)", name);
+    sql = sqlite3_mprintf("INSERT INTO \"%w_nodes\"(idx, id) VALUES (?, ?)", name);
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
 
     for (int i = 0; i < g->node_count; i++) {
         sqlite3_bind_int(stmt, 1, i);
@@ -436,22 +509,21 @@ static int store_nodes(sqlite3 *db, const char *name, const GraphData *g) {
     return SQLITE_OK;
 }
 
-static int store_degrees(sqlite3 *db, const char *name,
-                         const GraphData *g,
-                         const CsrArray *fwd, const CsrArray *rev) {
+static int store_degrees(sqlite3 *db, const char *name, const GraphData *g, const CsrArray *fwd, const CsrArray *rev) {
     /* Clear existing */
     char *sql = sqlite3_mprintf("DELETE FROM \"%w_degree\"", name);
     sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
 
     /* Insert degree sequence */
-    sql = sqlite3_mprintf(
-        "INSERT INTO \"%w_degree\"(idx, in_deg, out_deg, w_in_deg, w_out_deg) "
-        "VALUES (?, ?, ?, ?, ?)", name);
+    sql = sqlite3_mprintf("INSERT INTO \"%w_degree\"(idx, in_deg, out_deg, w_in_deg, w_out_deg) "
+                          "VALUES (?, ?, ?, ?, ?)",
+                          name);
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return rc;
+    if (rc != SQLITE_OK)
+        return rc;
 
     for (int i = 0; i < g->node_count; i++) {
         int32_t out_deg = csr_degree(fwd, (int32_t)i);
@@ -522,23 +594,28 @@ static int adj_full_rebuild(AdjVtab *vtab) {
 
     /* Store node registry */
     rc = store_nodes(vtab->db, vtab->vtab_name, &g);
-    if (rc != SQLITE_OK) goto rollback;
+    if (rc != SQLITE_OK)
+        goto rollback;
 
-    /* Store CSR BLOBs */
-    rc = store_csr_blob(vtab->db, vtab->vtab_name, "_csr_fwd", &fwd);
-    if (rc != SQLITE_OK) goto rollback;
-    rc = store_csr_blob(vtab->db, vtab->vtab_name, "_csr_rev", &rev);
-    if (rc != SQLITE_OK) goto rollback;
+    /* Store CSR BLOBs (blocked) */
+    rc = store_csr_blocked(vtab->db, vtab->vtab_name, "_csr_fwd", &fwd, CSR_BLOCK_SIZE);
+    if (rc != SQLITE_OK)
+        goto rollback;
+    rc = store_csr_blocked(vtab->db, vtab->vtab_name, "_csr_rev", &rev, CSR_BLOCK_SIZE);
+    if (rc != SQLITE_OK)
+        goto rollback;
 
     /* Store degree sequence */
     rc = store_degrees(vtab->db, vtab->vtab_name, &g, &fwd, &rev);
-    if (rc != SQLITE_OK) goto rollback;
+    if (rc != SQLITE_OK)
+        goto rollback;
 
     /* Update config metadata */
     vtab->generation++;
     config_set_int(vtab->db, vtab->vtab_name, "generation", vtab->generation);
     config_set_int(vtab->db, vtab->vtab_name, "node_count", g.node_count);
     config_set_int(vtab->db, vtab->vtab_name, "edge_count", g.edge_count);
+    config_set_int(vtab->db, vtab->vtab_name, "block_size", CSR_BLOCK_SIZE);
 
     /* Clear delta log */
     delta_clear(vtab->db, vtab->vtab_name);
@@ -560,59 +637,130 @@ rollback:
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * Incremental Rebuild (Phase 2: Delta Merge)
+ * Incremental Rebuild (Phase 3: Block-Level Delta Merge)
+ *
+ * Only loads and rewrites blocks whose nodes are affected by deltas.
+ * For forward CSR, affected blocks = { src_idx / block_size }.
+ * For reverse CSR, affected blocks = { dst_idx / block_size }.
+ * Unaffected blocks: zero I/O.
  * ═══════════════════════════════════════════════════════════════ */
+
+/* Helper: collect unique affected block IDs from deltas (src_idx-based) */
+static int collect_affected_blocks(const CsrDelta *deltas, int dcount, int block_size, int32_t node_count,
+                                   int **out_blocks, int *out_count) {
+    int n_blocks = csr_block_count(node_count, block_size);
+    /* Bitmap of affected blocks */
+    char *affected = (char *)calloc((size_t)(n_blocks + 1), 1);
+    if (!affected)
+        return -1;
+
+    for (int i = 0; i < dcount; i++) {
+        int32_t src = deltas[i].src_idx;
+        if (src >= 0 && src < node_count) {
+            affected[src / block_size] = 1;
+        } else if (src >= node_count) {
+            /* New node — affects a new or last block */
+            int bid = src / block_size;
+            if (bid < n_blocks + 1)
+                affected[bid] = 1;
+        }
+    }
+
+    /* Collect IDs */
+    int count = 0;
+    for (int b = 0; b <= n_blocks; b++)
+        if (affected[b])
+            count++;
+
+    int *ids = (int *)malloc((size_t)(count + 1) * sizeof(int));
+    if (!ids) {
+        free(affected);
+        return -1;
+    }
+
+    int j = 0;
+    for (int b = 0; b <= n_blocks; b++)
+        if (affected[b])
+            ids[j++] = b;
+
+    free(affected);
+    *out_blocks = ids;
+    *out_count = count;
+    return 0;
+}
+
+/* Helper: recompute and store degree for a single node */
+static int store_degree_one(sqlite3_stmt *stmt, int32_t idx, const CsrArray *fwd, const CsrArray *rev) {
+    int32_t out_deg = csr_degree(fwd, idx);
+    int32_t in_deg = csr_degree(rev, idx);
+    double w_out = 0.0, w_in = 0.0;
+
+    if (fwd->has_weights && fwd->weights) {
+        for (int32_t j = fwd->offsets[idx]; j < fwd->offsets[idx + 1]; j++)
+            w_out += fwd->weights[j];
+    } else {
+        w_out = (double)out_deg;
+    }
+    if (rev->has_weights && rev->weights) {
+        for (int32_t j = rev->offsets[idx]; j < rev->offsets[idx + 1]; j++)
+            w_in += rev->weights[j];
+    } else {
+        w_in = (double)in_deg;
+    }
+
+    sqlite3_bind_int(stmt, 1, idx);
+    sqlite3_bind_int(stmt, 2, in_deg);
+    sqlite3_bind_int(stmt, 3, out_deg);
+    sqlite3_bind_double(stmt, 4, w_in);
+    sqlite3_bind_double(stmt, 5, w_out);
+    sqlite3_step(stmt);
+    sqlite3_reset(stmt);
+    return SQLITE_OK;
+}
 
 static int adj_incremental_rebuild(AdjVtab *vtab) {
     int rc;
+    int block_size = (int)config_get_int(vtab->db, vtab->vtab_name, "block_size", 0);
 
-    /* Load existing CSR from shadow tables */
-    CsrArray old_fwd, old_rev;
-    rc = load_csr_blob(vtab->db, vtab->vtab_name, "_csr_fwd", &old_fwd);
-    if (rc != SQLITE_OK) return rc;
-    rc = load_csr_blob(vtab->db, vtab->vtab_name, "_csr_rev", &old_rev);
-    if (rc != SQLITE_OK) { csr_destroy(&old_fwd); return rc; }
+    /* If no block_size stored, fall back to full rebuild (pre-Phase 3 data) */
+    if (block_size <= 0)
+        return adj_full_rebuild(vtab);
+
+    int32_t old_node_count = (int32_t)config_get_int(vtab->db, vtab->vtab_name, "node_count", 0);
 
     /* Load node registry for string→index mapping */
-    /* Build a lookup map: read _nodes, create hash map */
     GraphData node_reg;
     graph_data_init(&node_reg);
 
     {
         sqlite3_stmt *stmt;
-        char *sql = sqlite3_mprintf(
-            "SELECT idx, id FROM \"%w_nodes\" ORDER BY idx", vtab->vtab_name);
+        char *sql = sqlite3_mprintf("SELECT idx, id FROM \"%w_nodes\" ORDER BY idx", vtab->vtab_name);
         rc = sqlite3_prepare_v2(vtab->db, sql, -1, &stmt, NULL);
         sqlite3_free(sql);
         if (rc != SQLITE_OK) {
-            csr_destroy(&old_fwd);
-            csr_destroy(&old_rev);
             graph_data_destroy(&node_reg);
             return rc;
         }
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             const char *id = (const char *)sqlite3_column_text(stmt, 1);
-            if (id) graph_data_find_or_add(&node_reg, id);
+            if (id)
+                graph_data_find_or_add(&node_reg, id);
         }
         sqlite3_finalize(stmt);
     }
 
     /* Read delta entries and resolve string IDs to indices */
     sqlite3_stmt *delta_stmt;
-    char *sql = sqlite3_mprintf(
-        "SELECT src, dst, weight, op FROM \"%w_delta\"", vtab->vtab_name);
+    char *sql = sqlite3_mprintf("SELECT src, dst, weight, op FROM \"%w_delta\"", vtab->vtab_name);
     rc = sqlite3_prepare_v2(vtab->db, sql, -1, &delta_stmt, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK) {
-        csr_destroy(&old_fwd);
-        csr_destroy(&old_rev);
         graph_data_destroy(&node_reg);
         return rc;
     }
 
     /* Collect delta entries */
-    int dcap = 64;
-    int dcount = 0;
+    int dcap = 64, dcount = 0;
     CsrDelta *fwd_deltas = (CsrDelta *)malloc((size_t)dcap * sizeof(CsrDelta));
     CsrDelta *rev_deltas = (CsrDelta *)malloc((size_t)dcap * sizeof(CsrDelta));
 
@@ -622,9 +770,9 @@ static int adj_incremental_rebuild(AdjVtab *vtab) {
         double weight = sqlite3_column_double(delta_stmt, 2);
         int op = sqlite3_column_int(delta_stmt, 3);
 
-        if (!src || !dst) continue;
+        if (!src || !dst)
+            continue;
 
-        /* Resolve or create node indices */
         int si = graph_data_find_or_add(&node_reg, src);
         int di = graph_data_find_or_add(&node_reg, dst);
 
@@ -634,13 +782,11 @@ static int adj_incremental_rebuild(AdjVtab *vtab) {
             rev_deltas = (CsrDelta *)realloc(rev_deltas, (size_t)dcap * sizeof(CsrDelta));
         }
 
-        /* Forward: src → dst */
         fwd_deltas[dcount].src_idx = (int32_t)si;
         fwd_deltas[dcount].dst_idx = (int32_t)di;
         fwd_deltas[dcount].weight = weight;
         fwd_deltas[dcount].op = op;
 
-        /* Reverse: dst ← src */
         rev_deltas[dcount].src_idx = (int32_t)di;
         rev_deltas[dcount].dst_idx = (int32_t)si;
         rev_deltas[dcount].weight = weight;
@@ -651,113 +797,209 @@ static int adj_incremental_rebuild(AdjVtab *vtab) {
     sqlite3_finalize(delta_stmt);
 
     if (dcount == 0) {
-        /* Nothing to merge */
         free(fwd_deltas);
         free(rev_deltas);
-        csr_destroy(&old_fwd);
-        csr_destroy(&old_rev);
         graph_data_destroy(&node_reg);
         return SQLITE_OK;
     }
 
-    /* Apply deltas */
     int32_t new_node_count = (int32_t)node_reg.node_count;
-    CsrArray new_fwd, new_rev;
 
-    if (csr_apply_delta(&old_fwd, fwd_deltas, dcount, new_node_count, &new_fwd) != 0 ||
-        csr_apply_delta(&old_rev, rev_deltas, dcount, new_node_count, &new_rev) != 0) {
+    /* Identify affected blocks for fwd and rev CSR */
+    int *fwd_blocks = NULL, fwd_nblocks = 0;
+    int *rev_blocks = NULL, rev_nblocks = 0;
+    if (collect_affected_blocks(fwd_deltas, dcount, block_size, new_node_count, &fwd_blocks, &fwd_nblocks) != 0 ||
+        collect_affected_blocks(rev_deltas, dcount, block_size, new_node_count, &rev_blocks, &rev_nblocks) != 0) {
         free(fwd_deltas);
         free(rev_deltas);
-        csr_destroy(&old_fwd);
-        csr_destroy(&old_rev);
-        csr_destroy(&new_fwd);
-        csr_destroy(&new_rev);
+        free(fwd_blocks);
+        free(rev_blocks);
         graph_data_destroy(&node_reg);
-        /* Fall back to full rebuild */
         return adj_full_rebuild(vtab);
     }
 
-    free(fwd_deltas);
-    free(rev_deltas);
-    csr_destroy(&old_fwd);
-    csr_destroy(&old_rev);
-
-    /* Store updated data */
     sqlite3_exec(vtab->db, "SAVEPOINT adj_incr", NULL, NULL, NULL);
 
     /* Update node registry if new nodes were added */
-    rc = store_nodes(vtab->db, vtab->vtab_name, &node_reg);
-    if (rc != SQLITE_OK) goto incr_rollback;
+    if (new_node_count > old_node_count) {
+        rc = store_nodes(vtab->db, vtab->vtab_name, &node_reg);
+        if (rc != SQLITE_OK)
+            goto incr_rollback;
+    }
 
-    rc = store_csr_blob(vtab->db, vtab->vtab_name, "_csr_fwd", &new_fwd);
-    if (rc != SQLITE_OK) goto incr_rollback;
-    rc = store_csr_blob(vtab->db, vtab->vtab_name, "_csr_rev", &new_rev);
-    if (rc != SQLITE_OK) goto incr_rollback;
+    /* ── Block-level merge for forward CSR ────────────────── */
+    for (int bi = 0; bi < fwd_nblocks; bi++) {
+        int bid = fwd_blocks[bi];
+        int32_t bstart = (int32_t)(bid * block_size);
+        int32_t bcount = (int32_t)block_size;
+        if (bstart + bcount > new_node_count)
+            bcount = new_node_count - bstart;
+        if (bcount <= 0)
+            bcount = 0;
 
-    /* Recompute degrees from new CSR */
+        /* Load this block */
+        CsrArray old_blk;
+        rc = load_csr_block_row(vtab->db, vtab->vtab_name, "_csr_fwd", bid, &old_blk);
+        if (rc != SQLITE_OK)
+            goto incr_rollback;
+
+        /* Filter and remap deltas for this block */
+        int blk_dcap = 16, blk_dcount = 0;
+        CsrDelta *blk_deltas = (CsrDelta *)malloc((size_t)blk_dcap * sizeof(CsrDelta));
+        for (int d = 0; d < dcount; d++) {
+            int32_t src = fwd_deltas[d].src_idx;
+            if (src >= bstart && src < bstart + bcount) {
+                if (blk_dcount >= blk_dcap) {
+                    blk_dcap *= 2;
+                    blk_deltas = (CsrDelta *)realloc(blk_deltas, (size_t)blk_dcap * sizeof(CsrDelta));
+                }
+                blk_deltas[blk_dcount] = fwd_deltas[d];
+                blk_deltas[blk_dcount].src_idx -= bstart; /* remap to block-local */
+                blk_dcount++;
+            }
+        }
+
+        /* Apply delta */
+        CsrArray new_blk;
+        if (csr_apply_delta(&old_blk, blk_deltas, blk_dcount, bcount, &new_blk) != 0) {
+            free(blk_deltas);
+            csr_destroy(&old_blk);
+            goto incr_rollback_full;
+        }
+        free(blk_deltas);
+        csr_destroy(&old_blk);
+
+        /* Store updated block */
+        rc = store_csr_block_row(vtab->db, vtab->vtab_name, "_csr_fwd", bid, &new_blk);
+        csr_destroy(&new_blk);
+        if (rc != SQLITE_OK)
+            goto incr_rollback;
+    }
+
+    /* ── Block-level merge for reverse CSR ────────────────── */
+    for (int bi = 0; bi < rev_nblocks; bi++) {
+        int bid = rev_blocks[bi];
+        int32_t bstart = (int32_t)(bid * block_size);
+        int32_t bcount = (int32_t)block_size;
+        if (bstart + bcount > new_node_count)
+            bcount = new_node_count - bstart;
+        if (bcount <= 0)
+            bcount = 0;
+
+        CsrArray old_blk;
+        rc = load_csr_block_row(vtab->db, vtab->vtab_name, "_csr_rev", bid, &old_blk);
+        if (rc != SQLITE_OK)
+            goto incr_rollback;
+
+        int blk_dcap = 16, blk_dcount = 0;
+        CsrDelta *blk_deltas = (CsrDelta *)malloc((size_t)blk_dcap * sizeof(CsrDelta));
+        for (int d = 0; d < dcount; d++) {
+            int32_t src = rev_deltas[d].src_idx;
+            if (src >= bstart && src < bstart + bcount) {
+                if (blk_dcount >= blk_dcap) {
+                    blk_dcap *= 2;
+                    blk_deltas = (CsrDelta *)realloc(blk_deltas, (size_t)blk_dcap * sizeof(CsrDelta));
+                }
+                blk_deltas[blk_dcount] = rev_deltas[d];
+                blk_deltas[blk_dcount].src_idx -= bstart;
+                blk_dcount++;
+            }
+        }
+
+        CsrArray new_blk;
+        if (csr_apply_delta(&old_blk, blk_deltas, blk_dcount, bcount, &new_blk) != 0) {
+            free(blk_deltas);
+            csr_destroy(&old_blk);
+            goto incr_rollback_full;
+        }
+        free(blk_deltas);
+        csr_destroy(&old_blk);
+
+        rc = store_csr_block_row(vtab->db, vtab->vtab_name, "_csr_rev", bid, &new_blk);
+        csr_destroy(&new_blk);
+        if (rc != SQLITE_OK)
+            goto incr_rollback;
+    }
+
+    /* ── Recompute degrees for affected nodes ─────────────── */
     {
+        /* Load full CSR for degree computation (blocks are already updated) */
+        CsrArray full_fwd, full_rev;
+        rc = load_csr_blocked(vtab->db, vtab->vtab_name, "_csr_fwd", &full_fwd, block_size, new_node_count);
+        if (rc != SQLITE_OK)
+            goto incr_rollback;
+        rc = load_csr_blocked(vtab->db, vtab->vtab_name, "_csr_rev", &full_rev, block_size, new_node_count);
+        if (rc != SQLITE_OK) {
+            csr_destroy(&full_fwd);
+            goto incr_rollback;
+        }
+
+        /* Rebuild full degree table (simpler than tracking affected nodes) */
         char *dsql = sqlite3_mprintf("DELETE FROM \"%w_degree\"", vtab->vtab_name);
         sqlite3_exec(vtab->db, dsql, NULL, NULL, NULL);
         sqlite3_free(dsql);
 
-        dsql = sqlite3_mprintf(
-            "INSERT INTO \"%w_degree\"(idx, in_deg, out_deg, w_in_deg, w_out_deg) "
-            "VALUES (?, ?, ?, ?, ?)", vtab->vtab_name);
+        dsql = sqlite3_mprintf("INSERT INTO \"%w_degree\"(idx, in_deg, out_deg, w_in_deg, w_out_deg) "
+                               "VALUES (?, ?, ?, ?, ?)",
+                               vtab->vtab_name);
         sqlite3_stmt *dstmt;
         rc = sqlite3_prepare_v2(vtab->db, dsql, -1, &dstmt, NULL);
         sqlite3_free(dsql);
-        if (rc != SQLITE_OK) goto incr_rollback;
-
-        for (int32_t i = 0; i < new_node_count; i++) {
-            int32_t out_deg = csr_degree(&new_fwd, i);
-            int32_t in_deg = csr_degree(&new_rev, i);
-            double w_out = 0.0, w_in = 0.0;
-
-            if (new_fwd.has_weights && new_fwd.weights) {
-                for (int32_t j = new_fwd.offsets[i]; j < new_fwd.offsets[i+1]; j++)
-                    w_out += new_fwd.weights[j];
-            } else {
-                w_out = (double)out_deg;
-            }
-            if (new_rev.has_weights && new_rev.weights) {
-                for (int32_t j = new_rev.offsets[i]; j < new_rev.offsets[i+1]; j++)
-                    w_in += new_rev.weights[j];
-            } else {
-                w_in = (double)in_deg;
-            }
-
-            sqlite3_bind_int(dstmt, 1, i);
-            sqlite3_bind_int(dstmt, 2, in_deg);
-            sqlite3_bind_int(dstmt, 3, out_deg);
-            sqlite3_bind_double(dstmt, 4, w_in);
-            sqlite3_bind_double(dstmt, 5, w_out);
-            sqlite3_step(dstmt);
-            sqlite3_reset(dstmt);
+        if (rc != SQLITE_OK) {
+            csr_destroy(&full_fwd);
+            csr_destroy(&full_rev);
+            goto incr_rollback;
         }
+
+        for (int32_t i = 0; i < new_node_count; i++)
+            store_degree_one(dstmt, i, &full_fwd, &full_rev);
+
         sqlite3_finalize(dstmt);
+        csr_destroy(&full_fwd);
+        csr_destroy(&full_rev);
     }
 
     vtab->generation++;
     config_set_int(vtab->db, vtab->vtab_name, "generation", vtab->generation);
     config_set_int(vtab->db, vtab->vtab_name, "node_count", new_node_count);
-    {
-        int64_t new_edge_count = new_fwd.edge_count;
-        config_set_int(vtab->db, vtab->vtab_name, "edge_count", new_edge_count);
-    }
-    delta_clear(vtab->db, vtab->vtab_name);
+    config_set_int(vtab->db, vtab->vtab_name, "block_size", block_size);
 
+    /* Count total edges from config (approximate: add delta ops) */
+    {
+        int64_t old_edges = config_get_int(vtab->db, vtab->vtab_name, "edge_count", 0);
+        int64_t net_change = 0;
+        for (int d = 0; d < dcount; d++)
+            net_change += (fwd_deltas[d].op == 1) ? 1 : -1;
+        config_set_int(vtab->db, vtab->vtab_name, "edge_count", old_edges + net_change);
+    }
+
+    delta_clear(vtab->db, vtab->vtab_name);
     sqlite3_exec(vtab->db, "RELEASE adj_incr", NULL, NULL, NULL);
 
-    csr_destroy(&new_fwd);
-    csr_destroy(&new_rev);
+    free(fwd_deltas);
+    free(rev_deltas);
+    free(fwd_blocks);
+    free(rev_blocks);
     graph_data_destroy(&node_reg);
     return SQLITE_OK;
+
+incr_rollback_full:
+    sqlite3_exec(vtab->db, "ROLLBACK TO adj_incr", NULL, NULL, NULL);
+    sqlite3_exec(vtab->db, "RELEASE adj_incr", NULL, NULL, NULL);
+    free(fwd_deltas);
+    free(rev_deltas);
+    free(fwd_blocks);
+    free(rev_blocks);
+    graph_data_destroy(&node_reg);
+    return adj_full_rebuild(vtab);
 
 incr_rollback:
     sqlite3_exec(vtab->db, "ROLLBACK TO adj_incr", NULL, NULL, NULL);
     sqlite3_exec(vtab->db, "RELEASE adj_incr", NULL, NULL, NULL);
-    csr_destroy(&new_fwd);
-    csr_destroy(&new_rev);
+    free(fwd_deltas);
+    free(rev_deltas);
+    free(fwd_blocks);
+    free(rev_blocks);
     graph_data_destroy(&node_reg);
     return rc;
 }
@@ -795,9 +1037,8 @@ static int adj_ensure_fresh(AdjVtab *vtab) {
  * Virtual Table Methods
  * ═══════════════════════════════════════════════════════════════ */
 
-static int adj_init(sqlite3 *db, void *pAux, int argc,
-                    const char *const *argv, sqlite3_vtab **ppVTab,
-                    char **pzErr, int is_create) {
+static int adj_init(sqlite3 *db, void *pAux, int argc, const char *const *argv, sqlite3_vtab **ppVTab, char **pzErr,
+                    int is_create) {
     (void)pAux;
 
     AdjParams params;
@@ -806,12 +1047,12 @@ static int adj_init(sqlite3 *db, void *pAux, int argc,
         return rc;
 
     /* Declare schema — command column is hidden, named after the table */
-    char *schema = sqlite3_mprintf(
-        "CREATE TABLE x("
-        "node TEXT, node_idx INTEGER, "
-        "in_degree INTEGER, out_degree INTEGER, "
-        "weighted_in_degree REAL, weighted_out_degree REAL, "
-        "\"%w\" HIDDEN)", argv[2]);
+    char *schema = sqlite3_mprintf("CREATE TABLE x("
+                                   "node TEXT, node_idx INTEGER, "
+                                   "in_degree INTEGER, out_degree INTEGER, "
+                                   "weighted_in_degree REAL, weighted_out_degree REAL, "
+                                   "\"%w\" HIDDEN)",
+                                   argv[2]);
     rc = sqlite3_declare_vtab(db, schema);
     sqlite3_free(schema);
     if (rc != SQLITE_OK) {
@@ -862,8 +1103,7 @@ static int adj_init(sqlite3 *db, void *pAux, int argc,
         config_set_int(db, argv[2], "generation", 0);
 
         /* Install triggers on edge table */
-        rc = install_triggers(db, argv[2], params.edge_table,
-                              params.src_col, params.dst_col, params.weight_col);
+        rc = install_triggers(db, argv[2], params.edge_table, params.src_col, params.dst_col, params.weight_col);
         if (rc != SQLITE_OK) {
             *pzErr = sqlite3_mprintf("graph_adjacency: failed to install triggers");
             drop_shadow_tables(db, argv[2]);
@@ -902,14 +1142,12 @@ static int adj_init(sqlite3 *db, void *pAux, int argc,
     return SQLITE_OK;
 }
 
-static int adj_xCreate(sqlite3 *db, void *pAux, int argc,
-                       const char *const *argv, sqlite3_vtab **ppVTab,
+static int adj_xCreate(sqlite3 *db, void *pAux, int argc, const char *const *argv, sqlite3_vtab **ppVTab,
                        char **pzErr) {
     return adj_init(db, pAux, argc, argv, ppVTab, pzErr, 1);
 }
 
-static int adj_xConnect(sqlite3 *db, void *pAux, int argc,
-                        const char *const *argv, sqlite3_vtab **ppVTab,
+static int adj_xConnect(sqlite3 *db, void *pAux, int argc, const char *const *argv, sqlite3_vtab **ppVTab,
                         char **pzErr) {
     return adj_init(db, pAux, argc, argv, ppVTab, pzErr, 0);
 }
@@ -966,8 +1204,7 @@ static int adj_xBestIndex(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo) {
     for (int i = 0; i < pInfo->nConstraint; i++) {
         if (!pInfo->aConstraint[i].usable)
             continue;
-        if (pInfo->aConstraint[i].iColumn == ADJ_COL_NODE &&
-            pInfo->aConstraint[i].op == SQLITE_INDEX_CONSTRAINT_EQ) {
+        if (pInfo->aConstraint[i].iColumn == ADJ_COL_NODE && pInfo->aConstraint[i].op == SQLITE_INDEX_CONSTRAINT_EQ) {
             has_node = i;
         }
     }
@@ -990,8 +1227,7 @@ static int adj_xBestIndex(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo) {
 
 /* ─── xFilter ──────────────────────────────────────────────── */
 
-static int adj_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
-                       const char *idxStr, int argc, sqlite3_value **argv) {
+static int adj_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr, int argc, sqlite3_value **argv) {
     (void)idxStr;
     AdjCursor *cur = (AdjCursor *)pCursor;
     AdjVtab *vtab = (AdjVtab *)cur->base.pVtab;
@@ -1011,22 +1247,20 @@ static int adj_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
     char *sql;
     if (idxNum == 1 && argc >= 1) {
         /* Point lookup */
-        sql = sqlite3_mprintf(
-            "SELECT n.idx, n.id, COALESCE(d.in_deg, 0), COALESCE(d.out_deg, 0), "
-            "COALESCE(d.w_in_deg, 0.0), COALESCE(d.w_out_deg, 0.0) "
-            "FROM \"%w_nodes\" n "
-            "LEFT JOIN \"%w_degree\" d ON n.idx = d.idx "
-            "WHERE n.id = ?",
-            vtab->vtab_name, vtab->vtab_name);
+        sql = sqlite3_mprintf("SELECT n.idx, n.id, COALESCE(d.in_deg, 0), COALESCE(d.out_deg, 0), "
+                              "COALESCE(d.w_in_deg, 0.0), COALESCE(d.w_out_deg, 0.0) "
+                              "FROM \"%w_nodes\" n "
+                              "LEFT JOIN \"%w_degree\" d ON n.idx = d.idx "
+                              "WHERE n.id = ?",
+                              vtab->vtab_name, vtab->vtab_name);
     } else {
         /* Full scan */
-        sql = sqlite3_mprintf(
-            "SELECT n.idx, n.id, COALESCE(d.in_deg, 0), COALESCE(d.out_deg, 0), "
-            "COALESCE(d.w_in_deg, 0.0), COALESCE(d.w_out_deg, 0.0) "
-            "FROM \"%w_nodes\" n "
-            "LEFT JOIN \"%w_degree\" d ON n.idx = d.idx "
-            "ORDER BY n.idx",
-            vtab->vtab_name, vtab->vtab_name);
+        sql = sqlite3_mprintf("SELECT n.idx, n.id, COALESCE(d.in_deg, 0), COALESCE(d.out_deg, 0), "
+                              "COALESCE(d.w_in_deg, 0.0), COALESCE(d.w_out_deg, 0.0) "
+                              "FROM \"%w_nodes\" n "
+                              "LEFT JOIN \"%w_degree\" d ON n.idx = d.idx "
+                              "ORDER BY n.idx",
+                              vtab->vtab_name, vtab->vtab_name);
     }
 
     rc = sqlite3_prepare_v2(vtab->db, sql, -1, &cur->stmt, NULL);
@@ -1095,24 +1329,21 @@ static int adj_xRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid) {
 
 /* ─── xUpdate (command pattern) ────────────────────────────── */
 
-static int adj_xUpdate(sqlite3_vtab *pVTab, int argc,
-                       sqlite3_value **argv, sqlite3_int64 *pRowid) {
+static int adj_xUpdate(sqlite3_vtab *pVTab, int argc, sqlite3_value **argv, sqlite3_int64 *pRowid) {
     (void)pRowid;
     AdjVtab *vtab = (AdjVtab *)pVTab;
 
     /* Only handle INSERT with command column set (FTS5 pattern) */
     if (argc < 2 || sqlite3_value_type(argv[0]) != SQLITE_NULL) {
-        vtab->base.zErrMsg = sqlite3_mprintf(
-            "graph_adjacency: direct INSERT/UPDATE/DELETE not supported; "
-            "modify the source edge table instead");
+        vtab->base.zErrMsg = sqlite3_mprintf("graph_adjacency: direct INSERT/UPDATE/DELETE not supported; "
+                                             "modify the source edge table instead");
         return SQLITE_ERROR;
     }
 
     /* Check if command column (last column) has a value */
     int cmd_col = 2 + ADJ_COL_COMMAND;
     if (cmd_col >= argc || sqlite3_value_type(argv[cmd_col]) == SQLITE_NULL) {
-        vtab->base.zErrMsg = sqlite3_mprintf(
-            "graph_adjacency: use INSERT INTO t(t) VALUES('rebuild') for commands");
+        vtab->base.zErrMsg = sqlite3_mprintf("graph_adjacency: use INSERT INTO t(t) VALUES('rebuild') for commands");
         return SQLITE_ERROR;
     }
 
@@ -1130,9 +1361,9 @@ static int adj_xUpdate(sqlite3_vtab *pVTab, int argc,
         /* Stats is a no-op for now; query _config directly */
         return SQLITE_OK;
     } else {
-        vtab->base.zErrMsg = sqlite3_mprintf(
-            "graph_adjacency: unknown command '%s' "
-            "(valid: rebuild, incremental_rebuild, stats)", cmd);
+        vtab->base.zErrMsg = sqlite3_mprintf("graph_adjacency: unknown command '%s' "
+                                             "(valid: rebuild, incremental_rebuild, stats)",
+                                             cmd);
         return SQLITE_ERROR;
     }
 }
@@ -1144,12 +1375,10 @@ static int adj_xRename(sqlite3_vtab *pVTab, const char *zNew) {
     const char *old_name = vtab->vtab_name;
     int rc;
 
-    const char *suffixes[] = {"_config", "_nodes", "_degree",
-                              "_csr_fwd", "_csr_rev", "_delta"};
+    const char *suffixes[] = {"_config", "_nodes", "_degree", "_csr_fwd", "_csr_rev", "_delta"};
     for (int i = 0; i < 6; i++) {
-        char *sql = sqlite3_mprintf(
-            "ALTER TABLE \"%w%s\" RENAME TO \"%w%s\"",
-            old_name, suffixes[i], zNew, suffixes[i]);
+        char *sql =
+            sqlite3_mprintf("ALTER TABLE \"%w%s\" RENAME TO \"%w%s\"", old_name, suffixes[i], zNew, suffixes[i]);
         rc = sqlite3_exec(vtab->db, sql, NULL, NULL, NULL);
         sqlite3_free(sql);
         if (rc != SQLITE_OK)
@@ -1158,8 +1387,7 @@ static int adj_xRename(sqlite3_vtab *pVTab, const char *zNew) {
 
     /* Rename triggers */
     remove_triggers(vtab->db, old_name);
-    install_triggers(vtab->db, zNew, vtab->edge_table,
-                     vtab->src_col, vtab->dst_col, vtab->weight_col);
+    install_triggers(vtab->db, zNew, vtab->edge_table, vtab->src_col, vtab->dst_col, vtab->weight_col);
 
     /* Update vtab name */
     sqlite3_free(vtab->vtab_name);
@@ -1171,8 +1399,7 @@ static int adj_xRename(sqlite3_vtab *pVTab, const char *zNew) {
 /* ─── xShadowName ──────────────────────────────────────────── */
 
 static int adj_xShadowName(const char *zName) {
-    const char *suffixes[] = {"config", "nodes", "degree",
-                              "csr_fwd", "csr_rev", "delta"};
+    const char *suffixes[] = {"config", "nodes", "degree", "csr_fwd", "csr_rev", "delta"};
     for (int i = 0; i < 6; i++) {
         if (strcmp(zName, suffixes[i]) == 0)
             return 1;
@@ -1186,8 +1413,7 @@ static int adj_xShadowName(const char *zName) {
 
 int is_graph_adjacency(sqlite3 *db, const char *name) {
     sqlite3_stmt *stmt;
-    char *sql = sqlite3_mprintf(
-        "SELECT value FROM \"%w_config\" WHERE key='edge_table'", name);
+    char *sql = sqlite3_mprintf("SELECT value FROM \"%w_config\" WHERE key='edge_table'", name);
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
@@ -1200,16 +1426,17 @@ int is_graph_adjacency(sqlite3 *db, const char *name) {
 /* Helper: get a string config value (caller must sqlite3_free) */
 static char *config_get_str(sqlite3 *db, const char *name, const char *key) {
     sqlite3_stmt *stmt;
-    char *sql = sqlite3_mprintf(
-        "SELECT value FROM \"%w_config\" WHERE key='%w'", name, key);
+    char *sql = sqlite3_mprintf("SELECT value FROM \"%w_config\" WHERE key='%w'", name, key);
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     sqlite3_free(sql);
-    if (rc != SQLITE_OK) return NULL;
+    if (rc != SQLITE_OK)
+        return NULL;
 
     char *result = NULL;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         const char *val = (const char *)sqlite3_column_text(stmt, 0);
-        if (val) result = sqlite3_mprintf("%s", val);
+        if (val)
+            result = sqlite3_mprintf("%s", val);
     }
     sqlite3_finalize(stmt);
     return result;
@@ -1219,8 +1446,7 @@ static char *config_get_str(sqlite3 *db, const char *name, const char *key) {
 static void gadj_adj_add(GraphAdjList *adj, int target, double weight) {
     if (adj->count >= adj->capacity) {
         int nc = adj->capacity == 0 ? 8 : adj->capacity * 2;
-        adj->edges = (GraphEdge *)realloc(adj->edges,
-                                          (size_t)nc * sizeof(GraphEdge));
+        adj->edges = (GraphEdge *)realloc(adj->edges, (size_t)nc * sizeof(GraphEdge));
         adj->capacity = nc;
     }
     adj->edges[adj->count].target = target;
@@ -1229,24 +1455,24 @@ static void gadj_adj_add(GraphAdjList *adj, int target, double weight) {
 }
 
 /* Load GraphData from shadow tables (assumes data is fresh) */
-static int load_graph_from_shadow(sqlite3 *db, const char *name,
-                                  GraphData *g, char **pzErrMsg) {
+static int load_graph_from_shadow(sqlite3 *db, const char *name, GraphData *g, char **pzErrMsg) {
     graph_data_init(g);
     int rc;
 
     /* Load node registry */
     sqlite3_stmt *stmt;
-    char *sql = sqlite3_mprintf(
-        "SELECT id FROM \"%w_nodes\" ORDER BY idx", name);
+    char *sql = sqlite3_mprintf("SELECT id FROM \"%w_nodes\" ORDER BY idx", name);
     rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK) {
-        if (pzErrMsg) *pzErrMsg = sqlite3_mprintf("failed to load nodes");
+        if (pzErrMsg)
+            *pzErrMsg = sqlite3_mprintf("failed to load nodes");
         return rc;
     }
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const char *id = (const char *)sqlite3_column_text(stmt, 0);
-        if (id) graph_data_find_or_add(g, id);
+        if (id)
+            graph_data_find_or_add(g, id);
     }
     sqlite3_finalize(stmt);
 
@@ -1254,10 +1480,18 @@ static int load_graph_from_shadow(sqlite3 *db, const char *name,
         return SQLITE_OK; /* empty graph */
 
     /* Load forward CSR → out[] adjacency lists */
+    int block_size = (int)config_get_int(db, name, "block_size", 0);
+    int32_t node_count_cfg = (int32_t)config_get_int(db, name, "node_count", 0);
+
     CsrArray fwd;
-    rc = load_csr_blob(db, name, "_csr_fwd", &fwd);
+    if (block_size > 0 && node_count_cfg > 0) {
+        rc = load_csr_blocked(db, name, "_csr_fwd", &fwd, block_size, node_count_cfg);
+    } else {
+        rc = load_csr_block_row(db, name, "_csr_fwd", 0, &fwd);
+    }
     if (rc != SQLITE_OK) {
-        if (pzErrMsg) *pzErrMsg = sqlite3_mprintf("failed to load forward CSR");
+        if (pzErrMsg)
+            *pzErrMsg = sqlite3_mprintf("failed to load forward CSR");
         return rc;
     }
 
@@ -1273,9 +1507,14 @@ static int load_graph_from_shadow(sqlite3 *db, const char *name,
 
     /* Load reverse CSR → in[] adjacency lists */
     CsrArray rev;
-    rc = load_csr_blob(db, name, "_csr_rev", &rev);
+    if (block_size > 0 && node_count_cfg > 0) {
+        rc = load_csr_blocked(db, name, "_csr_rev", &rev, block_size, node_count_cfg);
+    } else {
+        rc = load_csr_block_row(db, name, "_csr_rev", 0, &rev);
+    }
     if (rc != SQLITE_OK) {
-        if (pzErrMsg) *pzErrMsg = sqlite3_mprintf("failed to load reverse CSR");
+        if (pzErrMsg)
+            *pzErrMsg = sqlite3_mprintf("failed to load reverse CSR");
         return rc;
     }
 
@@ -1290,8 +1529,7 @@ static int load_graph_from_shadow(sqlite3 *db, const char *name,
     return SQLITE_OK;
 }
 
-int graph_data_load_from_adjacency(sqlite3 *db, const char *vtab_name,
-                                   GraphData *g, char **pzErrMsg) {
+int graph_data_load_from_adjacency(sqlite3 *db, const char *vtab_name, GraphData *g, char **pzErrMsg) {
     /* Check if data is stale */
     int64_t dc = delta_count(db, vtab_name);
 

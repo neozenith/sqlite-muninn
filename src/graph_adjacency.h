@@ -36,7 +36,6 @@ int is_graph_adjacency(sqlite3 *db, const char *name);
  *
  * Returns SQLITE_OK on success. Caller must call graph_data_destroy().
  */
-int graph_data_load_from_adjacency(sqlite3 *db, const char *vtab_name,
-                                   GraphData *g, char **pzErrMsg);
+int graph_data_load_from_adjacency(sqlite3 *db, const char *vtab_name, GraphData *g, char **pzErrMsg);
 
 #endif /* GRAPH_ADJACENCY_H */

@@ -17,13 +17,19 @@
 
 #include <stdint.h>
 
+/* Default block size for blocked CSR storage (Phase 3).
+ * Each block covers this many nodes and is stored as a separate
+ * row in the shadow table. Chosen so each block's BLOB is ~16KB
+ * (4096 nodes × 4 bytes per offset), fitting in ~4 SQLite pages. */
+#define CSR_BLOCK_SIZE 4096
+
 /* In-memory CSR representation for one direction (forward or reverse) */
 typedef struct {
-    int32_t node_count;  /* V */
-    int32_t edge_count;  /* E */
-    int32_t *offsets;    /* [V+1] — offsets[i] = start of node i's neighbors */
-    int32_t *targets;    /* [E]   — target node indices */
-    double *weights;     /* [E] or NULL if unweighted */
+    int32_t node_count; /* V */
+    int32_t edge_count; /* E */
+    int32_t *offsets;   /* [V+1] — offsets[i] = start of node i's neighbors */
+    int32_t *targets;   /* [E]   — target node indices */
+    double *weights;    /* [E] or NULL if unweighted */
     int has_weights;
 } CsrArray;
 
@@ -63,10 +69,8 @@ const int32_t *csr_neighbors(const CsrArray *csr, int32_t idx, int32_t *count);
  * weights_blob: double[edge_count] or NULL.
  * Returns 0 on success, -1 on error.
  */
-int csr_deserialize(CsrArray *csr,
-                    const void *offsets_blob, int offsets_bytes,
-                    const void *targets_blob, int targets_bytes,
-                    const void *weights_blob, int weights_bytes);
+int csr_deserialize(CsrArray *csr, const void *offsets_blob, int offsets_bytes, const void *targets_blob,
+                    int targets_bytes, const void *weights_blob, int weights_bytes);
 
 /*
  * Apply delta operations to an existing CSR, producing a new CSR.
@@ -74,9 +78,31 @@ int csr_deserialize(CsrArray *csr,
  * were introduced by the delta.
  * Returns 0 on success, -1 on error.
  */
-int csr_apply_delta(const CsrArray *old_csr,
-                    const CsrDelta *deltas, int delta_count,
-                    int32_t new_node_count,
+int csr_apply_delta(const CsrArray *old_csr, const CsrDelta *deltas, int delta_count, int32_t new_node_count,
                     CsrArray *new_csr);
+
+/* ── Phase 3: Blocked CSR ─────────────────────────────────── */
+
+/*
+ * Return the number of blocks needed for node_count nodes.
+ * Returns ceil(node_count / block_size).
+ */
+int csr_block_count(int32_t node_count, int block_size);
+
+/*
+ * Extract a sub-CSR for one block of nodes.
+ * Block covers global nodes [start, start+count). Offsets are rebased
+ * to 0 within the block. Targets remain as GLOBAL node indices.
+ * Returns 0 on success, -1 on error. Caller must csr_destroy() the block.
+ */
+int csr_extract_block(const CsrArray *csr, int32_t start, int32_t count, CsrArray *block);
+
+/*
+ * Reassemble a monolithic CSR from an array of block CSRs.
+ * Each block[i] covers block_size nodes (last block may be smaller).
+ * Offsets are rebased to global, targets are already global.
+ * Returns 0 on success, -1 on error. Caller must csr_destroy() the result.
+ */
+int csr_merge_blocks(const CsrArray *blocks, int n_blocks, int block_size, int32_t total_nodes, CsrArray *out);
 
 #endif /* GRAPH_CSR_H */

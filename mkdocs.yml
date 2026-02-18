@@ -2,7 +2,7 @@ exclude_docs: |
   plans/
 
 site_name: sqlite-muninn
-site_description: "HNSW vector search, graph traversal, centrality measures, community detection, and Node2Vec embeddings in a single SQLite extension."
+site_description: "HNSW vector search, graph traversal, centrality measures, community detection, CSR adjacency caching, dbt-style graph selection, and Node2Vec embeddings in a single SQLite extension."
 site_url: https://neozenith.github.io/sqlite-muninn/
 site_author: Josh Peak
 repo_url: https://github.com/neozenith/sqlite-muninn
@@ -44,6 +44,7 @@ plugins:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Architecture: architecture.md
   - Guides:
     - Centrality & Community: centrality-community.md
     - Node2Vec: node2vec.md
@@ -55,6 +56,7 @@ nav:
     - Overview: benchmarks.md
     - VSS: benchmarks/vss.md
     - Graph: benchmarks/graph.md
+    - Adjacency: benchmarks/adjacency.md
 
 markdown_extensions:
   - pymdownx.highlight:

@@ -57,9 +57,9 @@ CHARTS_DIR = PROJECT_ROOT / "benchmarks" / "charts"
 def load_all_results(filter_source=None, filter_dim=None, filter_model=None, filter_dataset=None):
     """Load all JSONL files from results directory, applying optional filters."""
     records = []
-    # Only load vector benchmark files (exclude graph_*.jsonl and kg_*.jsonl)
+    # Load vector benchmark files (vss_*.jsonl) and legacy run_*.jsonl
     jsonl_files = sorted(
-        f for f in RESULTS_DIR.glob("*.jsonl") if not f.name.startswith("graph_") and not f.name.startswith("kg_")
+        f for f in RESULTS_DIR.glob("*.jsonl") if f.name.startswith("vss_") or f.name.startswith("run_")
     )
 
     if not jsonl_files:

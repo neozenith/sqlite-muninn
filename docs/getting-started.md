@@ -88,7 +88,7 @@ DROP TABLE test_vec;
 
 ## Quick Tour
 
-muninn provides five subsystems, all registered by a single `.load`:
+muninn provides seven subsystems, all registered by a single `.load`:
 
 ### 1. HNSW Vector Index
 
@@ -156,7 +156,7 @@ SELECT node2vec_train(
 );
 ```
 
-## Vector Encoding
+**Vector Encoding**
 
 Vectors are passed as **raw float32 blobs** (little-endian, `sizeof(float) * dim` bytes). They are **not** JSON arrays.
 
@@ -185,8 +185,43 @@ Vectors are passed as **raw float32 blobs** (little-endian, `sizeof(float) * dim
     sqlite3_bind_blob(stmt, 1, vec, sizeof(vec), SQLITE_STATIC);
     ```
 
+### 6. Graph Adjacency Cache
+
+Maintain a persistent CSR-cached adjacency index that auto-rebuilds when edges change:
+
+```sql
+CREATE VIRTUAL TABLE g USING graph_adjacency(
+    edge_table='edges', src_col='src', dst_col='dst', weight_col='weight'
+);
+
+-- Pre-computed degrees (reads from cache, not edge table)
+SELECT node, in_degree, out_degree FROM g ORDER BY out_degree DESC;
+
+-- Algorithm TVFs can use the adjacency cache as their source
+SELECT node, centrality FROM graph_degree('g', 'src', 'dst', 'weight');
+```
+
+### 7. Graph Select (Lineage Queries)
+
+Query graph lineage with dbt-inspired selector syntax:
+
+```sql
+-- All descendants of node C
+SELECT node, depth FROM graph_select('edges', 'src', 'dst', 'C+');
+
+-- All ancestors of node C
+SELECT node, depth FROM graph_select('edges', 'src', 'dst', '+C');
+
+-- Build closure: descendants of C plus all their ancestors
+SELECT node FROM graph_select('edges', 'src', 'dst', '@C');
+
+-- Common ancestors of D and E (intersection)
+SELECT node FROM graph_select('edges', 'src', 'dst', '+D,+E');
+```
+
 ## Next Steps
 
+- [Architecture](architecture.md) — How the extension is organized internally
 - [API Reference](api.md) — Complete reference for all functions and virtual tables
 - [Centrality & Community Guide](centrality-community.md) — When and how to use centrality measures and Leiden
 - [Node2Vec Guide](node2vec.md) — Parameter tuning and integration patterns

@@ -15,9 +15,7 @@ import pytest
 @pytest.fixture
 def adj_conn(conn):
     """Provide a connection with an edge table and graph_adjacency VT."""
-    conn.execute(
-        "CREATE TABLE edges (src TEXT, dst TEXT, weight REAL DEFAULT 1.0)"
-    )
+    conn.execute("CREATE TABLE edges (src TEXT, dst TEXT, weight REAL DEFAULT 1.0)")
     conn.execute("INSERT INTO edges VALUES ('A', 'B', 1.0)")
     conn.execute("INSERT INTO edges VALUES ('B', 'C', 2.0)")
     conn.execute("INSERT INTO edges VALUES ('C', 'A', 3.0)")
@@ -43,28 +41,20 @@ class TestCreation:
         """VT creation without weight_col should work."""
         conn.execute("CREATE TABLE edges (src TEXT, dst TEXT)")
         conn.execute("INSERT INTO edges VALUES ('X', 'Y')")
-        conn.execute(
-            "CREATE VIRTUAL TABLE g USING graph_adjacency("
-            "edge_table='edges', src_col='src', dst_col='dst')"
-        )
+        conn.execute("CREATE VIRTUAL TABLE g USING graph_adjacency(edge_table='edges', src_col='src', dst_col='dst')")
         rows = conn.execute("SELECT * FROM g").fetchall()
         assert len(rows) == 2
 
     def test_create_empty_table(self, conn):
         """VT creation on empty edge table should produce 0 rows."""
         conn.execute("CREATE TABLE edges (src TEXT, dst TEXT)")
-        conn.execute(
-            "CREATE VIRTUAL TABLE g USING graph_adjacency("
-            "edge_table='edges', src_col='src', dst_col='dst')"
-        )
+        conn.execute("CREATE VIRTUAL TABLE g USING graph_adjacency(edge_table='edges', src_col='src', dst_col='dst')")
         rows = conn.execute("SELECT * FROM g").fetchall()
         assert len(rows) == 0
 
     def test_shadow_tables_exist(self, adj_conn):
         """Shadow tables should be created."""
-        tables = adj_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'g_%'"
-        ).fetchall()
+        tables = adj_conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'g_%'").fetchall()
         names = {t[0] for t in tables}
         assert "g_config" in names
         assert "g_nodes" in names
@@ -89,18 +79,14 @@ class TestDegreeQuery:
 
     def test_degree_values(self, adj_conn):
         """Each node in the triangle should have in_degree=1, out_degree=1."""
-        rows = adj_conn.execute(
-            "SELECT node, in_degree, out_degree FROM g ORDER BY node"
-        ).fetchall()
+        rows = adj_conn.execute("SELECT node, in_degree, out_degree FROM g ORDER BY node").fetchall()
         for node, in_deg, out_deg in rows:
             assert in_deg == 1, f"Node {node} in_degree should be 1, got {in_deg}"
             assert out_deg == 1, f"Node {node} out_degree should be 1, got {out_deg}"
 
     def test_weighted_degree(self, adj_conn):
         """Weighted degrees should reflect edge weights."""
-        rows = adj_conn.execute(
-            "SELECT node, weighted_in_degree, weighted_out_degree FROM g ORDER BY node"
-        ).fetchall()
+        rows = adj_conn.execute("SELECT node, weighted_in_degree, weighted_out_degree FROM g ORDER BY node").fetchall()
         degree_map = {r[0]: (r[1], r[2]) for r in rows}
         # A→B(1.0), C→A(3.0) → A: w_out=1.0, w_in=3.0
         assert degree_map["A"][1] == 1.0  # w_out
@@ -146,18 +132,14 @@ class TestTriggerTracking:
         """Deleting an edge should trigger rebuild on next query."""
         adj_conn.execute("DELETE FROM edges WHERE src = 'C' AND dst = 'A'")
         # After delete: A→B, B→C remain. C has no outgoing edges.
-        rows = adj_conn.execute(
-            "SELECT node, out_degree FROM g ORDER BY node"
-        ).fetchall()
+        rows = adj_conn.execute("SELECT node, out_degree FROM g ORDER BY node").fetchall()
         degree_map = {r[0]: r[1] for r in rows}
         assert degree_map["C"] == 0
 
     def test_update_triggers_rebuild(self, adj_conn):
         """Updating an edge should trigger rebuild on next query."""
         adj_conn.execute("UPDATE edges SET weight = 10.0 WHERE src = 'A' AND dst = 'B'")
-        rows = adj_conn.execute(
-            "SELECT node, weighted_out_degree FROM g WHERE node = 'A'"
-        ).fetchall()
+        rows = adj_conn.execute("SELECT node, weighted_out_degree FROM g WHERE node = 'A'").fetchall()
         assert rows[0][1] == 10.0
 
     def test_multiple_inserts_batch(self, adj_conn):
@@ -189,7 +171,7 @@ class TestRebuildCommand:
 
     def test_unknown_command_fails(self, adj_conn):
         """Unknown command should raise an error."""
-        with pytest.raises(Exception):
+        with pytest.raises(sqlite3.OperationalError):
             adj_conn.execute("INSERT INTO g(g) VALUES ('bad_command')")
 
 
@@ -199,14 +181,12 @@ class TestDropAndRename:
     def test_drop_cleans_up(self, adj_conn):
         """DROP TABLE should remove shadow tables and triggers."""
         adj_conn.execute("DROP TABLE g")
-        tables = adj_conn.execute(
-            "SELECT name FROM sqlite_master WHERE name LIKE 'g_%'"
-        ).fetchall()
+        tables = adj_conn.execute("SELECT name FROM sqlite_master WHERE name LIKE 'g_%'").fetchall()
         assert len(tables) == 0
 
     def test_direct_insert_rejected(self, adj_conn):
         """Direct INSERT into VT (not a command) should be rejected."""
-        with pytest.raises(Exception):
+        with pytest.raises(sqlite3.OperationalError):
             adj_conn.execute("INSERT INTO g(node) VALUES ('Z')")
 
 
@@ -219,7 +199,7 @@ class TestIncrementalMerge:
         for i in range(100):
             adj_conn.execute(
                 "INSERT INTO edges VALUES (?, ?, 1.0)",
-                (f"N{i}", f"N{(i+1) % 100}"),
+                (f"N{i}", f"N{(i + 1) % 100}"),
             )
         # Force initial build
         adj_conn.execute("INSERT INTO g(g) VALUES ('rebuild')")
@@ -239,7 +219,7 @@ class TestIncrementalMerge:
         for i in range(10):
             adj_conn.execute(
                 "INSERT INTO edges VALUES (?, ?, 1.0)",
-                (f"X{i}", f"X{(i+1) % 10}"),
+                (f"X{i}", f"X{(i + 1) % 10}"),
             )
 
         # Query should trigger full rebuild due to large delta
@@ -267,12 +247,59 @@ class TestCSRConsistency:
         assert node_set == {"A", "B", "C"}
 
     def test_config_has_metadata(self, adj_conn):
-        """Config should have edge_table, generation, etc."""
+        """Config should have edge_table, generation, block_size, etc."""
         config = adj_conn.execute("SELECT key, value FROM g_config").fetchall()
-        config_map = {k: v for k, v in config}
+        config_map = dict(config)
         assert config_map["edge_table"] == "edges"
         assert config_map["src_col"] == "src"
         assert config_map["dst_col"] == "dst"
         assert int(config_map["generation"]) >= 1
         assert int(config_map["node_count"]) == 3
         assert int(config_map["edge_count"]) == 3
+        assert int(config_map["block_size"]) == 4096
+
+
+class TestBlockedCSR:
+    """Verify Phase 3 blocked CSR storage."""
+
+    def test_small_graph_single_block(self, adj_conn):
+        """A graph with 3 nodes fits in one block (block_size=4096)."""
+        rows = adj_conn.execute("SELECT block_id FROM g_csr_fwd ORDER BY block_id").fetchall()
+        # 3 nodes / 4096 = 1 block (block_id=0)
+        assert len(rows) == 1
+        assert rows[0][0] == 0
+
+    def test_blocked_storage_preserves_degrees(self, adj_conn):
+        """Degree values should be correct with blocked storage."""
+        rows = adj_conn.execute("SELECT node, out_degree, in_degree FROM g ORDER BY node").fetchall()
+        by_node = {r[0]: (r[1], r[2]) for r in rows}
+        assert by_node["A"] == (1, 1)  # A→B, C→A
+        assert by_node["B"] == (1, 1)  # B→C, A→B
+        assert by_node["C"] == (1, 1)  # C→A, B→C
+
+    def test_blocked_incremental_rebuild(self, adj_conn):
+        """Incremental rebuild with blocked storage should work."""
+        # Build a larger graph to have multiple nodes
+        for i in range(50):
+            adj_conn.execute(
+                "INSERT INTO edges VALUES (?, ?, 1.0)",
+                (f"R{i}", f"R{(i + 1) % 50}"),
+            )
+        adj_conn.execute("INSERT INTO g(g) VALUES ('rebuild')")
+
+        # Check node count
+        nc = adj_conn.execute("SELECT value FROM g_config WHERE key='node_count'").fetchone()
+        assert int(nc[0]) == 53  # 3 original + 50 ring
+
+        # Add a small delta
+        adj_conn.execute("INSERT INTO edges VALUES ('R0', 'R25', 1.0)")
+        adj_conn.execute("INSERT INTO g(g) VALUES ('incremental_rebuild')")
+
+        # Verify the new edge is reflected
+        rows = adj_conn.execute("SELECT out_degree FROM g WHERE node='R0'").fetchone()
+        assert rows[0] >= 2  # at least R0→R1 and R0→R25
+
+    def test_tvf_reads_blocked_csr(self, adj_conn):
+        """Algorithm TVFs should work with blocked CSR storage."""
+        rows = adj_conn.execute("SELECT COUNT(*) FROM graph_degree('g', 'src', 'dst', 'weight')").fetchone()
+        assert rows[0] == 3  # 3 nodes

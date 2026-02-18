@@ -3,27 +3,31 @@ name: muninn
 description: >
   Add HNSW vector similarity search, graph traversal (BFS, DFS, shortest path,
   PageRank, connected components, degree/betweenness/closeness centrality,
-  Leiden community detection), and Node2Vec embedding generation to any SQLite
-  database. Use when users need vector search, knowledge graphs, graph algorithms,
-  semantic search, or RAG retrieval in SQLite. Triggers on "vector search",
-  "nearest neighbor", "HNSW", "graph traversal", "knowledge graph", "PageRank",
-  "Node2Vec", "embedding search", "similarity search in SQLite".
+  Leiden community detection), persistent CSR adjacency caching, dbt-style
+  graph selection (lineage queries), and Node2Vec embedding generation to any
+  SQLite database. Use when users need vector search, knowledge graphs, graph
+  algorithms, semantic search, dependency analysis, lineage queries, or RAG
+  retrieval in SQLite. Triggers on "vector search", "nearest neighbor", "HNSW",
+  "graph traversal", "knowledge graph", "PageRank", "Node2Vec", "embedding search",
+  "similarity search in SQLite", "graph adjacency", "CSR cache", "graph select",
+  "dbt selector", "lineage query", "dependency graph", "graph lineage".
 license: MIT
 compatibility: >
   Requires muninn extension. Python: `pip install sqlite-muninn`.
   Node.js: `npm install sqlite-muninn`. C: download amalgamation from GitHub Releases.
 metadata:
   author: joshpeak
-  version: "0.1.0"
+  version: "0.2.0"
   repository: https://github.com/user/sqlite-muninn
 allowed-tools: Bash(sqlite3:*), Bash(python:*), Bash(node:*)
 ---
 
 # muninn — HNSW Vector Search + Graph Traversal for SQLite
 
-Zero-dependency C11 SQLite extension. Five subsystems in one `.load`:
+Zero-dependency C11 SQLite extension. Seven subsystems in one `.load`:
 HNSW approximate nearest neighbor search, graph traversal TVFs, centrality measures,
-Leiden community detection, and Node2Vec.
+Leiden community detection, persistent graph adjacency caching, dbt-style graph
+selection, and Node2Vec.
 
 ## Quick Start (Python)
 
@@ -154,19 +158,69 @@ SELECT * FROM graph_pagerank(
 );
 ```
 
-### Available TVFs
+### Available Functions
 
-| Function | Purpose | Output Columns |
-|----------|---------|----------------|
-| `graph_bfs(table, src, dst, start)` | Breadth-first traversal | node, depth, parent |
-| `graph_dfs(table, src, dst, start)` | Depth-first traversal | node, depth, parent |
-| `graph_shortest_path(table, src, dst, from, to)` | Shortest path | node, depth, parent |
-| `graph_components(table, src, dst)` | Connected components | node, component |
-| `graph_pagerank(table, src, dst)` | PageRank scores | node, rank |
-| `graph_degree(table, src, dst)` | Degree centrality | node, in_degree, out_degree, degree |
-| `graph_betweenness(table, src, dst)` | Betweenness centrality | node, centrality |
-| `graph_closeness(table, src, dst)` | Closeness centrality | node, centrality |
-| `graph_leiden(table, src, dst)` | Leiden community detection | node, community |
+| Function | Type | Purpose | Output Columns |
+|----------|------|---------|----------------|
+| `graph_bfs(table, src, dst, start)` | TVF | Breadth-first traversal | node, depth, parent |
+| `graph_dfs(table, src, dst, start)` | TVF | Depth-first traversal | node, depth, parent |
+| `graph_shortest_path(table, src, dst, from, to)` | TVF | Shortest path | node, depth, parent |
+| `graph_components(table, src, dst)` | TVF | Connected components | node, component |
+| `graph_pagerank(table, src, dst)` | TVF | PageRank scores | node, rank |
+| `graph_degree(table, src, dst)` | TVF | Degree centrality | node, in_degree, out_degree, degree |
+| `graph_betweenness(table, src, dst)` | TVF | Betweenness centrality | node, centrality |
+| `graph_closeness(table, src, dst)` | TVF | Closeness centrality | node, centrality |
+| `graph_leiden(table, src, dst)` | TVF | Leiden community detection | node, community |
+| `graph_adjacency` | VT | Persistent CSR adjacency cache | node, node_idx, in/out_degree |
+| `graph_select(table, src, dst, selector)` | TVF | dbt-style lineage selection | node, depth, direction |
+
+## Graph Adjacency Cache
+
+Maintain a persistent CSR-cached adjacency index with trigger-based dirty tracking:
+
+```sql
+CREATE VIRTUAL TABLE g USING graph_adjacency(
+    edge_table='edges', src_col='source', dst_col='target',
+    weight_col='weight'  -- optional
+);
+
+-- Pre-computed degrees (reads from CSR cache, not edge table)
+SELECT node, in_degree, out_degree FROM g ORDER BY out_degree DESC;
+
+-- Force a full rebuild
+INSERT INTO g(g) VALUES ('rebuild');
+
+-- Force an incremental rebuild
+INSERT INTO g(g) VALUES ('incremental_rebuild');
+```
+
+## Graph Select (Lineage Queries)
+
+dbt-inspired node selection for dependency and lineage analysis:
+
+```sql
+-- All descendants of C
+SELECT node, depth FROM graph_select('edges', 'source', 'target', 'C+');
+
+-- All ancestors of C
+SELECT node FROM graph_select('edges', 'source', 'target', '+C');
+
+-- Build closure (descendants + their ancestors)
+SELECT node FROM graph_select('edges', 'source', 'target', '@C');
+
+-- Depth-limited: 2 hops up, 1 hop down
+SELECT node FROM graph_select('edges', 'source', 'target', '2+C+1');
+
+-- Intersection: common ancestors of D and E
+SELECT node FROM graph_select('edges', 'source', 'target', '+D,+E');
+
+-- Union: everything reachable from A or X
+SELECT node FROM graph_select('edges', 'source', 'target', 'A+ X+');
+```
+
+Selector syntax: `+node` (ancestors), `node+` (descendants), `+node+` (both),
+`N+node+M` (depth-limited), `@node` (closure), space (union), comma (intersection),
+`not` (complement).
 
 ## Node2Vec Embedding Generation
 

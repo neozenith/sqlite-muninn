@@ -1,16 +1,21 @@
 """
-Graph adjacency benchmark: TVF-only vs CSR-cached rebuild vs incremental merge.
+Graph adjacency benchmark: 4 rebuild approaches isolated.
 
-Compares graph algorithm performance across three approaches:
-    tvf_only      — Baseline: graph_data_load() from edge table on every query
-    csr_cached    — Phase 1: graph_adjacency VT builds CSR once, algorithms read from cache
-    delta_merge   — Phase 2: After small edge mutations, incremental merge vs full rebuild
+Compares graph algorithm performance across four approaches:
+    tvf                — Baseline: graph_data_load() from edge table on every query
+    csr                — CSR-cached: graph_adjacency VT builds CSR once, algorithms read from cache
+    csr_full_rebuild   — After mutations, re-scan entire edge table and rebuild all blocks from scratch
+    csr_incremental    — After mutations spread across all blocks, incremental rebuild touches every block
+    csr_blocked        — After mutations concentrated in one block, incremental rebuild touches only that block
+
+Plus trigger overhead measurement.
 
 Workloads:
-    small       — V=500, E=2000 (Erdos-Renyi)
-    medium      — V=10000, E=50000 (Barabasi-Albert)
-    large       — V=50000, E=250000 (Barabasi-Albert)
-    incremental — V=10000, E=50000 + 100 inserts (delta merge vs full rebuild)
+    xsmall      — V=500, E=2000 (Erdos-Renyi)
+    small       — V=1000, E=5000 (Erdos-Renyi)
+    medium      — V=5000, E=25000 (Barabasi-Albert)
+    large       — V=10000, E=50000 (Barabasi-Albert)
+    xlarge      — V=50000, E=250000 (Barabasi-Albert)
 
 Measurements: wall time, shadow table disk size, trigger overhead.
 
@@ -139,15 +144,88 @@ def measure_disk_usage(db, vtab_name):
         return -1  # dbstat not available
 
 
+def read_csr_metadata(db, vtab_name):
+    """Read blocked CSR metadata from shadow config table.
+
+    Returns dict with block_size, block_count_fwd, block_count_rev.
+    """
+    meta = {}
+    try:
+        row = db.execute(f"SELECT value FROM {vtab_name}_config WHERE key = 'block_size'").fetchone()
+        meta["block_size"] = int(row[0]) if row else 0
+
+        fwd = db.execute(f"SELECT COUNT(*) FROM {vtab_name}_csr_fwd").fetchone()
+        meta["block_count_fwd"] = fwd[0] if fwd else 0
+
+        rev = db.execute(f"SELECT COUNT(*) FROM {vtab_name}_csr_rev").fetchone()
+        meta["block_count_rev"] = rev[0] if rev else 0
+    except Exception as e:
+        log.warning("    Could not read CSR metadata: %s", e)
+    return meta
+
+
+# ── Delta generation helpers ─────────────────────────────────────
+
+
+def generate_spread_deltas(rng, n, n_delta, block_size):
+    """Generate delta edges spread across all blocks.
+
+    Ensures at least 1 edge per block (src in that block's range),
+    remaining deltas distributed randomly.
+    """
+    n_blocks = (n + block_size - 1) // block_size
+    edges = []
+
+    # Phase 1: one edge per block (src in block range, dst random)
+    for b in range(n_blocks):
+        block_start = b * block_size
+        block_end = min(block_start + block_size, n)
+        src = rng.randint(block_start, block_end - 1)
+        dst = rng.randint(0, n - 1)
+        while dst == src:
+            dst = rng.randint(0, n - 1)
+        edges.append((f"n{src}", f"n{dst}", round(rng.uniform(0.1, 5.0), 2)))
+
+    # Phase 2: fill remaining deltas randomly
+    for _ in range(max(0, n_delta - n_blocks)):
+        src = rng.randint(0, n - 1)
+        dst = rng.randint(0, n - 1)
+        while dst == src:
+            dst = rng.randint(0, n - 1)
+        edges.append((f"n{src}", f"n{dst}", round(rng.uniform(0.1, 5.0), 2)))
+
+    return edges
+
+
+def generate_concentrated_deltas(rng, n, n_delta, block_size):
+    """Generate delta edges concentrated in block 0.
+
+    All src AND dst constrained to [0, min(block_size, n)) so that
+    incremental_rebuild only touches block 0 in both fwd and rev CSR.
+    """
+    limit = min(block_size, n)
+    edges = []
+    for _ in range(n_delta):
+        src = rng.randint(0, limit - 1)
+        dst = rng.randint(0, limit - 1)
+        while dst == src:
+            dst = rng.randint(0, limit - 1)
+        edges.append((f"n{src}", f"n{dst}", round(rng.uniform(0.1, 5.0), 2)))
+    return edges
+
+
+# ── Benchmark workload ───────────────────────────────────────────
+
+
 def benchmark_workload(n, edge_count_target, model, profile_name, algos):
-    """Run a complete benchmark workload."""
+    """Run a complete benchmark workload with 4 approaches + trigger overhead."""
     results = []
     repeats = 3 if n <= 1000 else 1
 
     log.info("=== Workload: %s (V=%d, target_E=%d, model=%s) ===", profile_name, n, edge_count_target, model)
 
-    # --- Approach 1: TVF-only (baseline) ---
-    log.info("  Approach: tvf_only")
+    # ── Phase 1: TVF (baseline, no caching) ────────────────────
+    log.info("  Approach: tvf")
     db_tvf = sqlite3.connect(":memory:")
     load_extension(db_tvf)
     if model == "erdos_renyi":
@@ -161,22 +239,24 @@ def benchmark_workload(n, edge_count_target, model, profile_name, algos):
         try:
             ms = time_operation(run_tvf_query, db_tvf, algo, "edges", repeats=repeats)
             log.info("    %s: %.2f ms", algo, ms)
-            results.append({
-                "approach": "tvf_only",
-                "workload": profile_name,
-                "operation": algo,
-                "wall_time_ms": round(ms, 3),
-                "edge_count": actual_edges,
-                "node_count": n,
-                "model": model,
-            })
+            results.append(
+                {
+                    "approach": "tvf",
+                    "workload": profile_name,
+                    "operation": algo,
+                    "wall_time_ms": round(ms, 3),
+                    "edge_count": actual_edges,
+                    "node_count": n,
+                    "model": model,
+                }
+            )
         except Exception as e:
             log.warning("    %s failed: %s", algo, e)
 
     db_tvf.close()
 
-    # --- Approach 2: CSR-cached (graph_adjacency) ---
-    log.info("  Approach: csr_cached")
+    # ── Phase 2: CSR initial build ─────────────────────────────
+    log.info("  Approach: csr")
     db_file = str(RESULTS_DIR / f"_bench_{profile_name}.db")
     db_csr = sqlite3.connect(db_file)
     load_extension(db_csr)
@@ -192,117 +272,236 @@ def benchmark_workload(n, edge_count_target, model, profile_name, algos):
             "edge_table='edges', src_col='src', dst_col='dst', weight_col='weight')"
         ),
     )
-    log.info("    CSR build: %.2f ms (%d edges)", build_ms, actual_edges)
-    results.append({
-        "approach": "csr_cached",
-        "workload": profile_name,
-        "operation": "build",
-        "wall_time_ms": round(build_ms, 3),
-        "edge_count": actual_edges,
-        "node_count": n,
-        "model": model,
-    })
+    # Read blocked CSR metadata
+    csr_meta = read_csr_metadata(db_csr, "g")
+    bs = csr_meta.get("block_size", 0)
+    bc = csr_meta.get("block_count_fwd", 0)
+    log.info("    CSR build: %.2f ms (%d edges, block_size=%d, %d blocks)", build_ms, actual_edges, bs, bc)
+
+    results.append(
+        {
+            "approach": "csr",
+            "workload": profile_name,
+            "operation": "build",
+            "wall_time_ms": round(build_ms, 3),
+            "edge_count": actual_edges,
+            "node_count": n,
+            "model": model,
+            **csr_meta,
+        }
+    )
 
     # Measure disk usage
     disk_bytes = measure_disk_usage(db_csr, "g")
     if disk_bytes >= 0:
         log.info("    Shadow table disk: %d bytes (%.1f KB)", disk_bytes, disk_bytes / 1024)
-        results.append({
-            "approach": "csr_cached",
-            "workload": profile_name,
-            "operation": "disk_usage",
-            "disk_bytes": disk_bytes,
-            "edge_count": actual_edges,
-            "node_count": n,
-            "model": model,
-        })
+        results.append(
+            {
+                "approach": "csr",
+                "workload": profile_name,
+                "operation": "disk_usage",
+                "disk_bytes": disk_bytes,
+                "edge_count": actual_edges,
+                "node_count": n,
+                "model": model,
+                **csr_meta,
+            }
+        )
 
-    # Run algorithms using the adjacency VT
+    # Run algorithms using the adjacency VT (CSR-cached)
     for algo in algos:
         try:
             ms = time_operation(run_tvf_query, db_csr, algo, "g", repeats=repeats)
             log.info("    %s: %.2f ms", algo, ms)
-            results.append({
-                "approach": "csr_cached",
-                "workload": profile_name,
-                "operation": algo,
-                "wall_time_ms": round(ms, 3),
-                "edge_count": actual_edges,
-                "node_count": n,
-                "model": model,
-            })
+            results.append(
+                {
+                    "approach": "csr",
+                    "workload": profile_name,
+                    "operation": algo,
+                    "wall_time_ms": round(ms, 3),
+                    "edge_count": actual_edges,
+                    "node_count": n,
+                    "model": model,
+                    **csr_meta,
+                }
+            )
         except Exception as e:
             log.warning("    %s failed: %s", algo, e)
 
-    # --- Approach 3: Incremental merge ---
-    log.info("  Approach: delta_merge")
-
-    # Insert some edges and measure merge time
+    # ── Phase 3: Full rebuild after mutations ──────────────────
+    log.info("  Approach: csr_full_rebuild")
     n_delta = max(10, actual_edges // 100)  # ~1% of edges
     rng = random.Random(99)
-    delta_edges = [
-        (f"n{rng.randint(0, n-1)}", f"n{rng.randint(0, n-1)}", round(rng.uniform(0.1, 5.0), 2))
+
+    delta_edges_full = [
+        (f"n{rng.randint(0, n - 1)}", f"n{rng.randint(0, n - 1)}", round(rng.uniform(0.1, 5.0), 2))
         for _ in range(n_delta)
     ]
-    db_csr.executemany("INSERT INTO edges VALUES (?, ?, ?)", delta_edges)
+    db_csr.executemany("INSERT INTO edges VALUES (?, ?, ?)", delta_edges_full)
     db_csr.commit()
 
-    # Measure incremental rebuild time
-    incr_ms = time_operation(
-        lambda: db_csr.execute("INSERT INTO g(g) VALUES ('incremental_rebuild')"),
-    )
-    log.info("    Incremental rebuild (%d deltas): %.2f ms", n_delta, incr_ms)
-    results.append({
-        "approach": "delta_merge",
-        "workload": profile_name,
-        "operation": "incremental_rebuild",
-        "wall_time_ms": round(incr_ms, 3),
-        "edge_count": actual_edges + n_delta,
-        "delta_count": n_delta,
-        "node_count": n,
-        "model": model,
-    })
-
-    # Measure full rebuild for comparison
-    db_csr.executemany("INSERT INTO edges VALUES (?, ?, ?)", delta_edges)
-    db_csr.commit()
     full_ms = time_operation(
         lambda: db_csr.execute("INSERT INTO g(g) VALUES ('rebuild')"),
     )
-    log.info("    Full rebuild (same delta): %.2f ms", full_ms)
-    results.append({
-        "approach": "delta_merge",
-        "workload": profile_name,
-        "operation": "full_rebuild",
-        "wall_time_ms": round(full_ms, 3),
-        "edge_count": actual_edges + 2 * n_delta,
-        "delta_count": n_delta,
-        "node_count": n,
-        "model": model,
-    })
+    full_meta = read_csr_metadata(db_csr, "g")
+    log.info("    Full rebuild (%d deltas, %d blocks): %.2f ms", n_delta, full_meta.get("block_count_fwd", 0), full_ms)
+    results.append(
+        {
+            "approach": "csr_full_rebuild",
+            "workload": profile_name,
+            "operation": "rebuild",
+            "wall_time_ms": round(full_ms, 3),
+            "edge_count": actual_edges + n_delta,
+            "delta_count": n_delta,
+            "node_count": n,
+            "model": model,
+            **full_meta,
+        }
+    )
 
-    # Run algorithms after merge
+    # Post-rebuild algorithm query times
     for algo in algos:
         try:
             ms = time_operation(run_tvf_query, db_csr, algo, "g", repeats=repeats)
-            log.info("    %s (post-merge): %.2f ms", algo, ms)
-            results.append({
-                "approach": "delta_merge",
-                "workload": profile_name,
-                "operation": f"{algo}_post_merge",
-                "wall_time_ms": round(ms, 3),
-                "edge_count": actual_edges + 2 * n_delta,
-                "delta_count": n_delta,
-                "node_count": n,
-                "model": model,
-            })
+            log.info("    %s (post-full-rebuild): %.2f ms", algo, ms)
+            results.append(
+                {
+                    "approach": "csr_full_rebuild",
+                    "workload": profile_name,
+                    "operation": algo,
+                    "wall_time_ms": round(ms, 3),
+                    "edge_count": actual_edges + n_delta,
+                    "delta_count": n_delta,
+                    "node_count": n,
+                    "model": model,
+                    **full_meta,
+                }
+            )
         except Exception as e:
-            log.warning("    %s post-merge failed: %s", algo, e)
+            log.warning("    %s failed: %s", algo, e)
 
-    # Measure trigger overhead: time to insert N edges with vs without triggers
+    # ── Phase 4: Incremental rebuild (spread across all blocks) ─
+    log.info("  Approach: csr_incremental (spread deltas)")
+
+    # Force a clean rebuild to clear all deltas first
+    db_csr.execute("INSERT INTO g(g) VALUES ('rebuild')")
+    read_csr_metadata(db_csr, "g")  # ensure metadata is readable before spread
+
+    spread_rng = random.Random(200)
+    spread_deltas = generate_spread_deltas(spread_rng, n, n_delta, bs)
+    db_csr.executemany("INSERT INTO edges VALUES (?, ?, ?)", spread_deltas)
+    db_csr.commit()
+
+    incr_spread_ms = time_operation(
+        lambda: db_csr.execute("INSERT INTO g(g) VALUES ('incremental_rebuild')"),
+    )
+    incr_spread_meta = read_csr_metadata(db_csr, "g")
+    n_blocks_total = incr_spread_meta.get("block_count_fwd", 0)
+    log.info(
+        "    Incremental rebuild (%d deltas spread, %d/%d blocks): %.2f ms",
+        len(spread_deltas),
+        n_blocks_total,
+        n_blocks_total,
+        incr_spread_ms,
+    )
+    results.append(
+        {
+            "approach": "csr_incremental",
+            "workload": profile_name,
+            "operation": "rebuild",
+            "wall_time_ms": round(incr_spread_ms, 3),
+            "edge_count": actual_edges + n_delta + len(spread_deltas),
+            "delta_count": len(spread_deltas),
+            "blocks_affected": n_blocks_total,  # spread touches all blocks
+            "node_count": n,
+            "model": model,
+            **incr_spread_meta,
+        }
+    )
+
+    # Post-rebuild algorithm query times
+    for algo in algos:
+        try:
+            ms = time_operation(run_tvf_query, db_csr, algo, "g", repeats=repeats)
+            log.info("    %s (post-incr-spread): %.2f ms", algo, ms)
+            results.append(
+                {
+                    "approach": "csr_incremental",
+                    "workload": profile_name,
+                    "operation": algo,
+                    "wall_time_ms": round(ms, 3),
+                    "edge_count": actual_edges + n_delta + len(spread_deltas),
+                    "delta_count": len(spread_deltas),
+                    "node_count": n,
+                    "model": model,
+                    **incr_spread_meta,
+                }
+            )
+        except Exception as e:
+            log.warning("    %s failed: %s", algo, e)
+
+    # ── Phase 5: Blocked incremental (concentrated in block 0) ─
+    log.info("  Approach: csr_blocked (concentrated deltas)")
+
+    # Force a clean rebuild to clear all deltas first
+    db_csr.execute("INSERT INTO g(g) VALUES ('rebuild')")
+
+    conc_rng = random.Random(300)
+    conc_deltas = generate_concentrated_deltas(conc_rng, n, n_delta, bs)
+    db_csr.executemany("INSERT INTO edges VALUES (?, ?, ?)", conc_deltas)
+    db_csr.commit()
+
+    incr_conc_ms = time_operation(
+        lambda: db_csr.execute("INSERT INTO g(g) VALUES ('incremental_rebuild')"),
+    )
+    incr_conc_meta = read_csr_metadata(db_csr, "g")
+    log.info(
+        "    Blocked incremental (%d deltas in block 0, %d total blocks): %.2f ms",
+        len(conc_deltas),
+        incr_conc_meta.get("block_count_fwd", 0),
+        incr_conc_ms,
+    )
+    results.append(
+        {
+            "approach": "csr_blocked",
+            "workload": profile_name,
+            "operation": "rebuild",
+            "wall_time_ms": round(incr_conc_ms, 3),
+            "edge_count": actual_edges + n_delta + len(spread_deltas) + len(conc_deltas),
+            "delta_count": len(conc_deltas),
+            "blocks_affected": 1,  # concentrated in block 0
+            "node_count": n,
+            "model": model,
+            **incr_conc_meta,
+        }
+    )
+
+    # Post-rebuild algorithm query times
+    for algo in algos:
+        try:
+            ms = time_operation(run_tvf_query, db_csr, algo, "g", repeats=repeats)
+            log.info("    %s (post-blocked): %.2f ms", algo, ms)
+            results.append(
+                {
+                    "approach": "csr_blocked",
+                    "workload": profile_name,
+                    "operation": algo,
+                    "wall_time_ms": round(ms, 3),
+                    "edge_count": actual_edges + n_delta + len(spread_deltas) + len(conc_deltas),
+                    "delta_count": len(conc_deltas),
+                    "node_count": n,
+                    "model": model,
+                    **incr_conc_meta,
+                }
+            )
+        except Exception as e:
+            log.warning("    %s failed: %s", algo, e)
+
+    # ── Trigger overhead measurement ───────────────────────────
     log.info("  Measuring trigger overhead...")
+    trig_rng = random.Random(400)
     trigger_edges = [
-        (f"t{rng.randint(0, n-1)}", f"t{rng.randint(0, n-1)}", 1.0)
+        (f"t{trig_rng.randint(0, n - 1)}", f"t{trig_rng.randint(0, n - 1)}", 1.0)
         for _ in range(min(1000, actual_edges // 10))
     ]
 
@@ -331,19 +530,24 @@ def benchmark_workload(n, edge_count_target, model, profile_name, algos):
     trigger_overhead = max(0, with_ms - without_ms)
     log.info(
         "    Trigger overhead: %.2f ms (with=%.2f, without=%.2f, %d ops)",
-        trigger_overhead, with_ms, without_ms, len(trigger_edges),
+        trigger_overhead,
+        with_ms,
+        without_ms,
+        len(trigger_edges),
     )
-    results.append({
-        "approach": "trigger_overhead",
-        "workload": profile_name,
-        "operation": "insert_batch",
-        "wall_time_ms": round(trigger_overhead, 3),
-        "with_trigger_ms": round(with_ms, 3),
-        "without_trigger_ms": round(without_ms, 3),
-        "batch_size": len(trigger_edges),
-        "node_count": n,
-        "model": model,
-    })
+    results.append(
+        {
+            "approach": "trigger_overhead",
+            "workload": profile_name,
+            "operation": "insert_batch",
+            "wall_time_ms": round(trigger_overhead, 3),
+            "with_trigger_ms": round(with_ms, 3),
+            "without_trigger_ms": round(without_ms, 3),
+            "batch_size": len(trigger_edges),
+            "node_count": n,
+            "model": model,
+        }
+    )
 
     db_csr.close()
     # Clean up temp db
@@ -354,9 +558,15 @@ def benchmark_workload(n, edge_count_target, model, profile_name, algos):
 
 # --- Profiles ---
 PROFILES = {
-    "small": {
+    "xsmall": {
         "workloads": [
             {"n": 500, "edges": 2000, "model": "erdos_renyi"},
+        ],
+        "algos": ["degree", "betweenness", "closeness", "leiden"],
+    },
+    "small": {
+        "workloads": [
+            {"n": 1000, "edges": 5000, "model": "erdos_renyi"},
         ],
         "algos": ["degree", "betweenness", "closeness", "leiden"],
     },
@@ -364,13 +574,19 @@ PROFILES = {
         "workloads": [
             {"n": 5000, "edges": 25000, "model": "barabasi_albert"},
         ],
-        "algos": ["degree", "betweenness", "leiden"],
+        "algos": ["degree", "betweenness", "closeness", "leiden"],
     },
     "large": {
         "workloads": [
             {"n": 10000, "edges": 50000, "model": "barabasi_albert"},
         ],
         "algos": ["degree", "leiden"],
+    },
+    "xlarge": {
+        "workloads": [
+            {"n": 50000, "edges": 250000, "model": "barabasi_albert"},
+        ],
+        "algos": ["degree"],
     },
 }
 
@@ -387,7 +603,7 @@ def main():
 
     all_results = []
     metadata = {
-        "timestamp": datetime.datetime.now(tz=datetime.timezone.utc).isoformat(),
+        "timestamp": datetime.datetime.now(tz=datetime.UTC).isoformat(),
         "platform": platform.machine(),
         "python": sys.version.split()[0],
     }
@@ -406,9 +622,14 @@ def main():
                 r.update(metadata)
             all_results.extend(results)
 
-    # Write results
+    # Write results — one file per profile, accumulating across runs
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_file = args.output or str(RESULTS_DIR / "adjacency_benchmark.jsonl")
+    if args.output:
+        out_file = args.output
+    elif args.profile == "all":
+        out_file = str(RESULTS_DIR / "adjacency_all.jsonl")
+    else:
+        out_file = str(RESULTS_DIR / f"adjacency_{args.profile}.jsonl")
     with open(out_file, "a") as f:
         for r in all_results:
             f.write(json.dumps(r) + "\n")
@@ -416,13 +637,16 @@ def main():
     log.info("\n=== Results written to %s (%d entries) ===", out_file, len(all_results))
 
     # Print summary table
-    log.info("\n%-15s %-12s %-20s %10s", "Approach", "Workload", "Operation", "Time (ms)")
-    log.info("-" * 60)
+    log.info("\n%-20s %-12s %-20s %10s", "Approach", "Workload", "Operation", "Time (ms)")
+    log.info("-" * 65)
     for r in all_results:
         if "wall_time_ms" in r:
             log.info(
-                "%-15s %-12s %-20s %10.2f",
-                r["approach"], r["workload"], r["operation"], r["wall_time_ms"],
+                "%-20s %-12s %-20s %10.2f",
+                r["approach"],
+                r["workload"],
+                r["operation"],
+                r["wall_time_ms"],
             )
 
 
