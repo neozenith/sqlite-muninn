@@ -36,10 +36,10 @@ flowchart TB
     init --> select
     init --> n2v
 
-    style entry fill:#7c3aed,color:#fff
-    style vt fill:#0d9488,color:#fff
-    style tvf fill:#2563eb,color:#fff
-    style scalar fill:#d97706,color:#fff
+    style entry fill:#9070be
+    style vt fill:#4a9c91
+    style tvf fill:#6080b8
+    style scalar fill:#b89340
 ```
 
 ## Module Layering
@@ -90,10 +90,10 @@ flowchart TB
     n2v_c -.->|"reads edges"| graph_load
     n2v_c -.->|"writes embeddings"| hnsw_vtab
 
-    style hnsw_layer fill:#f0fdf4,color:#000
-    style graph_layer fill:#eff6ff,color:#000
-    style shared fill:#fefce8,color:#000
-    style n2v_layer fill:#fff7ed,color:#000
+    style hnsw_layer fill:#5a946e
+    style graph_layer fill:#5888a8
+    style shared fill:#a09058
+    style n2v_layer fill:#a07858
 ```
 
 ## Two Execution Strategies

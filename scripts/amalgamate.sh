@@ -21,6 +21,11 @@ INTERNAL_HEADERS=(
     src/graph_load.h
     src/graph_centrality.h
     src/graph_community.h
+    src/graph_adjacency.h
+    src/graph_csr.h
+    src/graph_selector_parse.h
+    src/graph_selector_eval.h
+    src/graph_select_tvf.h
     src/node2vec.h
     src/muninn.h
 )
@@ -36,6 +41,11 @@ SOURCES=(
     src/graph_load.c
     src/graph_centrality.c
     src/graph_community.c
+    src/graph_adjacency.c
+    src/graph_csr.c
+    src/graph_selector_parse.c
+    src/graph_selector_eval.c
+    src/graph_select_tvf.c
     src/node2vec.c
     src/muninn.c
 )
