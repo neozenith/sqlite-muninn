@@ -49,7 +49,7 @@ TEST_SRC = test/test_main.c test/test_vec_math.c test/test_priority_queue.c \
 .PHONY: all debug test test-python test-js test-install test-all clean help \
         amalgamation install uninstall version version-stamp \
         dist dist-extension dist-python dist-npm dist-wasm changelog release \
-        docs-serve docs-build docs-clean \
+        docs-serve docs-build docs-wasm docs-clean \
         format format-c format-python format-js \
         lint lint-c lint-python lint-js \
         typecheck typecheck-python typecheck-js \
@@ -222,6 +222,22 @@ docs-build: version-stamp                      ## Build documentation site
 	uv sync --all-groups
 	make -C benchmarks analyze
 	uv run mkdocs build --strict
+	$(MAKE) docs-wasm
+
+docs-wasm:                                     ## Copy WASM demo into built docs site
+	@if [ -f wasm/build/muninn_sqlite3.js ] && [ -f wasm/assets/3300.db ]; then \
+		echo "Copying WASM demo to site/examples/wasm/"; \
+		mkdir -p site/examples/wasm/build site/examples/wasm/assets; \
+		cp wasm/index.html site/examples/wasm/; \
+		cp wasm/script.js site/examples/wasm/; \
+		cp wasm/styles.css site/examples/wasm/; \
+		cp wasm/build/muninn_sqlite3.js site/examples/wasm/build/; \
+		cp wasm/build/muninn_sqlite3.wasm site/examples/wasm/build/; \
+		cp wasm/assets/3300.db site/examples/wasm/assets/; \
+		echo "WASM demo ready at site/examples/wasm/"; \
+	else \
+		echo "WASM demo artifacts not found — skipping (run 'make -C wasm build' first)"; \
+	fi
 
 docs-clean:                                    ## Clean documentation build
 	rm -rf site/

@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 
+from server.services.db import sanitize_fts_query
+
 try:
     import pysqlite3 as sqlite3  # type: ignore[import-not-found]
 except ImportError:
@@ -407,13 +409,14 @@ def run_graphrag_query(
 
     # Stage 1: Full-text search on chunks (no embedding model needed)
     seed_chunks: list[dict[str, Any]] = []
-    if _table_exists(conn, "chunks_fts"):
+    fts_query = sanitize_fts_query(query_text)
+    if fts_query and _table_exists(conn, "chunks_fts"):
         try:
             rows = conn.execute(
                 """
                 SELECT chunk_id, text FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?
             """,
-                (query_text, k),
+                (fts_query, k),
             ).fetchall()
             seed_chunks = [{"chunk_id": r["chunk_id"], "text_preview": r["text"][:200]} for r in rows]
         except Exception as e:
@@ -656,12 +659,13 @@ def run_kg_search(
 
     # 1. FTS results (no embedding needed)
     fts_results: list[dict[str, Any]] = []
-    if _table_exists(conn, "chunks_fts"):
+    fts_query = sanitize_fts_query(query_text)
+    if fts_query and _table_exists(conn, "chunks_fts"):
         try:
             rows = conn.execute(
                 "SELECT chunk_id, text FROM chunks WHERE chunk_id IN "
                 "(SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 20)",
-                (query_text,),
+                (fts_query,),
             ).fetchall()
             fts_results = [{"chunk_id": r["chunk_id"], "text": r["text"]} for r in rows]
         except Exception as e:

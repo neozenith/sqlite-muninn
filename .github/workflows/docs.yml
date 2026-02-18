@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - 'docs/**'
+      - 'wasm/index.html'
+      - 'wasm/script.js'
+      - 'wasm/styles.css'
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
   pull_request:
@@ -13,8 +16,12 @@ on:
       - main
     paths:
       - 'docs/**'
+      - 'wasm/index.html'
+      - 'wasm/script.js'
+      - 'wasm/styles.css'
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
+  workflow_dispatch:
 
 # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
 concurrency:
@@ -37,14 +44,31 @@ jobs:
       - name: Build MkDocs site
         run: uv run mkdocs build --strict
 
+      - name: Copy WASM demo assets
+        run: |
+          if [ -f wasm/build/muninn_sqlite3.js ] && [ -f wasm/assets/3300.db ]; then
+            echo "Copying WASM demo to site/examples/wasm/"
+            mkdir -p site/examples/wasm/build site/examples/wasm/assets
+            cp wasm/index.html site/examples/wasm/
+            cp wasm/script.js site/examples/wasm/
+            cp wasm/styles.css site/examples/wasm/
+            cp wasm/build/muninn_sqlite3.js site/examples/wasm/build/
+            cp wasm/build/muninn_sqlite3.wasm site/examples/wasm/build/
+            cp wasm/assets/3300.db site/examples/wasm/assets/
+            echo "WASM demo included in site"
+          else
+            echo "WASM build artifacts not found — demo will not be included"
+            echo "To include: build WASM first (make -C wasm build) and ensure assets/3300.db exists"
+          fi
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./site
 
   deploy:
-    # Only deploy on push to main branch
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Only deploy on push to main branch or manual dispatch
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
 
     environment:
       name: github-pages

@@ -1,6 +1,7 @@
 """Database connection and discovery services."""
 
 import logging
+import re
 import threading
 from collections.abc import Generator
 from pathlib import Path
@@ -22,6 +23,17 @@ _connection: sqlite3.Connection | None = None
 # muninn TVFs (Leiden, centrality) create internal sub-queries that
 # cause re-entrancy issues when multiple requests use the same connection.
 _db_lock = threading.Lock()
+
+
+def sanitize_fts_query(text: str) -> str:
+    """Strip punctuation that breaks FTS5 MATCH syntax.
+
+    FTS5 treats characters like (, ), *, ", ^, :, + as query operators.
+    This strips everything except word characters and whitespace,
+    then collapses runs of spaces.
+    """
+    cleaned = re.sub(r"[^\w\s]", " ", text)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def get_connection(db_path: str | None = None, extension_path: str | None = None) -> sqlite3.Connection:

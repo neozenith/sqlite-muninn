@@ -49,6 +49,8 @@ nav:
     - Node2Vec: node2vec.md
     - GraphRAG Cookbook: graphrag-cookbook.md
   - API Reference: api.md
+  - Examples:
+    - WASM Demo: wasm-demo.md
   - Benchmarks:
     - Overview: benchmarks.md
     - VSS: benchmarks/vss.md

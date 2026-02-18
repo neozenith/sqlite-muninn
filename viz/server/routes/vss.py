@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from server.services.db import db_session, discover_hnsw_indexes
+from server.services.db import db_session, discover_hnsw_indexes, sanitize_fts_query
 from server.services.embeddings import get_projector
 from server.services.validation import validate_identifier
 
@@ -213,10 +213,13 @@ def search_text(
         )
 
     # FTS5 match → get chunk IDs (rowid maps to content_rowid)
+    fts_q = sanitize_fts_query(q)
+    if not fts_q:
+        return {"index": index_name, "query": q, "k": k, "count": 0, "results": []}
     try:
         fts_rows = conn.execute(
             f"SELECT rowid FROM [{fts_table}] WHERE [{fts_table}] MATCH ?",
-            (q,),
+            (fts_q,),
         ).fetchall()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"FTS5 query failed: {e}") from e

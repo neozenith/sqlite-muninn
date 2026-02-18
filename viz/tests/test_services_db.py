@@ -15,6 +15,7 @@ from server.services.db import (
     discover_edge_tables,
     discover_hnsw_indexes,
     get_connection,
+    sanitize_fts_query,
 )
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -294,3 +295,22 @@ def test_discover_hnsw_missing_nodes_table(tmp_path: pathlib.Path) -> None:
     assert orphan is not None
     assert orphan["node_count"] == 0
     conn.close()
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("hello world", "hello world"),
+        ("Adam Smith's theory", "Adam Smith s theory"),
+        ("labor (1776)", "labor 1776"),
+        ('the "invisible hand"', "the invisible hand"),
+        ("cost: $5.00", "cost 5 00"),
+        ("A + B - C", "A B C"),
+        ("  lots   of   spaces  ", "lots of spaces"),
+        ("!!!", ""),
+        ("", ""),
+    ],
+)
+def test_sanitize_fts_query(raw: str, expected: str) -> None:
+    """sanitize_fts_query strips FTS5-breaking punctuation."""
+    assert sanitize_fts_query(raw) == expected

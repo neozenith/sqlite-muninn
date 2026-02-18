@@ -670,12 +670,15 @@ function initGraphControls() {
 
 function performFtsSearch(queryText) {
   try {
-    // FTS5 MATCH with simple prefix matching
-    const ftsQuery = queryText
+    // Strip punctuation that breaks FTS5 MATCH syntax (parens, quotes, colons, etc.)
+    const sanitized = queryText.replace(/[^\w\s]/g, " ");
+    const ftsQuery = sanitized
       .trim()
       .split(/\s+/)
-      .map((w) => `"${w.replace(/"/g, "")}"`)
+      .filter((w) => w.length > 0)
+      .map((w) => `"${w}"`)
       .join(" ");
+    if (!ftsQuery) return [];
 
     const results = queryBound(
       `SELECT chunk_id, text FROM chunks WHERE chunk_id IN (
