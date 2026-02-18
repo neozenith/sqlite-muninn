@@ -2,7 +2,7 @@
 
 An interactive demo of the **muninn** SQLite extension running entirely in your browser via WebAssembly.
 
-<a href="../examples/wasm/" target="_blank" class="md-button md-button--primary">
+<a href="https://neozenith.github.io/sqlite-muninn/examples/wasm/" target="_blank" class="md-button md-button--primary">
   Launch WASM Demo
 </a>
 
