@@ -252,16 +252,12 @@ graph-index-small: $(EXTENSION)                    ## Graph: index comparison, s
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 1000 --avg-degree 20 --index-mode both $(BENCH_FLAGS)
 
 graph-index-medium: $(EXTENSION)                   ## Graph: index comparison, medium (N<=10K)
-	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 1000 --avg-degree 5 --index-mode both $(BENCH_FLAGS)
-	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 1000 --avg-degree 20 --index-mode both $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 5000 --avg-degree 5 --index-mode both $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 5000 --avg-degree 20 --index-mode both $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 10000 --avg-degree 5 --index-mode both $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 10000 --avg-degree 20 --index-mode both $(BENCH_FLAGS)
 
 graph-index-large: $(EXTENSION)                    ## Graph: index comparison, large (N<=100K)
-	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 10000 --avg-degree 5 --index-mode both $(BENCH_FLAGS)
-	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 10000 --avg-degree 20 --index-mode both $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 50000 --avg-degree 5 --index-mode both $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 50000 --avg-degree 20 --index-mode both $(BENCH_FLAGS)
 	-$(BENCH_GRAPH) --graph-model erdos_renyi --nodes 100000 --avg-degree 5 --index-mode both $(BENCH_FLAGS)
