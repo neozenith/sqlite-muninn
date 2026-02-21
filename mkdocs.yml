@@ -46,6 +46,7 @@ nav:
   - Getting Started: getting-started.md
   - Architecture: architecture.md
   - Guides:
+    - Text Embeddings: text-embeddings.md
     - Centrality & Community: centrality-community.md
     - Node2Vec: node2vec.md
     - GraphRAG Cookbook: graphrag-cookbook.md
@@ -56,7 +57,13 @@ nav:
     - Overview: benchmarks.md
     - VSS: benchmarks/vss.md
     - Graph: benchmarks/graph.md
-    - Adjacency: benchmarks/adjacency.md
+    - Graph VT: benchmarks/graph_vt.md
+    - Benchmarks (Refactored):
+      - Overview: benchmarks/refactored_output/index.md
+      - VSS: benchmarks/refactored_output/vss.md
+      - Graph: benchmarks/refactored_output/graph.md
+      - Graph VT: benchmarks/refactored_output/graph_vt.md
+      - Knowledge Graph: benchmarks/refactored_output/kg.md
 
 markdown_extensions:
   - pymdownx.highlight:

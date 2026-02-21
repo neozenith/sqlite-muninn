@@ -8,7 +8,6 @@
 | Library | Engine | BFS | DFS | Shortest Path | Components | PageRank | Degree | Betweenness | Closeness | Leiden |
 |---------|--------|:---:|:---:|:-------------:|:----------:|:--------:|:------:|:-----------:|:---------:|:------:|
 | [muninn](https://github.com/neozenith/sqlite-muninn) | **muninn TVFs** | Yes | Yes | Yes (Dijkstra) | Yes | Yes | Yes | Yes (Brandes) | Yes | Yes |
-| [SQLite](https://www.sqlite.org/) | **Recursive CTEs** | Yes | — | Yes | Yes (slow) | — | — | — | — | — |
 | [GraphQLite](https://github.com/colliery-io/graphqlite) | **GraphQLite** | Yes | Yes | Yes | Yes | Yes | — | — | — | Yes |
 
 ## Graph Models

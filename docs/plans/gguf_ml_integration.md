@@ -77,7 +77,7 @@ INSERT INTO temp.lembed_models(name, model)
 
 -- Create an HNSW index
 CREATE VIRTUAL TABLE doc_vectors USING hnsw_index(
-  dim=384, metric=cosine, max_elements=100000
+  dimensions=384, metric=cosine
 );
 
 -- Source table

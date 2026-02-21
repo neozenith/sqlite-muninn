@@ -40,18 +40,30 @@ benchmark = [
     "umap-learn>=0.5.7",
     "plotly>=6.5.2",
     "jinja2>=3.1.0",
-    "sqliteai-vector>=0.9.70",
-    "datasets>=4.5.0",
-    "sentence-transformers>=5.2.2",
-    "vectorlite-py",
+    
+    # Competitors / peers depending how you look at it
     "apsw",
+    "sqliteai-vector>=0.9.70",
+    "vectorlite-py",
     "sqlite-vec",
     "graphqlite",
+    
+    # Models and Benchmarking Datasets
+    "datasets>=4.5.0",
+    "sentence-transformers>=5.2.2",
+    "gliner",
+    "spacy",
+    "textacy",
+    "recordlinkage",
 ]
 docs = [
     "mkdocs>=1.6.0",
     "mkdocs-material>=9.5.0",
     "mkdocs-plotly-plugin>=0.1.3",
+    "networkx",
+    # Dependencies for the examples/
+    "sqlite-lembed",
+    "sqlite-rembed"
 ]
 dev = [
     "gcovr>=8.6",

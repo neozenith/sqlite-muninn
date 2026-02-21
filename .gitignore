@@ -52,6 +52,9 @@ benchmarks/kg/
 # NOTE: benchmarks/charts/*.json is NOT ignored — those Plotly specs
 # are required by mkdocs-plotly-plugin during static site build.
 
+# GGUF / ML model files (large binaries, user-downloaded)
+models/
+
 # IDE / OS
 .DS_Store
 
@@ -64,3 +67,6 @@ docs/logo/
 npm/platforms/
 npm/wasm/
 npm/README.md
+
+benchmarks/refactored_outputs/
+docs/benchmarks/refactored_output/

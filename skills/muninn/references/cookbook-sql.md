@@ -2,6 +2,101 @@
 
 All examples assume muninn is loaded via `.load ./muninn` in the SQLite CLI.
 
+## SQL-Native Text Embedding (sqlite-lembed)
+
+Load a GGUF model and do text-in, semantic-search-out entirely in SQL:
+
+```sql
+-- Load both extensions
+.load ./muninn
+.load lembed0
+
+-- Register a GGUF embedding model (session-scoped)
+INSERT INTO temp.lembed_models(name, model)
+  SELECT 'MiniLM', lembed_model_from_file('models/all-MiniLM-L6-v2.Q8_0.gguf');
+
+-- Source table
+CREATE TABLE documents (id INTEGER PRIMARY KEY, content TEXT NOT NULL);
+INSERT INTO documents(id, content) VALUES
+    (1, 'The quick brown fox jumps over the lazy dog'),
+    (2, 'A fast runner sprints across the field'),
+    (3, 'SQLite is a lightweight embedded database'),
+    (4, 'Vector search finds similar items by distance');
+
+-- Create an HNSW index (384 dims for MiniLM)
+CREATE VIRTUAL TABLE doc_vectors USING hnsw_index(
+    dimensions=384, metric='cosine'
+);
+
+-- Embed and index all documents in one statement
+INSERT INTO doc_vectors(rowid, vector)
+  SELECT id, lembed('MiniLM', content) FROM documents;
+
+-- Semantic search — embed the query inline
+SELECT d.content, v.distance
+FROM doc_vectors v
+JOIN documents d ON d.id = v.rowid
+WHERE v.vector MATCH lembed('MiniLM', 'fast animal')
+  AND k = 5
+ORDER BY v.distance;
+```
+
+## Auto-Embed Triggers
+
+Automatically embed new rows on insert and re-embed on update:
+
+```sql
+-- Auto-embed new documents
+CREATE TEMP TRIGGER auto_embed AFTER INSERT ON documents
+BEGIN
+  INSERT INTO doc_vectors(rowid, vector)
+    VALUES (NEW.id, lembed('MiniLM', NEW.content));
+END;
+
+-- Re-embed when content changes
+CREATE TEMP TRIGGER auto_reembed AFTER UPDATE OF content ON documents
+BEGIN
+  DELETE FROM doc_vectors WHERE rowid = NEW.id;
+  INSERT INTO doc_vectors(rowid, vector)
+    VALUES (NEW.id, lembed('MiniLM', NEW.content));
+END;
+
+-- Just insert text — the trigger handles embedding + indexing
+INSERT INTO documents(content) VALUES ('Neural networks learn from data');
+```
+
+**Important:** Use `TEMP` triggers. Persistent triggers store SQL in the schema and
+fail if the extension is not loaded before `sqlite3_open`.
+
+## Remote API Embedding (sqlite-rembed)
+
+```sql
+.load ./muninn
+.load rembed0
+
+-- Register OpenAI (reads OPENAI_API_KEY from environment)
+INSERT INTO temp.rembed_clients(name, options) VALUES ('openai', 'openai');
+
+-- Create HNSW index for OpenAI's 1536 dimensions
+CREATE VIRTUAL TABLE api_vectors USING hnsw_index(
+    dimensions=1536, metric='cosine'
+);
+
+-- Embed text via API (one HTTP call per rembed() invocation)
+INSERT INTO api_vectors(rowid, vector) VALUES (1, rembed('openai', 'hello world'));
+
+-- Search
+SELECT rowid, distance FROM api_vectors
+WHERE vector MATCH rembed('openai', 'greetings') AND k = 5;
+```
+
+For Ollama (local API):
+```sql
+INSERT INTO temp.rembed_clients(name, options)
+  VALUES ('nomic', rembed_client_options('ollama', 'nomic-embed-text'));
+-- Requires: ollama serve + ollama pull nomic-embed-text
+```
+
 ## Interactive Vector Search Session
 
 ```sql
