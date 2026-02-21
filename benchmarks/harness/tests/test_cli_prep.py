@@ -17,9 +17,7 @@ class TestPrepCLI:
         assert "vectors" in result.stdout
         assert "texts" in result.stdout
         assert "kg-chunks" in result.stdout
-        assert "kg-er" in result.stdout
-        assert "kg-ner" in result.stdout
-        assert "kg-re" in result.stdout
+        assert "kg" in result.stdout
         assert "all" in result.stdout
 
     def test_prep_no_subcommand_shows_usage(self):
@@ -76,10 +74,10 @@ class TestPrepCLI:
         assert "--force" in result.stdout
         assert "--book-id" in result.stdout
 
-    def test_prep_kg_er_help(self):
-        """prep kg-er --help should show --status and --force."""
+    def test_prep_kg_help(self):
+        """prep kg --help should show --status, --force, and --dataset."""
         result = subprocess.run(
-            [sys.executable, "-m", "benchmarks.harness.cli", "prep", "kg-er", "--help"],
+            [sys.executable, "-m", "benchmarks.harness.cli", "prep", "kg", "--help"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -146,64 +144,16 @@ class TestPrepCLI:
         assert result.returncode == 0
         assert "KG Chunk Database Status" in result.stdout
 
-    def test_prep_kg_er_status(self):
-        """prep kg-er --status should show dataset status."""
+    def test_prep_kg_status(self):
+        """prep kg --status should show KG dataset status."""
         result = subprocess.run(
-            [sys.executable, "-m", "benchmarks.harness.cli", "prep", "kg-er", "--status"],
+            [sys.executable, "-m", "benchmarks.harness.cli", "prep", "kg", "--status"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
         assert result.returncode == 0
-        assert "ER Dataset Status" in result.stdout
-
-    def test_prep_kg_ner_help(self):
-        """prep kg-ner --help should show --status, --force, and --dataset."""
-        result = subprocess.run(
-            [sys.executable, "-m", "benchmarks.harness.cli", "prep", "kg-ner", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert result.returncode == 0
-        assert "--status" in result.stdout
-        assert "--force" in result.stdout
-        assert "--dataset" in result.stdout
-
-    def test_prep_kg_ner_status(self):
-        """prep kg-ner --status should show NER dataset status."""
-        result = subprocess.run(
-            [sys.executable, "-m", "benchmarks.harness.cli", "prep", "kg-ner", "--status"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert result.returncode == 0
-        assert "NER Dataset Status" in result.stdout
-
-    def test_prep_kg_re_help(self):
-        """prep kg-re --help should show --status, --force, and --dataset."""
-        result = subprocess.run(
-            [sys.executable, "-m", "benchmarks.harness.cli", "prep", "kg-re", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert result.returncode == 0
-        assert "--status" in result.stdout
-        assert "--force" in result.stdout
-        assert "--dataset" in result.stdout
-
-    def test_prep_kg_re_status(self):
-        """prep kg-re --status should show RE dataset status."""
-        result = subprocess.run(
-            [sys.executable, "-m", "benchmarks.harness.cli", "prep", "kg-re", "--status"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert result.returncode == 0
-        assert "RE Dataset Status" in result.stdout
+        assert "KG Dataset Status" in result.stdout
 
     def test_prep_all_status(self):
         """prep all --status should show status for all targets."""
@@ -211,12 +161,10 @@ class TestPrepCLI:
             [sys.executable, "-m", "benchmarks.harness.cli", "prep", "all", "--status"],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
         assert result.returncode == 0
         assert "Vector Cache Status" in result.stdout
         assert "Text Cache Status" in result.stdout
         assert "KG Chunk Database Status" in result.stdout
-        assert "ER Dataset Status" in result.stdout
-        assert "NER Dataset Status" in result.stdout
-        assert "RE Dataset Status" in result.stdout
+        assert "KG Dataset Status" in result.stdout

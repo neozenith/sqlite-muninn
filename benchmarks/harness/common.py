@@ -23,11 +23,10 @@ log = logging.getLogger(__name__)
 
 # ── Path constants ─────────────────────────────────────────────────
 
-# Change OUTPUT_DIR_PREFIX from "refactored_outputs" to "" when migration is complete
-OUTPUT_DIR_PREFIX = Path("refactored_outputs")
+
 
 BENCHMARKS_ROOT = Path(__file__).resolve().parent.parent  # benchmarks/
-OUTPUT_ROOT = BENCHMARKS_ROOT / OUTPUT_DIR_PREFIX if OUTPUT_DIR_PREFIX else BENCHMARKS_ROOT
+OUTPUT_ROOT = BENCHMARKS_ROOT
 RESULTS_DIR = OUTPUT_ROOT / "results"
 CHARTS_DIR = OUTPUT_ROOT / "charts"
 VECTORS_DIR = OUTPUT_ROOT / "vectors"
@@ -36,7 +35,7 @@ KG_DIR = OUTPUT_ROOT / "kg"
 
 PROJECT_ROOT = BENCHMARKS_ROOT.parent  # project root
 MUNINN_PATH = str(PROJECT_ROOT / "build" / "muninn")
-DOCS_BENCHMARKS_DIR = PROJECT_ROOT / "docs" / "benchmarks" / "refactored_output"
+DOCS_BENCHMARKS_DIR = PROJECT_ROOT / "docs" / "benchmarks"
 
 # ── Benchmark defaults ─────────────────────────────────────────────
 
@@ -360,28 +359,70 @@ KG_NER_DATASETS: list[dict[str, Any]] = [
         "display": "Wealth of Nations (3300)",
         "source": "Project Gutenberg",
         "url": None,
-        "description": "Literary text chunks (no gold labels \u2014 speed only)",
+        "description": "Literary text chunks (no gold labels — speed only)",
     },
     {
-        "slug": "conll2003",
-        "display": "CoNLL-2003",
+        "slug": "crossner_ai",
+        "display": "CrossNER (AI)",
         "source": "HuggingFace",
-        "url": "https://huggingface.co/datasets/eriktks/conll2003",
-        "description": "Standard NER benchmark; PER, ORG, LOC, MISC",
+        "url": "https://huggingface.co/datasets/DFKI-SLT/cross_ner",
+        "description": "CrossNER AI domain; BIO-tagged entities",
     },
     {
-        "slug": "crossner",
-        "display": "CrossNER",
+        "slug": "crossner_conll2003",
+        "display": "CrossNER (CoNLL-2003)",
         "source": "HuggingFace",
-        "url": "https://huggingface.co/datasets/zeroshot/crossner",
-        "description": "Cross-domain NER; 5 specialized domains",
+        "url": "https://huggingface.co/datasets/DFKI-SLT/cross_ner",
+        "description": "CoNLL-2003 via CrossNER; PER, ORG, LOC, MISC",
     },
     {
-        "slug": "fewnerd",
-        "display": "Few-NERD",
+        "slug": "crossner_literature",
+        "display": "CrossNER (Literature)",
+        "source": "HuggingFace",
+        "url": "https://huggingface.co/datasets/DFKI-SLT/cross_ner",
+        "description": "CrossNER literature domain",
+    },
+    {
+        "slug": "crossner_music",
+        "display": "CrossNER (Music)",
+        "source": "HuggingFace",
+        "url": "https://huggingface.co/datasets/DFKI-SLT/cross_ner",
+        "description": "CrossNER music domain",
+    },
+    {
+        "slug": "crossner_politics",
+        "display": "CrossNER (Politics)",
+        "source": "HuggingFace",
+        "url": "https://huggingface.co/datasets/DFKI-SLT/cross_ner",
+        "description": "CrossNER politics domain",
+    },
+    {
+        "slug": "crossner_science",
+        "display": "CrossNER (Science)",
+        "source": "HuggingFace",
+        "url": "https://huggingface.co/datasets/DFKI-SLT/cross_ner",
+        "description": "CrossNER science domain",
+    },
+    {
+        "slug": "fewnerd_supervised",
+        "display": "Few-NERD (supervised)",
         "source": "HuggingFace",
         "url": "https://huggingface.co/datasets/DFKI-SLT/few-nerd",
-        "description": "Fine-grained NER with 66 entity types",
+        "description": "Fine-grained NER with 66 entity types (supervised split)",
+    },
+    {
+        "slug": "fewnerd_inter",
+        "display": "Few-NERD (inter)",
+        "source": "HuggingFace",
+        "url": "https://huggingface.co/datasets/DFKI-SLT/few-nerd",
+        "description": "Few-NERD inter-domain split",
+    },
+    {
+        "slug": "fewnerd_intra",
+        "display": "Few-NERD (intra)",
+        "source": "HuggingFace",
+        "url": "https://huggingface.co/datasets/DFKI-SLT/few-nerd",
+        "description": "Few-NERD intra-domain split",
     },
 ]
 
@@ -392,22 +433,22 @@ KG_RE_DATASETS: list[dict[str, Any]] = [
         "slug": "docred",
         "display": "DocRED",
         "source": "HuggingFace",
-        "url": "https://huggingface.co/datasets/docred",
+        "url": "https://huggingface.co/datasets/thunlp/docred",
         "description": "Document-level relation extraction",
     },
     {
         "slug": "webnlg",
         "display": "WebNLG",
         "source": "HuggingFace",
-        "url": "https://huggingface.co/datasets/web_nlg",
+        "url": "https://huggingface.co/datasets/webnlg-challenge/web_nlg",
         "description": "RDF triple verbalization and extraction",
     },
     {
-        "slug": "tacred",
-        "display": "TACRED",
+        "slug": "conll04",
+        "display": "CoNLL-04",
         "source": "HuggingFace",
-        "url": "https://huggingface.co/datasets/DFKI-SLT/tacred",
-        "description": "Sentence-level RE; 42 relation types",
+        "url": "https://huggingface.co/datasets/DFKI-SLT/conll04",
+        "description": "Joint entity and relation extraction",
     },
 ]
 

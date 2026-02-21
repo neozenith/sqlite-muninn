@@ -11,8 +11,10 @@ import logging
 import random
 import time
 import urllib.request
+from pathlib import Path
 
 from benchmarks.harness.common import TEXTS_DIR
+from benchmarks.harness.prep.base import PrepTask
 from benchmarks.harness.prep.common import fmt_size
 
 log = logging.getLogger(__name__)
@@ -23,6 +25,33 @@ DEFAULT_BOOK_IDS = [3300]  # Wealth of Nations
 # Gutendex API for catalog searches
 GUTENDEX_BASE_URL = "https://gutendex.com/books"
 CATALOG_CACHE_TTL = 86400  # 24 hours
+
+
+# ── PrepTask ─────────────────────────────────────────────────────
+
+
+class GutenbergTextPrepTask(PrepTask):
+    """PrepTask for downloading a single Gutenberg text."""
+
+    def __init__(self, book_id: int):
+        self._book_id = book_id
+
+    @property
+    def task_id(self) -> str:
+        return f"text:{self._book_id}"
+
+    @property
+    def label(self) -> str:
+        return f"Gutenberg #{self._book_id}"
+
+    def outputs(self) -> list[Path]:
+        return [TEXTS_DIR / f"gutenberg_{self._book_id}.txt"]
+
+    def fetch(self, force: bool = False) -> None:
+        download_gutenberg_text(self._book_id, force=force)
+
+
+TEXT_PREP_TASKS: list[PrepTask] = [GutenbergTextPrepTask(bid) for bid in DEFAULT_BOOK_IDS]
 
 
 # ── Gutendex catalog ─────────────────────────────────────────────
@@ -278,12 +307,12 @@ def prep_texts(
         return
 
     if book_id:
-        book_ids = [book_id]
+        tasks = [GutenbergTextPrepTask(book_id)]
     else:
-        book_ids = list(DEFAULT_BOOK_IDS)
+        tasks = list(TEXT_PREP_TASKS)
 
-    log.info("Downloading %d Gutenberg text(s)...", len(book_ids))
-    for bid in book_ids:
-        download_gutenberg_text(bid, force=force)
+    log.info("Downloading %d Gutenberg text(s)...", len(tasks))
+    for task in tasks:
+        task.run(force=force)
 
     log.info("Text prep complete. Cached in %s", TEXTS_DIR)

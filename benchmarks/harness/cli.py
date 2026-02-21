@@ -11,9 +11,7 @@ import argparse
 import logging
 import sys
 
-from benchmarks.harness.prep.kg_er import KNOWN_ER_DATASETS
-from benchmarks.harness.prep.kg_ner import KNOWN_NER_DATASETS
-from benchmarks.harness.prep.kg_re import KNOWN_RE_DATASETS
+from benchmarks.harness.prep.kg_datasets import KG_PREP_TASKS
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +21,7 @@ def _cmd_prep(args):
     target = args.prep_target
 
     if target is None:
-        print("Usage: benchmarks.harness.cli prep {vectors,texts,kg-chunks,kg-er,kg-ner,kg-re,all}")
+        print("Usage: benchmarks.harness.cli prep {vectors,texts,kg-chunks,kg,all}")
         print("Run 'benchmarks.harness.cli prep --help' for details.")
         sys.exit(1)
 
@@ -61,28 +59,10 @@ def _cmd_prep(args):
             force=force,
         )
 
-    if target in ("kg-er", "all"):
-        from benchmarks.harness.prep.kg_er import prep_er_datasets
+    if target in ("kg", "all"):
+        from benchmarks.harness.prep.kg_datasets import prep_kg_datasets
 
-        prep_er_datasets(
-            dataset=getattr(args, "dataset", None),
-            status_only=status_only,
-            force=force,
-        )
-
-    if target in ("kg-ner", "all"):
-        from benchmarks.harness.prep.kg_ner import prep_ner_datasets
-
-        prep_ner_datasets(
-            dataset=getattr(args, "dataset", None),
-            status_only=status_only,
-            force=force,
-        )
-
-    if target in ("kg-re", "all"):
-        from benchmarks.harness.prep.kg_re import prep_re_datasets
-
-        prep_re_datasets(
+        prep_kg_datasets(
             dataset=getattr(args, "dataset", None),
             status_only=status_only,
             force=force,
@@ -263,28 +243,15 @@ def main():
     prep_kg_p.add_argument("--force", action="store_true", help="Re-create chunk databases even if they exist")
     prep_kg_p.add_argument("--book-id", type=int, help="Gutenberg book ID")
 
-    # prep kg-er
-    prep_er_p = prep_subs.add_parser("kg-er", help=f"Download ER benchmark datasets ({KNOWN_ER_DATASETS})")
-    prep_er_p.add_argument("--status", action="store_true", help="Show dataset download status")
-    prep_er_p.add_argument("--force", action="store_true", help="Re-download datasets even if they exist")
-    prep_er_p.add_argument("--dataset", choices=KNOWN_ER_DATASETS, help="Specific dataset to download")
-
-    # prep kg-ner
-    prep_ner_p = prep_subs.add_parser("kg-ner", help=f"Download NER benchmark datasets ({KNOWN_NER_DATASETS})")
-    prep_ner_p.add_argument("--status", action="store_true", help="Show NER dataset status")
-    prep_ner_p.add_argument("--force", action="store_true", help="Re-download datasets even if they exist")
-    prep_ner_p.add_argument("--dataset", choices=KNOWN_NER_DATASETS, help="Specific dataset to download")
-
-    # prep kg-re
-    prep_re_p = prep_subs.add_parser("kg-re", help=f"Download RE benchmark datasets ({KNOWN_RE_DATASETS})")
-    prep_re_p.add_argument("--status", action="store_true", help="Show RE dataset status")
-    prep_re_p.add_argument("--force", action="store_true", help="Re-download datasets even if they exist")
-    prep_re_p.add_argument("--dataset", choices=KNOWN_RE_DATASETS, help="Specific dataset to download")
+    # prep kg (unified NER + RE + ER)
+    kg_task_ids = [t.task_id for t in KG_PREP_TASKS]
+    prep_kg_ds_p = prep_subs.add_parser("kg", help="Download KG benchmark datasets (NER, RE, ER)")
+    prep_kg_ds_p.add_argument("--status", action="store_true", help="Show KG dataset download status")
+    prep_kg_ds_p.add_argument("--force", action="store_true", help="Re-download datasets even if they exist")
+    prep_kg_ds_p.add_argument("--dataset", choices=kg_task_ids, help="Specific dataset to download")
 
     # prep all
-    prep_all_p = prep_subs.add_parser(
-        "all", help="Prep everything (vectors + texts + kg-chunks + kg-er + kg-ner + kg-re)"
-    )
+    prep_all_p = prep_subs.add_parser("all", help="Prep everything (vectors + texts + kg-chunks + kg)")
     prep_all_p.add_argument("--status", action="store_true", help="Show status of all prep targets")
     prep_all_p.add_argument("--force", action="store_true", help="Force re-creation of all prep targets")
 

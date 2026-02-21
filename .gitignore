@@ -70,3 +70,6 @@ npm/README.md
 
 benchmarks/refactored_outputs/
 docs/benchmarks/refactored_output/
+.env
+
+.hf_cache/

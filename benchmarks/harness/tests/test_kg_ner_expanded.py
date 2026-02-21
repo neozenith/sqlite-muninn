@@ -41,20 +41,20 @@ class TestDataSourceParsing:
         assert source_id == "3300"
 
     def test_ner_dataset_source(self):
-        source_type, source_id = _parse_data_source("conll2003")
+        source_type, source_id = _parse_data_source("crossner_conll2003")
         assert source_type == "ner_dataset"
-        assert source_id == "conll2003"
+        assert source_id == "crossner_conll2003"
 
-    def test_crossner_source(self):
-        source_type, source_id = _parse_data_source("crossner")
+    def test_crossner_ai_source(self):
+        source_type, source_id = _parse_data_source("crossner_ai")
         assert source_type == "ner_dataset"
-        assert source_id == "crossner"
+        assert source_id == "crossner_ai"
 
     def test_data_source_slug_gutenberg(self):
         assert _data_source_slug("gutenberg:3300") == "gutenberg-3300"
 
     def test_data_source_slug_dataset(self):
-        assert _data_source_slug("conll2003") == "conll2003"
+        assert _data_source_slug("crossner_conll2003") == "crossner_conll2003"
 
 
 class TestPermutationId:
@@ -62,17 +62,17 @@ class TestPermutationId:
         t = KGNerExtractionTreatment("fts5", "gutenberg:3300")
         assert t.permutation_id == "kg-extract_fts5_gutenberg-3300"
 
-    def test_conll_permutation_id(self):
-        t = KGNerExtractionTreatment("fts5", "conll2003")
-        assert t.permutation_id == "kg-extract_fts5_conll2003"
+    def test_crossner_permutation_id(self):
+        t = KGNerExtractionTreatment("fts5", "crossner_conll2003")
+        assert t.permutation_id == "kg-extract_fts5_crossner_conll2003"
 
     def test_category(self):
         t = KGNerExtractionTreatment("fts5", "gutenberg:3300")
         assert t.category == "kg-extract"
 
     def test_label(self):
-        t = KGNerExtractionTreatment("gliner_small-v2.1", "conll2003")
-        assert t.label == "KG Extract: gliner_small-v2.1 / conll2003"
+        t = KGNerExtractionTreatment("gliner_small-v2.1", "crossner_conll2003")
+        assert t.label == "KG Extract: gliner_small-v2.1 / crossner_conll2003"
 
     def test_params_dict_gutenberg(self):
         t = KGNerExtractionTreatment("fts5", "gutenberg:3300")
@@ -83,10 +83,10 @@ class TestPermutationId:
         assert params["source_id"] == "3300"
 
     def test_params_dict_ner_dataset(self):
-        t = KGNerExtractionTreatment("fts5", "conll2003")
+        t = KGNerExtractionTreatment("fts5", "crossner_conll2003")
         params = t.params_dict()
         assert params["source_type"] == "ner_dataset"
-        assert params["source_id"] == "conll2003"
+        assert params["source_id"] == "crossner_conll2003"
 
 
 class TestNerDatasetWithGold:

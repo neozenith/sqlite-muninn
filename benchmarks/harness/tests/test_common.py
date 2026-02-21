@@ -158,4 +158,4 @@ class TestPathConstants:
         assert BENCHMARKS_ROOT.is_dir()
 
     def test_results_dir_is_under_output(self):
-        assert "refactored_outputs" in str(RESULTS_DIR)
+        assert RESULTS_DIR == BENCHMARKS_ROOT / "results"

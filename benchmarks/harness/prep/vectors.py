@@ -6,21 +6,54 @@ Ports from benchmarks/scripts/benchmark_vss.py --prep-models.
 import logging
 import re
 import urllib.request
+from pathlib import Path
 
 import numpy as np
+from datasets import load_dataset as hf_load_dataset
+from sentence_transformers import SentenceTransformer
 
 from benchmarks.harness.common import DATASETS, EMBEDDING_MODELS, TEXTS_DIR, VECTORS_DIR, VSS_SIZES
+from benchmarks.harness.prep.base import PrepTask
 from benchmarks.harness.prep.common import fmt_size
 
 log = logging.getLogger(__name__)
 
-try:
-    from datasets import load_dataset as hf_load_dataset
-    from sentence_transformers import SentenceTransformer
 
-    HAS_MODEL_DEPS = True
-except ImportError:
-    HAS_MODEL_DEPS = False
+# ── PrepTask ─────────────────────────────────────────────────────
+
+
+class VectorPrepTask(PrepTask):
+    """PrepTask for generating a .npy embedding cache file."""
+
+    def __init__(self, model_label: str, model_info: dict, dataset_key: str):
+        self._model_label = model_label
+        self._model_info = model_info
+        self._dataset_key = dataset_key
+
+    @property
+    def task_id(self) -> str:
+        return f"vector:{self._model_label}:{self._dataset_key}"
+
+    @property
+    def label(self) -> str:
+        return f"{self._model_label} / {self._dataset_key}"
+
+    def outputs(self) -> list[Path]:
+        return [VECTORS_DIR / f"{self._model_label}_{self._dataset_key}.npy"]
+
+    def fetch(self, force: bool = False) -> None:
+        # fetch + transform combined — handled by prep_vectors batch runner
+        pass
+
+
+VECTOR_PREP_TASKS: list[PrepTask] = [
+    VectorPrepTask(model_label, model_info, dataset_key)
+    for model_label, model_info in EMBEDDING_MODELS.items()
+    for dataset_key in DATASETS
+]
+
+
+# ── Utility functions ────────────────────────────────────────────
 
 
 def _download_gutenberg(gutenberg_id):
@@ -83,8 +116,6 @@ def _load_texts(dataset_key, max_n):
     ds_config = DATASETS[dataset_key]
 
     if ds_config["source_type"] == "huggingface":
-        if not HAS_MODEL_DEPS:
-            raise RuntimeError("HuggingFace datasets require: uv pip install datasets sentence-transformers")
         hf_dataset = hf_load_dataset(ds_config["hf_name"], split=ds_config["hf_split"])
         field = ds_config["text_field"]
         n = min(max_n, len(hf_dataset))
@@ -148,21 +179,18 @@ def prep_vectors(only_model=None, only_dataset=None, status_only=False, force=Fa
         _print_vector_status(datasets_to_prep, models_to_prep)
         return
 
-    if not HAS_MODEL_DEPS:
-        raise RuntimeError("Vector prep requires: uv pip install datasets sentence-transformers")
-
     max_n = max(VSS_SIZES)
 
     VECTORS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Model-outer loop: load each embedding model once, encode all datasets that need it
     for model_label, model_info in models_to_prep.items():
-        # Pre-check which datasets need encoding with this model.
-        # If the .npy cache exists, skip it. Use --force to re-encode.
+        # Pre-check which datasets need encoding with this model via task.status()
         datasets_needing_encoding = []
         for dataset_key in datasets_to_prep:
-            cache_path = VECTORS_DIR / f"{model_label}_{dataset_key}.npy"
-            if cache_path.exists() and not force:
+            task = VectorPrepTask(model_label, model_info, dataset_key)
+            if not force and task.status() == "READY":
+                cache_path = task.outputs()[0]
                 log.info("  %s/%s: cached (%s)", model_label, dataset_key, fmt_size(cache_path.stat().st_size))
                 continue
             datasets_needing_encoding.append(dataset_key)

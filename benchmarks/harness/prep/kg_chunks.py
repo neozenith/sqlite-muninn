@@ -7,11 +7,62 @@ This is the common starting point for all KG pipeline treatments.
 import logging
 import re
 import sqlite3
+from pathlib import Path
 
 from benchmarks.harness.common import KG_DIR, TEXTS_DIR
+from benchmarks.harness.prep.base import PrepTask
 from benchmarks.harness.prep.common import fmt_size
 
 log = logging.getLogger(__name__)
+
+
+# ── PrepTask ─────────────────────────────────────────────────────
+
+
+class KGChunksPrepTask(PrepTask):
+    """PrepTask for chunking a Gutenberg text into a SQLite database."""
+
+    def __init__(self, book_id: int):
+        self._book_id = book_id
+
+    @property
+    def task_id(self) -> str:
+        return f"chunks:{self._book_id}"
+
+    @property
+    def label(self) -> str:
+        return f"Chunks for Gutenberg #{self._book_id}"
+
+    def outputs(self) -> list[Path]:
+        return [KG_DIR / f"{self._book_id}_chunks.db"]
+
+    def fetch(self, force: bool = False) -> None:
+        # Remove existing DB when force is set (it may be corrupt or stale)
+        if force:
+            for p in self.outputs():
+                if p.exists():
+                    p.unlink()
+
+    def transform(self) -> None:
+        create_chunks_db(self._book_id)
+
+
+def chunks_prep_tasks() -> list[PrepTask]:
+    """Dynamically discover all available texts and return a KGChunksPrepTask per book.
+
+    Globs TEXTS_DIR for gutenberg_*.txt, union with {3300} as the minimum.
+    """
+    book_ids = {3300}
+    if TEXTS_DIR.exists():
+        for path in TEXTS_DIR.glob("gutenberg_*.txt"):
+            stem = path.stem
+            parts = stem.split("_", 1)
+            if len(parts) == 2 and parts[1].isdigit():
+                book_ids.add(int(parts[1]))
+    return [KGChunksPrepTask(bid) for bid in sorted(book_ids)]
+
+
+# ── Utility functions ────────────────────────────────────────────
 
 
 def _chunk_text(text, window=256, overlap=50):
@@ -118,7 +169,7 @@ def prep_kg_chunks(book_id=None, status_only=False, force=False):
     """Create chunk databases for KG pipeline benchmarks.
 
     Args:
-        book_id: Specific book ID. If None, uses default (3300).
+        book_id: Specific book ID. If None, discovers all available texts.
         status_only: If True, show status and return.
         force: If True, re-create databases even if they exist.
     """
@@ -126,17 +177,13 @@ def prep_kg_chunks(book_id=None, status_only=False, force=False):
         print_status()
         return
 
-    book_ids = [book_id] if book_id else [3300]
+    if book_id:
+        tasks = [KGChunksPrepTask(book_id)]
+    else:
+        tasks = chunks_prep_tasks()
 
     log.info("Creating KG chunk databases...")
-    for bid in book_ids:
-        db_path = KG_DIR / f"{bid}_chunks.db"
-        if db_path.exists() and not force:
-            log.info("  Book #%d: chunk DB already exists at %s (use --force to re-create)", bid, db_path)
-            continue
-        if db_path.exists() and force:
-            log.info("  Book #%d: --force, re-creating chunk DB", bid)
-            db_path.unlink()
-        create_chunks_db(bid)
+    for task in tasks:
+        task.run(force=force)
 
     log.info("KG chunk prep complete. Databases in %s", KG_DIR)

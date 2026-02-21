@@ -6,9 +6,11 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from benchmarks.harness.prep.kg_chunks import _chunk_text, create_chunks_db, prep_kg_chunks
+from benchmarks.harness.prep.kg_chunks import KGChunksPrepTask, _chunk_text, chunks_prep_tasks, create_chunks_db, prep_kg_chunks
 from benchmarks.harness.prep.kg_chunks import print_status as kg_status
 from benchmarks.harness.prep.texts import (
+    GutenbergTextPrepTask,
+    TEXT_PREP_TASKS,
     format_book_info,
     get_cached_book_ids,
     list_cached_texts,
@@ -18,6 +20,7 @@ from benchmarks.harness.prep.texts import (
 from benchmarks.harness.prep.texts import (
     print_status as texts_status,
 )
+from benchmarks.harness.prep.vectors import VECTOR_PREP_TASKS, VectorPrepTask
 
 
 class TestChunkText:
@@ -153,6 +156,40 @@ class TestKgChunksForce:
         assert count > 0
 
 
+class TestKgChunksPrepTask:
+    def test_task_id(self):
+        t = KGChunksPrepTask(3300)
+        assert t.task_id == "chunks:3300"
+
+    def test_label(self):
+        t = KGChunksPrepTask(3300)
+        assert t.label == "Chunks for Gutenberg #3300"
+
+    def test_outputs(self, tmp_path):
+        with patch("benchmarks.harness.prep.kg_chunks.KG_DIR", tmp_path / "kg"):
+            t = KGChunksPrepTask(3300)
+            outputs = t.outputs()
+        assert len(outputs) == 1
+        assert "3300_chunks.db" in outputs[0].name
+
+    def test_chunks_prep_tasks_includes_default(self, tmp_path):
+        with patch("benchmarks.harness.prep.kg_chunks.TEXTS_DIR", tmp_path):
+            tasks = chunks_prep_tasks()
+        assert any(t._book_id == 3300 for t in tasks)
+
+    def test_chunks_prep_tasks_discovers_extra(self, tmp_path):
+        texts_dir = tmp_path / "texts"
+        texts_dir.mkdir()
+        (texts_dir / "gutenberg_1234.txt").write_text("hello", encoding="utf-8")
+        (texts_dir / "gutenberg_3300.txt").write_text("world", encoding="utf-8")
+
+        with patch("benchmarks.harness.prep.kg_chunks.TEXTS_DIR", texts_dir):
+            tasks = chunks_prep_tasks()
+        book_ids = {t._book_id for t in tasks}
+        assert 3300 in book_ids
+        assert 1234 in book_ids
+
+
 class TestTextsListCached:
     def test_list_empty_directory(self, tmp_path, capsys):
         with patch("benchmarks.harness.prep.texts.TEXTS_DIR", tmp_path):
@@ -252,6 +289,27 @@ class TestTextsForce:
         assert "No cached texts" in captured.out
 
 
+class TestGutenbergTextPrepTask:
+    def test_task_id(self):
+        t = GutenbergTextPrepTask(3300)
+        assert t.task_id == "text:3300"
+
+    def test_label(self):
+        t = GutenbergTextPrepTask(3300)
+        assert t.label == "Gutenberg #3300"
+
+    def test_outputs(self, tmp_path):
+        with patch("benchmarks.harness.prep.texts.TEXTS_DIR", tmp_path / "texts"):
+            t = GutenbergTextPrepTask(3300)
+            outputs = t.outputs()
+        assert len(outputs) == 1
+        assert "gutenberg_3300.txt" in outputs[0].name
+
+    def test_text_prep_tasks_default(self):
+        assert len(TEXT_PREP_TASKS) >= 1
+        assert any(t.task_id == "text:3300" for t in TEXT_PREP_TASKS)
+
+
 class TestFormatBookInfo:
     def test_formats_book_dict(self):
         book = {
@@ -301,77 +359,22 @@ class TestVectorStatus:
         assert "100" in captured.out
 
 
-class TestErDatasetsStatus:
-    def test_status_shows_missing(self, tmp_path, capsys):
-        kg_dir = tmp_path / "kg"
-        kg_dir.mkdir()
+class TestVectorPrepTask:
+    def test_task_id(self):
+        t = VectorPrepTask("MiniLM", {"model_id": "test", "dim": 384}, "ag_news")
+        assert t.task_id == "vector:MiniLM:ag_news"
 
-        with patch("benchmarks.harness.prep.kg_er.KG_DIR", kg_dir):
-            from benchmarks.harness.prep.kg_er import print_status as er_status
+    def test_label(self):
+        t = VectorPrepTask("MiniLM", {"model_id": "test", "dim": 384}, "ag_news")
+        assert t.label == "MiniLM / ag_news"
 
-            er_status()
-        captured = capsys.readouterr()
-        assert "ER Dataset Status" in captured.out
-        assert "MISSING" in captured.out
+    def test_outputs(self, tmp_path):
+        with patch("benchmarks.harness.prep.vectors.VECTORS_DIR", tmp_path / "vectors"):
+            t = VectorPrepTask("MiniLM", {"model_id": "test", "dim": 384}, "ag_news")
+            outputs = t.outputs()
+        assert len(outputs) == 1
+        assert "MiniLM_ag_news.npy" in outputs[0].name
 
-
-class TestNerDatasetsStatus:
-    def test_status_shows_missing(self, tmp_path, capsys):
-        kg_dir = tmp_path / "kg"
-        kg_dir.mkdir()
-
-        with patch("benchmarks.harness.prep.kg_ner.KG_DIR", kg_dir):
-            from benchmarks.harness.prep.kg_ner import print_status as ner_status
-
-            ner_status()
-        captured = capsys.readouterr()
-        assert "NER Dataset Status" in captured.out
-        assert "MISSING" in captured.out
-
-    def test_status_shows_ready(self, tmp_path, capsys):
-        kg_dir = tmp_path / "kg"
-        ds_dir = kg_dir / "ner" / "conll2003"
-        ds_dir.mkdir(parents=True)
-        (ds_dir / "texts.jsonl").write_text('{"id": 0, "text": "hello", "tokens": ["hello"]}', encoding="utf-8")
-        (ds_dir / "entities.jsonl").write_text(
-            '{"text_id": 0, "start": 0, "end": 5, "label": "PER", "surface": "hello"}', encoding="utf-8"
-        )
-
-        with patch("benchmarks.harness.prep.kg_ner.KG_DIR", kg_dir):
-            from benchmarks.harness.prep.kg_ner import print_status as ner_status
-
-            ner_status()
-        captured = capsys.readouterr()
-        assert "READY" in captured.out
-        assert "conll2003" in captured.out
-
-
-class TestReDatasetsStatus:
-    def test_status_shows_missing(self, tmp_path, capsys):
-        kg_dir = tmp_path / "kg"
-        kg_dir.mkdir()
-
-        with patch("benchmarks.harness.prep.kg_re.KG_DIR", kg_dir):
-            from benchmarks.harness.prep.kg_re import print_status as re_status
-
-            re_status()
-        captured = capsys.readouterr()
-        assert "RE Dataset Status" in captured.out
-        assert "MISSING" in captured.out
-
-    def test_status_shows_ready(self, tmp_path, capsys):
-        kg_dir = tmp_path / "kg"
-        ds_dir = kg_dir / "re" / "docred"
-        ds_dir.mkdir(parents=True)
-        (ds_dir / "texts.jsonl").write_text('{"id": 0, "text": "hello world"}', encoding="utf-8")
-        (ds_dir / "triples.jsonl").write_text(
-            '{"text_id": 0, "subject": "Alice", "predicate": "knows", "object": "Bob"}', encoding="utf-8"
-        )
-
-        with patch("benchmarks.harness.prep.kg_re.KG_DIR", kg_dir):
-            from benchmarks.harness.prep.kg_re import print_status as re_status
-
-            re_status()
-        captured = capsys.readouterr()
-        assert "READY" in captured.out
-        assert "docred" in captured.out
+    def test_vector_prep_tasks_count(self):
+        """Should have 6 tasks: 3 models × 2 datasets."""
+        assert len(VECTOR_PREP_TASKS) == 6
