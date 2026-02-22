@@ -55,6 +55,10 @@ def conn(gguf_model_path: Path) -> sqlite3.Connection:
         (str(gguf_model_path),),
     )
     yield db
+    # Unload model from process-global C registry before closing —
+    # g_models[] persists across connections so stale entries cause
+    # "already loaded" errors in subsequent fixtures.
+    db.execute("DELETE FROM temp.muninn_models WHERE name = 'MiniLM'")
     db.close()
 
 

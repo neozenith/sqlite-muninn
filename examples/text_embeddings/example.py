@@ -33,11 +33,12 @@ MODELS_DIR = PROJECT_ROOT / "models"
 @dataclass
 class ModelConfig:
     """Configuration for a GGUF embedding model."""
-    name: str           # Registry name used in SQL
-    filename: str       # GGUF file in models/
-    url: str            # Download URL
-    doc_prefix: str     # Prefix prepended to documents before embedding
-    query_prefix: str   # Prefix prepended to queries before embedding
+
+    name: str  # Registry name used in SQL
+    filename: str  # GGUF file in models/
+    url: str  # Download URL
+    doc_prefix: str  # Prefix prepended to documents before embedding
+    query_prefix: str  # Prefix prepended to queries before embedding
 
 
 MODELS = [
@@ -183,14 +184,12 @@ def section_embed_and_index(db: sqlite3.Connection, models: list[ModelConfig], d
         # Embed with doc_prefix prepended to each document
         if model.doc_prefix:
             db.execute(
-                f"INSERT INTO [{table}](rowid, vector) "
-                f"SELECT id, muninn_embed(?, ? || content) FROM documents",
+                f"INSERT INTO [{table}](rowid, vector) SELECT id, muninn_embed(?, ? || content) FROM documents",
                 (model.name, model.doc_prefix),
             )
         else:
             db.execute(
-                f"INSERT INTO [{table}](rowid, vector) "
-                f"SELECT id, muninn_embed(?, content) FROM documents",
+                f"INSERT INTO [{table}](rowid, vector) SELECT id, muninn_embed(?, content) FROM documents",
                 (model.name,),
             )
         print(f"  {model.name}: embedded and indexed {len(DOCUMENTS)} documents")
@@ -217,9 +216,7 @@ def section_semantic_search(db: sqlite3.Connection, models: list[ModelConfig]) -
             table = f"vectors_{model.name}"
             prefixed_query = model.query_prefix + query_text
 
-            query_blob = db.execute(
-                "SELECT muninn_embed(?, ?)", (model.name, prefixed_query)
-            ).fetchone()[0]
+            query_blob = db.execute("SELECT muninn_embed(?, ?)", (model.name, prefixed_query)).fetchone()[0]
 
             results = db.execute(
                 f"""
@@ -261,9 +258,7 @@ def section_auto_embed_trigger(db: sqlite3.Connection, model: ModelConfig) -> No
     print("  Inserted doc #100: 'Black holes warp spacetime near the event horizon'")
 
     prefixed_query = model.query_prefix + "phenomena in space"
-    query_blob = db.execute(
-        "SELECT muninn_embed(?, ?)", (model.name, prefixed_query)
-    ).fetchone()[0]
+    query_blob = db.execute("SELECT muninn_embed(?, ?)", (model.name, prefixed_query)).fetchone()[0]
 
     results = db.execute(
         f"""

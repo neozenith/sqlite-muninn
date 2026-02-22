@@ -354,7 +354,8 @@ class TestLifecycleLogging:
         with caplog.at_level(logging.INFO, logger="benchmarks.harness.harness"):
             run_treatment(treatment, results_dir=tmp_path)
 
-        phase_msgs = [r.message for r in caplog.records if any(tag in r.message for tag in ["[SETUP]", "[RUN]", "[TEARDOWN]"])]
+        tags = ["[SETUP]", "[RUN]", "[TEARDOWN]"]
+        phase_msgs = [r.message for r in caplog.records if any(tag in r.message for tag in tags)]
 
         # Find first occurrence indices
         setup_idx = next(i for i, m in enumerate(phase_msgs) if "[SETUP]" in m)

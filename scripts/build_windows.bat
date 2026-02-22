@@ -12,8 +12,9 @@ cmake -B vendor\llama.cpp\build -S vendor\llama.cpp ^
     -DGGML_METAL=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=OFF ^
     -DGGML_HIP=OFF -DGGML_SYCL=OFF -DGGML_OPENMP=OFF ^
     -DGGML_BACKEND_DL=OFF ^
+    -DLLAMA_BUILD_COMMON=OFF ^
     -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF ^
-    -DLLAMA_BUILD_SERVER=OFF ^
+    -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=OFF ^
     -DCMAKE_BUILD_TYPE=MinSizeRel
 
 if %ERRORLEVEL% neq 0 (
@@ -53,8 +54,9 @@ cl.exe /O2 /MT /W4 /LD /Isrc ^
     src\id_validate.c ^
     src\embed_gguf.c ^
     vendor\llama.cpp\build\src\MinSizeRel\llama.lib ^
+    vendor\llama.cpp\build\ggml\src\MinSizeRel\ggml.lib ^
     vendor\llama.cpp\build\ggml\src\MinSizeRel\ggml-base.lib ^
-    vendor\llama.cpp\build\ggml\src\ggml-cpu\MinSizeRel\ggml-cpu.lib ^
+    vendor\llama.cpp\build\ggml\src\MinSizeRel\ggml-cpu.lib ^
     /Fe:build\muninn.dll
 
 if %ERRORLEVEL% neq 0 (

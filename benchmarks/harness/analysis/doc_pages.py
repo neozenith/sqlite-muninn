@@ -138,7 +138,7 @@ def _build_embed_page() -> dict[str, Any]:
                         "Model": f"**{name}**",
                         "Dimension": str(m["dim"]),
                         "Params": m["params"],
-                        "GGUF File": f'`{m["gguf_filename"]}`',
+                        "GGUF File": f"`{m['gguf_filename']}`",
                     }
                     for name, m in EMBEDDING_MODELS.items()
                     if m.get("embed_enabled", True)

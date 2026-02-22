@@ -318,8 +318,9 @@ docs-clean:                                    ## Clean documentation build
 ci: lint typecheck test test-python test-js docs-build    ## Full CI pipeline
 
 ci-all: ci
-	make -C viz ci
-	make -C wasm ci
+#	# Excluding wasm and viz examples until restoring the kg-demo database build.
+# 	make -C viz ci
+# 	make -C wasm ci
 
 ######################################################################
 # CLEAN
