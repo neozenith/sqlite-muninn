@@ -6,11 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Code Quality ───────────────────────────────────────
   quality:
     runs-on: ubuntu-22.04
     name: Code Quality
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
@@ -67,6 +72,7 @@ jobs:
             ext: dll
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.name }})
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -150,6 +156,7 @@ jobs:
   build-macos-universal:
     runs-on: macos-15
     name: Build (macOS Universal Binary)
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -185,6 +192,7 @@ jobs:
           - name: ASan+UBSan
             flags: "-fsanitize=address,undefined -fno-sanitize-recover=all"
     name: Sanitize (${{ matrix.sanitizer.name }})
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -207,6 +215,7 @@ jobs:
   amalgamation:
     runs-on: ubuntu-22.04
     name: Amalgamation
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -235,6 +244,7 @@ jobs:
   package-install:
     runs-on: ubuntu-22.04
     name: Package Install Tests
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -276,6 +286,7 @@ jobs:
   wasm:
     runs-on: ubuntu-22.04
     name: WASM Build
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
