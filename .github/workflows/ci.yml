@@ -110,10 +110,14 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Generate Windows build script
+        if: runner.os == 'Windows'
+        run: python3 scripts/generate_build.py windows  # stdlib-only, no uv needed
+
       - name: Build extension (Windows)
         if: runner.os == 'Windows'
         shell: cmd
-        run: scripts\build_windows.bat
+        run: build\generated\build_windows.bat
 
       # ── Python integration tests ────────────────────────
       - uses: actions/setup-python@v5

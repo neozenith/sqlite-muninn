@@ -28,17 +28,12 @@ LLAMA_WASM_LIBS  = $(LLAMA_WASM_BUILD)/src/libllama.a \
                    $(LLAMA_WASM_BUILD)/ggml/src/libggml.a \
                    $(LLAMA_WASM_BUILD)/ggml/src/libggml-base.a \
                    $(LLAMA_WASM_BUILD)/ggml/src/libggml-cpu.a
-LLAMA_INCLUDE    = -I$(LLAMA_DIR)/include -I$(LLAMA_DIR)/ggml/include
-
-# Muninn source files (explicit list — globs don't work reliably in Make)
-MUNINN_SRC = ../src/muninn.c ../src/hnsw_vtab.c ../src/hnsw_algo.c \
-             ../src/graph_tvf.c ../src/graph_load.c ../src/graph_centrality.c \
-             ../src/graph_community.c ../src/graph_adjacency.c ../src/graph_csr.c \
-             ../src/graph_selector_parse.c ../src/graph_selector_eval.c \
-             ../src/graph_select_tvf.c \
-             ../src/node2vec.c ../src/vec_math.c \
-             ../src/priority_queue.c ../src/id_validate.c \
-             ../src/embed_gguf.c
+# ── Single source of truth: scripts/generate_build.py ──
+_Q := uv run ../scripts/generate_build.py query
+LLAMA_INCLUDE          := $(shell $(_Q) LLAMA_INCLUDE)
+MUNINN_SRC             := $(shell $(_Q) MUNINN_SRC_WASM)
+SOURCES_WASM_EXTRA     := $(shell $(_Q) SOURCES_WASM_EXTRA)
+LLAMA_CMAKE_FLAGS_WASM := $(shell $(_Q) LLAMA_CMAKE_FLAGS_WASM)
 
 $(SQLITE_SRC):                                     ## Download SQLite amalgamation
 	@mkdir -p build
@@ -51,16 +46,7 @@ $(SQLITE_SRC):                                     ## Download SQLite amalgamati
 
 $(LLAMA_WASM_LIBS): | $(LLAMA_DIR)/CMakeLists.txt  ## Build llama.cpp as WASM static libs
 	@command -v emcmake >/dev/null 2>&1 || { echo "error: emcmake not found — install Emscripten SDK"; exit 1; }
-	emcmake cmake -B $(LLAMA_WASM_BUILD) -S $(LLAMA_DIR) \
-		-DBUILD_SHARED_LIBS=OFF \
-		-DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-		-DGGML_NATIVE=OFF \
-		-DGGML_METAL=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=OFF \
-		-DGGML_OPENMP=OFF -DGGML_BACKEND_DL=OFF \
-		-DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
-		-DLLAMA_BUILD_SERVER=OFF \
-		-DLLAMA_WASM_MEM64=OFF \
-		-DCMAKE_BUILD_TYPE=MinSizeRel
+	emcmake cmake -B $(LLAMA_WASM_BUILD) -S $(LLAMA_DIR) $(LLAMA_CMAKE_FLAGS_WASM)
 	emmake $(MAKE) -C $(LLAMA_WASM_BUILD) llama ggml -j$$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 $(WASM_JS): $(MUNINN_SRC) $(SQLITE_SRC) $(LLAMA_WASM_LIBS) ## Build WASM artifacts
@@ -83,7 +69,7 @@ $(WASM_JS): $(MUNINN_SRC) $(SQLITE_SRC) $(LLAMA_WASM_LIBS) ## Build WASM artifac
 		$(LLAMA_INCLUDE) \
 		$(SQLITE_SRC) \
 		$(MUNINN_SRC) \
-		../src/sqlite3_wasm_extra_init.c \
+		$(SOURCES_WASM_EXTRA) \
 		$(LLAMA_WASM_LIBS) \
 		-lm \
 		-o $(WASM_JS)

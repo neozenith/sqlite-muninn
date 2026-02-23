@@ -9,14 +9,15 @@ VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
 # Platform detection (needed early for llama.cpp BLAS config)
 UNAME_S := $(shell uname -s)
 
+# ── Single source of truth: scripts/generate_build.py ──
+_Q := uv run scripts/generate_build.py query
+
 # llama.cpp vendored dependency (CPU-only static build)
 LLAMA_DIR     = vendor/llama.cpp
 LLAMA_BUILD   = $(LLAMA_DIR)/build
-LLAMA_INCLUDE = -I$(LLAMA_DIR)/include -I$(LLAMA_DIR)/ggml/include
-LLAMA_LIBS_CORE = $(LLAMA_BUILD)/src/libllama.a \
-                  $(LLAMA_BUILD)/ggml/src/libggml.a \
-                  $(LLAMA_BUILD)/ggml/src/libggml-base.a \
-                  $(LLAMA_BUILD)/ggml/src/libggml-cpu.a
+LLAMA_INCLUDE    := $(shell $(_Q) LLAMA_INCLUDE)
+LLAMA_LIBS_CORE  := $(shell $(_Q) LLAMA_LIBS_CORE)
+LLAMA_CMAKE_FLAGS := $(shell $(_Q) LLAMA_CMAKE_FLAGS)
 
 # On macOS, BLAS is always available (Accelerate framework) so CMake always
 # builds libggml-blas.a.  Hardcode the path to avoid $(wildcard) failing on
@@ -27,24 +28,6 @@ ifeq ($(UNAME_S),Darwin)
 else
     LLAMA_LIBS = $(LLAMA_LIBS_CORE) $(wildcard $(LLAMA_BUILD)/ggml/src/ggml-blas/libggml-blas.a)
 endif
-
-LLAMA_CMAKE_FLAGS = \
-    -DBUILD_SHARED_LIBS=OFF \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DGGML_NATIVE=OFF \
-    -DGGML_METAL=OFF \
-    -DGGML_CUDA=OFF \
-    -DGGML_VULKAN=OFF \
-    -DGGML_HIP=OFF \
-    -DGGML_SYCL=OFF \
-    -DGGML_OPENMP=OFF \
-    -DGGML_BACKEND_DL=OFF \
-    -DLLAMA_BUILD_COMMON=OFF \
-    -DLLAMA_BUILD_TESTS=OFF \
-    -DLLAMA_BUILD_TOOLS=OFF \
-    -DLLAMA_BUILD_EXAMPLES=OFF \
-    -DLLAMA_BUILD_SERVER=OFF \
-    -DCMAKE_BUILD_TYPE=MinSizeRel
 
 # Platform-specific flags
 ifeq ($(UNAME_S),Darwin)
@@ -75,32 +58,14 @@ endif
 
 LDFLAGS_TEST = $(SQLITE_LIBS) $(LDFLAGS)
 
-# Source files
-SRC = src/muninn.c src/hnsw_vtab.c src/hnsw_algo.c \
-      src/graph_tvf.c src/graph_load.c src/graph_centrality.c \
-      src/graph_community.c src/graph_adjacency.c src/graph_csr.c \
-      src/graph_selector_parse.c src/graph_selector_eval.c \
-      src/graph_select_tvf.c \
-      src/node2vec.c src/vec_math.c \
-      src/priority_queue.c src/id_validate.c \
-      src/embed_gguf.c
-
-# Internal headers (excludes sqlite3.h / sqlite3ext.h)
-HEADERS = src/vec_math.h src/priority_queue.h src/hnsw_algo.h \
-          src/id_validate.h src/hnsw_vtab.h src/graph_common.h \
-          src/graph_tvf.h src/graph_load.h src/graph_centrality.h \
-          src/graph_community.h src/graph_adjacency.h src/graph_csr.h \
-          src/graph_selector_parse.h src/graph_selector_eval.h \
-          src/graph_select_tvf.h \
-          src/node2vec.h src/muninn.h src/embed_gguf.h
-
-TEST_SRC = test/test_main.c test/test_vec_math.c test/test_priority_queue.c \
-           test/test_hnsw_algo.c test/test_id_validate.c test/test_graph_load.c \
-           test/test_graph_csr.c test/test_graph_selector.c \
-           test/test_embed_gguf.c
+# Source files — from generate_build.py
+SRC          := $(shell $(_Q) SRC)
+HEADERS      := $(shell $(_Q) HEADERS)
+TEST_SRC     := $(shell $(_Q) TEST_SRC)
+TEST_LINK_SRC := $(shell $(_Q) TEST_LINK_SRC)
 
 .PHONY: all debug build test test-python test-js test-install test-all clean help \
-        amalgamation install uninstall version version-stamp \
+        amalgamation install uninstall version version-stamp generate-windows \
         dist dist-extension dist-python dist-npm dist-wasm changelog release \
         docs-serve docs-build docs-wasm docs-clean \
         format format-c format-python format-js \
@@ -159,13 +124,10 @@ test: build/test_runner                        ## Run C unit tests + coverage
 		echo "gcovr not installed — skipping C coverage report"; \
 	fi
 
-build/test_runner: $(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c src/id_validate.c src/graph_load.c src/graph_csr.c src/graph_selector_parse.c src/graph_selector_eval.c src/embed_gguf.c $(LLAMA_LIBS)
+build/test_runner: $(TEST_SRC) $(TEST_LINK_SRC) $(LLAMA_LIBS)
 	@mkdir -p build
 	$(CC) $(CFLAGS_BASE) $(CFLAGS_EXTRA) --coverage -Isrc $(LLAMA_INCLUDE) -o $@ \
-		$(TEST_SRC) src/vec_math.c src/priority_queue.c src/hnsw_algo.c \
-		src/id_validate.c src/graph_load.c src/graph_csr.c \
-		src/graph_selector_parse.c src/graph_selector_eval.c \
-		src/embed_gguf.c $(LLAMA_LIBS) $(LDFLAGS_TEST)
+		$(TEST_SRC) $(TEST_LINK_SRC) $(LLAMA_LIBS) $(LDFLAGS_TEST)
 
 test-python: build/muninn$(EXT)                ## Run Python integration tests + coverage
 	.venv/bin/python -m pytest pytests/ -v
@@ -229,11 +191,14 @@ typecheck-js:                                  ## Type-check TypeScript with tsc
 amalgamation: dist/muninn.c dist/muninn.h      ## Create single-file amalgamation
 
 dist/muninn.c dist/muninn.h: $(SRC) $(HEADERS)
-	bash scripts/amalgamate.sh
+	uv run scripts/generate_build.py amalgamate
 
-version-stamp: .venv/.init-python                                 ## Stamp VERSION into skill files + package.json
-	.venv/bin/python scripts/version_stamp.py
+version-stamp:                                 ## Stamp VERSION into skill files + package.json
+	uv run scripts/generate_build.py version
 	npm --prefix ./npm install # update package-lock.json with new version
+
+generate-windows:                              ## Generate build_windows.bat from centralised config
+	uv run scripts/generate_build.py windows
 
 dist: dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
 	@echo ""
