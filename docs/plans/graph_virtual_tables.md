@@ -672,6 +672,7 @@ replacement. Detection logic: if the first argument matches a registered
 - [SQLite FTS5 Extension](https://www.sqlite.org/fts5.html)
 - [sqlite3_module API](https://www.sqlite.org/c3ref/module.html)
 - [sqlite3_index_info](https://www.sqlite.org/c3ref/index_info.html)
+- [sqlite disk file format](https://sqlite.org/fileformat.html)
 
 ### Graph Storage
 - [GRainDB: Predefined Joins (VLDB 2022)](https://arxiv.org/abs/2108.10540)

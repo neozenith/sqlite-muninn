@@ -82,42 +82,17 @@ GLINER_LABELS = [
 
 # ── Relation labels for GLiREL ───────────────────────────────────
 
-GLIREL_LABELS = {
-    "glirel_labels": {
-        "produces": {
-            "allowed_head": ["location", "organization"],
-            "allowed_tail": ["commodity"],
-        },
-        "trades_with": {
-            "allowed_head": ["location", "organization", "person"],
-            "allowed_tail": ["location", "organization", "person"],
-        },
-        "regulates": {
-            "allowed_head": ["institution", "organization"],
-            "allowed_tail": ["economic concept", "commodity", "occupation"],
-        },
-        "employs": {
-            "allowed_head": ["organization", "institution"],
-            "allowed_tail": ["person", "occupation"],
-        },
-        "located_in": {
-            "allowed_head": ["person", "organization", "institution"],
-            "allowed_tail": ["location"],
-        },
-        "influences": {
-            "allowed_head": ["economic concept", "person", "legal concept"],
-            "allowed_tail": ["economic concept", "commodity", "institution"],
-        },
-        "part_of": {
-            "allowed_head": ["person", "location", "organization"],
-            "allowed_tail": ["organization", "location", "institution"],
-        },
-        "opposes": {
-            "allowed_head": ["economic concept", "legal concept", "institution"],
-            "allowed_tail": ["economic concept", "legal concept", "institution"],
-        },
-    }
-}
+# GLiREL uses fixed_relation_types=True, so labels must be a flat list of strings.
+GLIREL_LABELS = [
+    "produces",
+    "trades_with",
+    "regulates",
+    "employs",
+    "located_in",
+    "influences",
+    "part_of",
+    "opposes",
+]
 
 # ── Vector packing ────────────────────────────────────────────────
 
@@ -431,6 +406,24 @@ def phase_3_re(conn: sqlite3.Connection) -> int:
         if len(ner_spans) < 2:
             continue
 
+        # Build position → entity name lookup for mapping GLiREL output back to NER entities.
+        # GLiREL may extend span boundaries, so we match by overlap with NER spans.
+        span_to_name: dict[tuple[int, int], str] = {}
+        for span in ner_spans:
+            span_to_name[(span[0], span[1])] = span[3]
+
+        def _find_entity(pos: list[int]) -> str | None:
+            """Map GLiREL head_pos/tail_pos to NER entity name via span overlap."""
+            r_start, r_end = pos[0], pos[1]
+            best_name = None
+            best_overlap = 0
+            for (s, e), name in span_to_name.items():
+                overlap = max(0, min(e, r_end) - max(s, r_start))
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_name = name
+            return best_name
+
         # Extract relations
         relations = re_model.predict_relations(
             tokens, GLIREL_LABELS, threshold=0.5, ner=ner_spans, top_k=10
@@ -438,9 +431,13 @@ def phase_3_re(conn: sqlite3.Connection) -> int:
 
         insert_rows = []
         for rel in relations:
+            head = _find_entity(rel["head_pos"])
+            tail = _find_entity(rel["tail_pos"])
+            if head is None or tail is None or head == tail:
+                continue
             insert_rows.append((
-                rel["head"],
-                rel["tail"],
+                head,
+                tail,
                 rel["label"],
                 rel.get("score", 1.0),
                 chunk_id,
