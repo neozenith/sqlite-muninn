@@ -730,6 +730,23 @@ wheels = [
 ]
 
 [[package]]
+name = "glirel"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "datasets" },
+    { name = "huggingface-hub" },
+    { name = "seqeval" },
+    { name = "torch" },
+    { name = "tqdm" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/aa/17/366a8bcdf3631af9f11b989c3387b952cf3fd3b786df95952e826d64374a/glirel-1.2.1.tar.gz", hash = "sha256:96e0636810c6f020707a515d4f08aa36b7950c7d06030b5fe149b86d716e00e4", size = 49623, upload-time = "2025-04-11T10:10:58.396Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2f/62/fce91d0f41f493d1fb69db3df828aa6c2a76390a4a38db5db6a40b3b2150/glirel-1.2.1-py3-none-any.whl", hash = "sha256:ecbe2f955d8f2a406931022a10753e889761de7a736ec4090187830e49689aaf", size = 54298, upload-time = "2025-04-11T10:10:57.277Z" },
+]
+
+[[package]]
 name = "graphqlite"
 version = "0.3.3"
 source = { registry = "https://pypi.org/simple" }
@@ -2200,6 +2217,16 @@ wheels = [
 ]
 
 [[package]]
+name = "seqeval"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scikit-learn" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/2d/233c79d5b4e5ab1dbf111242299153f3caddddbb691219f363ad55ce783d/seqeval-1.2.2.tar.gz", hash = "sha256:f28e97c3ab96d6fcd32b648f6438ff2e09cfba87f05939da9b3970713ec56e6f", size = 43605, upload-time = "2020-10-24T00:24:54.926Z" }
+
+[[package]]
 name = "setuptools"
 version = "81.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2329,6 +2356,7 @@ benchmark = [
     { name = "apsw" },
     { name = "datasets" },
     { name = "gliner" },
+    { name = "glirel" },
     { name = "graphqlite" },
     { name = "jinja2" },
     { name = "llama-cpp-python" },
@@ -2368,6 +2396,7 @@ benchmark = [
     { name = "apsw" },
     { name = "datasets", specifier = ">=4.5.0" },
     { name = "gliner" },
+    { name = "glirel" },
     { name = "graphqlite" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "llama-cpp-python", specifier = ">=0.3.16" },

@@ -10,13 +10,9 @@ Traditional RAG retrieves chunks by embedding similarity alone. GraphRAG adds a 
 Query → VSS (top-k similar) → Graph Expansion → Centrality Ranking → Context Assembly
 ```
 
-```mermaid
-flowchart LR
-    Q[Query] --> VSS[HNSW Search<br/>Top-k similar nodes]
-    VSS --> GE[Graph Expansion<br/>BFS depth=2]
-    GE --> CR[Centrality Ranking<br/>Betweenness score]
-    CR --> CA[Context Assembly<br/>Top-N by rank]
-```
+![GraphRAG Pipeline](diagrams/graphrag-pipeline.png)
+
+*[Source: graphrag-pipeline.mmd](diagrams/graphrag-pipeline.mmd)*
 
 ## Setup: A Knowledge Graph
 

@@ -6,95 +6,17 @@ This page describes the internal architecture of the muninn SQLite extension —
 
 muninn is a single shared library (`.dylib`/`.so`/`.dll`) that registers seven subsystems with SQLite through one entry point: `sqlite3_muninn_init`. Each subsystem is independently useful, but they share common infrastructure for graph loading, identifier validation, and distance computation.
 
-```mermaid
-flowchart TB
-    subgraph entry["muninn.c — Extension Entry Point"]
-        init["sqlite3_muninn_init()"]
-    end
+![Extension Overview](diagrams/architecture-overview.png)
 
-    subgraph vt["Virtual Tables"]
-        hnsw["hnsw_index<br/>HNSW Vector Index"]
-        adj["graph_adjacency<br/>CSR Adjacency Cache"]
-    end
-
-    subgraph tvf["Table-Valued Functions"]
-        traversal["graph_bfs / graph_dfs<br/>graph_shortest_path<br/>graph_components<br/>graph_pagerank"]
-        centrality["graph_degree<br/>graph_betweenness<br/>graph_closeness"]
-        community["graph_leiden"]
-        select["graph_select<br/>dbt-style Selector"]
-    end
-
-    subgraph scalar["Scalar Functions"]
-        n2v["node2vec_train()"]
-    end
-
-    init --> hnsw
-    init --> adj
-    init --> traversal
-    init --> centrality
-    init --> community
-    init --> select
-    init --> n2v
-
-    style entry fill:#9070be
-    style vt fill:#4a9c91
-    style tvf fill:#6080b8
-    style scalar fill:#b89340
-```
+*[Source: architecture-overview.mmd](diagrams/architecture-overview.mmd)*
 
 ## Module Layering
 
 Each subsystem has a clear separation between **SQLite integration** (virtual table glue, TVF wrappers) and **pure algorithm** (no SQLite dependency, testable in isolation).
 
-```mermaid
-flowchart TB
-    subgraph hnsw_layer["HNSW Vector Index"]
-        hnsw_vtab["hnsw_vtab.c<br/>SQLite VT glue<br/>(xCreate, xFilter, xUpdate)"]
-        hnsw_algo["hnsw_algo.c<br/>Core HNSW algorithm<br/>(insert, search, delete)"]
-        vec_math["vec_math.c<br/>SIMD distance functions<br/>(L2, cosine, inner product)"]
-        pq["priority_queue.c<br/>Binary min-heap<br/>(beam search)"]
-        hnsw_vtab --> hnsw_algo
-        hnsw_algo --> vec_math
-        hnsw_algo --> pq
-    end
+![Module Layering](diagrams/architecture-module-layering.png)
 
-    subgraph graph_layer["Graph Analysis"]
-        graph_tvf["graph_tvf.c<br/>Traversal TVFs"]
-        graph_cent["graph_centrality.c<br/>Centrality TVFs"]
-        graph_comm["graph_community.c<br/>Community TVFs"]
-        graph_adj["graph_adjacency.c<br/>Adjacency VT"]
-        graph_sel["graph_select_tvf.c<br/>Selector TVF"]
-        graph_load["graph_load.c<br/>Shared graph loading<br/>(hash-map, adjacency lists)"]
-        graph_csr["graph_csr.c<br/>CSR arrays<br/>(blocked, delta merge)"]
-        sel_parse["graph_selector_parse.c<br/>Recursive-descent parser"]
-        sel_eval["graph_selector_eval.c<br/>Bit-vector evaluator"]
-
-        graph_tvf --> id_val
-        graph_cent --> graph_load
-        graph_comm --> graph_load
-        graph_adj --> graph_load
-        graph_adj --> graph_csr
-        graph_sel --> graph_load
-        graph_sel --> sel_parse
-        graph_sel --> sel_eval
-    end
-
-    subgraph shared["Shared Infrastructure"]
-        id_val["id_validate.c<br/>SQL identifier validation"]
-    end
-
-    subgraph n2v_layer["Node2Vec"]
-        n2v_c["node2vec.c<br/>Random walks + SGNS"]
-    end
-
-    n2v_c -.->|"reads edges"| graph_load
-    n2v_c -.->|"writes embeddings"| hnsw_vtab
-
-    style hnsw_layer fill:#5a946e
-    style graph_layer fill:#5888a8
-    style shared fill:#a09058
-    style n2v_layer fill:#a07858
-```
+*[Source: architecture-module-layering.mmd](diagrams/architecture-module-layering.mmd)*
 
 ## Two Execution Strategies
 

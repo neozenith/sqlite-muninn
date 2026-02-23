@@ -1,0 +1,33 @@
+flowchart TB
+    subgraph entry["muninn.c — Extension Entry Point"]
+        init["sqlite3_muninn_init()"]
+    end
+
+    subgraph vt["Virtual Tables"]
+        hnsw["hnsw_index<br/>HNSW Vector Index"]
+        adj["graph_adjacency<br/>CSR Adjacency Cache"]
+    end
+
+    subgraph tvf["Table-Valued Functions"]
+        traversal["graph_bfs / graph_dfs<br/>graph_shortest_path<br/>graph_components<br/>graph_pagerank"]
+        centrality["graph_degree<br/>graph_betweenness<br/>graph_closeness"]
+        community["graph_leiden"]
+        select["graph_select<br/>dbt-style Selector"]
+    end
+
+    subgraph scalar["Scalar Functions"]
+        n2v["node2vec_train()"]
+    end
+
+    init --> hnsw
+    init --> adj
+    init --> traversal
+    init --> centrality
+    init --> community
+    init --> select
+    init --> n2v
+
+    style entry fill:#9070be
+    style vt fill:#4a9c91
+    style tvf fill:#6080b8
+    style scalar fill:#b89340

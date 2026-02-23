@@ -1,0 +1,47 @@
+flowchart TB
+    subgraph hnsw_layer["HNSW Vector Index"]
+        hnsw_vtab["hnsw_vtab.c<br/>SQLite VT glue<br/>(xCreate, xFilter, xUpdate)"]
+        hnsw_algo["hnsw_algo.c<br/>Core HNSW algorithm<br/>(insert, search, delete)"]
+        vec_math["vec_math.c<br/>SIMD distance functions<br/>(L2, cosine, inner product)"]
+        pq["priority_queue.c<br/>Binary min-heap<br/>(beam search)"]
+        hnsw_vtab --> hnsw_algo
+        hnsw_algo --> vec_math
+        hnsw_algo --> pq
+    end
+
+    subgraph graph_layer["Graph Analysis"]
+        graph_tvf["graph_tvf.c<br/>Traversal TVFs"]
+        graph_cent["graph_centrality.c<br/>Centrality TVFs"]
+        graph_comm["graph_community.c<br/>Community TVFs"]
+        graph_adj["graph_adjacency.c<br/>Adjacency VT"]
+        graph_sel["graph_select_tvf.c<br/>Selector TVF"]
+        graph_load["graph_load.c<br/>Shared graph loading<br/>(hash-map, adjacency lists)"]
+        graph_csr["graph_csr.c<br/>CSR arrays<br/>(blocked, delta merge)"]
+        sel_parse["graph_selector_parse.c<br/>Recursive-descent parser"]
+        sel_eval["graph_selector_eval.c<br/>Bit-vector evaluator"]
+
+        graph_tvf --> id_val
+        graph_cent --> graph_load
+        graph_comm --> graph_load
+        graph_adj --> graph_load
+        graph_adj --> graph_csr
+        graph_sel --> graph_load
+        graph_sel --> sel_parse
+        graph_sel --> sel_eval
+    end
+
+    subgraph shared["Shared Infrastructure"]
+        id_val["id_validate.c<br/>SQL identifier validation"]
+    end
+
+    subgraph n2v_layer["Node2Vec"]
+        n2v_c["node2vec.c<br/>Random walks + SGNS"]
+    end
+
+    n2v_c -.->|"reads edges"| graph_load
+    n2v_c -.->|"writes embeddings"| hnsw_vtab
+
+    style hnsw_layer fill:#5a946e
+    style graph_layer fill:#5888a8
+    style shared fill:#a09058
+    style n2v_layer fill:#a07858
