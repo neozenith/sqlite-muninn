@@ -71,7 +71,7 @@ TEST_LINK_SRC := $(shell $(_Q) TEST_LINK_SRC)
         format format-c format-python format-js \
         lint lint-c lint-python lint-js \
         typecheck typecheck-python typecheck-js \
-        ci ci-all llama-clean llamacpp
+        ci ci-all llama-clean llamacpp demo-db
 
 help:                                          ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -136,6 +136,17 @@ test-js:                                       ## Run TypeScript tests + coverag
 	npm --prefix npm test
 
 test-all: test test-python test-js docs-build  ## Run all tests
+
+######################################################################
+# DEMO DATABASE
+######################################################################
+
+demo-db: build/muninn$(EXT)                    ## Build the KG demo database for wasm/viz
+	.venv/bin/python benchmarks/scripts/build_demo_db.py \
+		--book-id 3300 \
+		--output wasm/assets/3300.db \
+		--embedding-model MiniLM \
+		--force
 
 ######################################################################
 # CODE QUALITY

@@ -23,7 +23,9 @@ SQLITE_EXTENSION_INIT1
 #include "graph_adjacency.h"
 #include "graph_select_tvf.h"
 #include "node2vec.h"
+#ifndef MUNINN_NO_LLAMA
 #include "embed_gguf.h"
+#endif
 
 #ifdef _WIN32
 __declspec(dllexport)
@@ -74,11 +76,13 @@ int sqlite3_muninn_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines
         return rc;
     }
 
+#ifndef MUNINN_NO_LLAMA
     rc = embed_register_functions(db);
     if (rc != SQLITE_OK) {
         *pzErrMsg = sqlite3_mprintf("muninn: failed to register embed functions");
         return rc;
     }
+#endif
 
     return SQLITE_OK;
 }

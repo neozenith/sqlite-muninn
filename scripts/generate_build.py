@@ -198,6 +198,12 @@ HEADERS = _topo_sort_headers(_discover("src", "*.h", _HEADERS_EXCLUDE))
 SOURCES = _sort_sources_by_header_order(_discover("src", "*.c", _SOURCES_EXCLUDE), HEADERS)
 TEST_SOURCES = _discover("test", "test_*.c", set())
 
+# WASM lite: exclude embed_gguf.c (needs llama.cpp)
+_SOURCES_EXCLUDE_WASM_LITE = _SOURCES_EXCLUDE | {"embed_gguf.c"}
+SOURCES_WASM_LITE = _sort_sources_by_header_order(
+    _discover("src", "*.c", _SOURCES_EXCLUDE_WASM_LITE), HEADERS
+)
+
 # ── Validation ───────────────────────────────────────────────────────
 assert set(TEST_LINK_SOURCES) <= set(SOURCES), (
     f"TEST_LINK_SOURCES has files not in SOURCES: {set(TEST_LINK_SOURCES) - set(SOURCES)}"
@@ -259,12 +265,14 @@ QUERY_VARS: dict[str, callable] = {
     "TEST_LINK_SRC":          lambda: " ".join(TEST_LINK_SOURCES),
     # WASM file lists (prefixed with ../ for wasm/ subdirectory)
     "MUNINN_SRC_WASM":        lambda: " ".join(f"../{s}" for s in SOURCES),
+    "MUNINN_SRC_WASM_LITE":   lambda: " ".join(f"../{s}" for s in SOURCES_WASM_LITE),
     "SOURCES_WASM_EXTRA":     lambda: " ".join(f"../{s}" for s in SOURCES_WASM_EXTRA),
     # CMake flags
     "LLAMA_CMAKE_FLAGS":      lambda: _cmake_flags_str(CMAKE_FLAGS_BASE),
     "LLAMA_CMAKE_FLAGS_WASM": lambda: _cmake_flags_str(CMAKE_FLAGS_WASM),
     # llama.cpp paths
     "LLAMA_INCLUDE":          lambda: " ".join(f"-I{d}" for d in LLAMA_INCLUDE_DIRS),
+    "LLAMA_INCLUDE_WASM":     lambda: " ".join(f"-I../{d}" for d in LLAMA_INCLUDE_DIRS),
     "LLAMA_LIBS_CORE":        lambda: " ".join(_llama_lib_paths()),
 }
 
