@@ -382,3 +382,7 @@ fallback, or "skip with warning".
 | 8 | Benchmark VT vs non-VT permutations | ❌ Not started | JSONL results comparing all approaches × all workloads |
 | 9 | Research papers linked in plan docs | ✅ This document | Every referenced paper has a URL |
 | 10 | Prior art evaluated against our approach | ✅ This document | Storage approach table with decision rationale |
+
+---
+
+**Next:** [Phase 1 — Scoped Adjacency VT](./01_scoped_adjacency_vt.md)

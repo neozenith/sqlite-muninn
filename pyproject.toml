@@ -49,6 +49,7 @@ benchmark = [
     # Models and Benchmarking Datasets
     "datasets>=4.5.0",
     "sentence-transformers>=5.2.2",
+    "einops",  # required by nomic-embed-text-v1.5 (trust_remote_code model)
     "gliner",
     "glirel",
     "loguru",

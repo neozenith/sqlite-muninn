@@ -142,9 +142,9 @@ test-all: test test-python test-js docs-build  ## Run all tests
 ######################################################################
 
 demo-db: build/muninn$(EXT)                    ## Build the KG demo database for wasm/viz
-	.venv/bin/python benchmarks/scripts/build_demo_db.py \
+	uv run -m benchmarks.demo_builder build \
+		--output-folder wasm/assets \
 		--book-id 3300 \
-		--output wasm/assets/3300.db \
 		--embedding-model MiniLM \
 		--force
 

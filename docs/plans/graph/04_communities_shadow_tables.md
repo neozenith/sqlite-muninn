@@ -992,3 +992,7 @@ This is negligible compared to the CSR storage (which stores O(V+E) integers and
 
 - **Modularity and Community Structure (Newman, 2006)** -- Foundational definition of modularity Q used by the Leiden algorithm's objective function.
   [https://doi.org/10.1073/pnas.0601602103](https://doi.org/10.1073/pnas.0601602103)
+
+---
+
+**Prev:** [Phase 3 — Components Shadow Table](./03_components_shadow_tables.md) | **Next:** [Phase 5 — TVF/VT Integration](./05_tvf_vt_integration.md)

@@ -1392,3 +1392,7 @@ Measure each TVF with and without adjacency VT on a benchmark graph (10K nodes, 
 - [GRainDB: Predefined Joins (VLDB 2022)](https://arxiv.org/abs/2108.10540) — trigger-based adjacency
 - [DuckPGQ: SQL/PGQ in DuckDB (CIDR 2023)](https://www.cidrdb.org/cidr2023/papers/p66-wolde.pdf) — on-demand CSR, feature flag inspiration
 - [SuiteSparse:GraphBLAS](https://dl.acm.org/doi/10.1145/3322125) — delta merge pattern
+
+---
+
+**Prev:** [Phase 4 — Communities Shadow Table](./04_communities_shadow_tables.md) | **Next:** [Phase 6 — Benchmarks](./06_benchmarks.md)

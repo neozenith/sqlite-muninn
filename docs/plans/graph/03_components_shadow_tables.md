@@ -1035,3 +1035,7 @@ on large graphs.
 - [Phase 1: Scoped Adjacency VT](./01_scoped_adjacency_vt.md) -- prerequisite: namespace support, feature flags
 - [Phase 2: SSSP Shadow Tables](./02_sssp_shadow_tables.md) -- parallel cache: all-pairs shortest paths
 - [Phase 4: Communities Shadow Table](./04_communities_shadow_tables.md) -- downstream consumer: Leiden warm-start from components
+
+---
+
+**Prev:** [Phase 2 — SSSP Shadow Tables](./02_sssp_shadow_tables.md) | **Next:** [Phase 4 — Communities Shadow Table](./04_communities_shadow_tables.md)

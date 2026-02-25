@@ -9,7 +9,7 @@ MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PROJECT_ROOT := $(abspath $(MAKEFILE_DIR)/..)
 
 PYTHON = uv run --directory $(PROJECT_ROOT)
-BENCH = $(PYTHON) -m benchmarks.harness.cli
+BENCH = $(PYTHON) -m benchmarks.harness
 
 # ── Platform detection for extension prerequisite ──────────────────
 UNAME_S := $(shell uname -s)

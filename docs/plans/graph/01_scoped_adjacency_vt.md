@@ -1298,3 +1298,7 @@ Add to `pytests/test_graph_adjacency.py`:
 - [GraphQLite (Rust, Cypher)](https://github.com/colliery-io/graphqlite) — in-memory, no namespace support
 - [sqlite-graph (C99, Cypher alpha)](https://github.com/agentflare-ai/sqlite-graph) — no namespace support
 - [simple-graph (pure SQL)](https://github.com/dpapathanasiou/simple-graph) — no namespace support
+
+---
+
+**Prev:** [Phase 0 — Gap Analysis](./00_gap_analysis.md) | **Next:** [Phase 2 — SSSP Shadow Tables](./02_sssp_shadow_tables.md)

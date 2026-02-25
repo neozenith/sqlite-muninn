@@ -927,3 +927,7 @@ The Phase 6 benchmark suite is complete when all of the following are demonstrat
 ### PecanPy Benchmark Methodology
 
 - [PecanPy: CSR vs non-CSR comparison (Bioinformatics 2021)](https://academic.oup.com/bioinformatics/article/37/19/3377/6184859)
+
+---
+
+**Prev:** [Phase 5 — TVF/VT Integration](./05_tvf_vt_integration.md) | **Back to:** [Phase 0 — Gap Analysis](./00_gap_analysis.md)

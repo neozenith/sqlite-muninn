@@ -936,3 +936,7 @@ DELETE FROM "{name}_sssp" WHERE namespace_id = 3;
    -- Demonstrates that O(V / epsilon^2 * log V) random SSSP runs
    approximate closeness centrality. Relevant to future approximate
    closeness support.
+
+---
+
+**Prev:** [Phase 1 — Scoped Adjacency VT](./01_scoped_adjacency_vt.md) | **Next:** [Phase 3 — Components Shadow Table](./03_components_shadow_tables.md)
