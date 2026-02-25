@@ -10,7 +10,7 @@
 |-----------|-------|------------|
 | `wasm/` | Vanilla HTML/JS, CDN libs (Deck.GL, Cytoscape, Transformers.js) | Hardcoded `fetch("assets/3300.db")` → Emscripten FS |
 | `viz/` | FastAPI + React (Vite/TS/Tailwind v4/shadcn), 3 explorer modes | Singleton connection via `MUNINN_DB_PATH` env var (default `benchmarks/kg/3300.db`) |
-| `demo_builder` | Python package under `benchmarks/demo_builder/` | Outputs `{book_id}_{model}.db` files to a configurable `--output-folder` (currently `wasm/assets/`) |
+| `demo_builder` | Python package under `benchmarks/demo_builder/` | Outputs `{book_id}_{model}.db` files to a configurable `--output-folder` (default `wasm/assets/`, hardcoded in 3 argparse defaults in `cli.py`) |
 
 ### Key Observations
 
@@ -83,8 +83,15 @@ demo_builder build --output-folder viz/public/demos/
 
 **Changes:**
 - `benchmarks/demo_builder/manifest.py` — add `write_manifest_json(output_folder)` function that scans for completed `.db` files and writes `manifest.json` with metadata (book title, model, dim, size, chunk count)
-- `benchmarks/demo_builder/cli.py` — call `write_manifest_json()` after every successful build
+- `benchmarks/demo_builder/cli.py`:
+  - Call `write_manifest_json()` after every successful build
+  - **Change default `--output-folder`** from `wasm/assets` → `viz/public/demos` in all three subcommand parsers (`manifest`, `build`, `clean`). The default is currently hardcoded in argparse `add_argument()` calls at lines 174, 198, and 227
+  - Update docstring examples at top of file to reflect new default path
+- `benchmarks/demo_builder/constants.py` — add `DEFAULT_OUTPUT_FOLDER = "viz/public/demos"` constant so the default lives in one place instead of three argparse strings
+- `benchmarks/demo_builder/tests/test_cli.py` — update test invocations that pass `--output-folder wasm/assets` to use the new default path
+- `benchmarks/demo_builder/tests/test_manifest.py` — update `output_folder = PROJECT_ROOT / "wasm" / "assets"` references (lines 12, 18, 26) to `PROJECT_ROOT / "viz" / "public" / "demos"`
 - New canonical output folder: `viz/public/demos/` (Vite serves `public/` as static assets)
+- Add `viz/public/demos/*.db` to `viz/.gitignore` (DBs are build artifacts, not checked in)
 
 ### Phase 2: Server-Side DB Switching
 
