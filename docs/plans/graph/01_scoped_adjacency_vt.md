@@ -1,4 +1,4 @@
-# Phase 1: Scoped Adjacency Virtual Table
+# Phase 1: Scoped GII (Graph Incremental Index)
 
 **Date:** 2026-02-24
 **Status:** Not started
@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-This phase adds namespace/scope support to the existing `graph_adjacency` virtual table.
+This phase adds namespace/scope support to the existing `gii` virtual table.
 A single VT instance partitions its CSR, node index space, degree cache, and delta log
 by a composite namespace key derived from user-specified scope columns on the source
 edge table.
@@ -20,7 +20,7 @@ Real-world edge tables contain multiple disjoint graphs keyed by scope columns
 (e.g., `project_id`, `session_id`, `tenant_id`). Without namespace support, users must
 either:
 
-1. Create a separate `graph_adjacency` VT per scope combination (impractical for dynamic scopes), or
+1. Create a separate `gii` VT per scope combination (impractical for dynamic scopes), or
 2. Rebuild the entire CSR when any scope's edges change (wasteful for large multi-tenant tables).
 
 Namespace support makes each scope's CSR independent: inserts to scope A trigger rebuilds
@@ -39,7 +39,7 @@ differentiating feature for muninn.
 4. Triggers that capture scope column values and route deltas to the correct namespace
 5. Per-namespace full rebuild and incremental rebuild
 6. Namespace filter on xBestIndex/xFilter (hidden column)
-7. Updated `graph_data_load_from_adjacency()` accepting an optional namespace key
+7. Updated `graph_data_load_from_gii()` accepting an optional namespace key
 8. Backward compatibility: omitting `namespace_cols` is identical to current behavior
 
 ---
@@ -49,17 +49,18 @@ differentiating feature for muninn.
 ### 2.1 SQL Syntax
 
 ```sql
--- Scoped adjacency: partition by project_id and session_id
-CREATE VIRTUAL TABLE g USING graph_adjacency(
+-- Scoped GII: partition by project_id and session_id
+CREATE VIRTUAL TABLE g USING gii(
     edge_table='edges',
     src_col='src',
     dst_col='dst',
     weight_col='weight',
-    namespace_cols='project_id,session_id'
+    namespace_cols='project_id,session_id',
+    features='sssp,components,communities'
 );
 
 -- Unscoped (backward compatible): equivalent to current behavior
-CREATE VIRTUAL TABLE g USING graph_adjacency(
+CREATE VIRTUAL TABLE g USING gii(
     edge_table='edges',
     src_col='src',
     dst_col='dst'
@@ -69,6 +70,12 @@ CREATE VIRTUAL TABLE g USING graph_adjacency(
 The `namespace_cols` parameter is a comma-separated list of column names from the edge
 table. Each column must pass `id_validate()`. The order matters: it defines the
 composite key ordering for the namespace hash.
+
+The `features` parameter is a comma-separated list of downstream layers to enable.
+Valid values: `sssp`, `components`, `communities`. When a feature is enabled, the GII
+creates the corresponding downstream delta tables and emits change notifications to
+them during CSR rebuild. Phase 1 parses and stores the feature list but does not
+implement the downstream layers themselves (those are Phases 2-4).
 
 ### 2.2 Namespace Key Computation
 
@@ -98,29 +105,31 @@ namespace registry is a new shadow table.
 
 ```
 Edge INSERT into source table
-    │
-    ▼
+    |
+    v
 Trigger fires: captures NEW.src, NEW.dst, NEW.weight, scope col values
-    │
-    ▼
+    |
+    v
 INSERT INTO {name}_delta(namespace_id, src, dst, weight, op, scope_key)
-    │                     ▲
-    │      namespace_id resolved at query time (not trigger time)
-    │      trigger stores raw scope_key; namespace_id resolved during rebuild
-    ▼
-adj_ensure_fresh() called on next query
-    │
-    ├── delta count > 0 → rebuild (full or incremental)
-    │   │
-    │   ├── Group deltas by scope_key → resolve to namespace_id
-    │   │
-    │   ├── Per-namespace: load CSR blocks, apply deltas, store
-    │   │
-    │   └── Update per-namespace generation in _config
-    │
-    └── delta count = 0 → serve from shadow tables
-        │
-        └── Filter by namespace_id in _nodes JOIN _degree query
+    |                     ^
+    |      namespace_id resolved at query time (not trigger time)
+    |      trigger stores raw scope_key; namespace_id resolved during rebuild
+    v
+gii_ensure_fresh() called on next query
+    |
+    +-- delta count > 0 -> rebuild (full or incremental)
+    |   |
+    |   +-- Group deltas by scope_key -> resolve to namespace_id
+    |   |
+    |   +-- Per-namespace: load CSR blocks, apply deltas, store
+    |   |
+    |   +-- Emit downstream deltas (see Section 2.6)
+    |   |
+    |   +-- Update per-namespace generation in _config
+    |
+    +-- delta count = 0 -> serve from shadow tables
+        |
+        +-- Filter by namespace_id in _nodes JOIN _degree query
 ```
 
 **Key design decision:** Triggers store the raw `scope_key` (concatenated scope column
@@ -128,20 +137,261 @@ values) in the delta table rather than resolving `namespace_id` at trigger time.
 avoids the trigger needing to call a UDF or query the namespace registry. Resolution
 happens during rebuild, which is the only time `namespace_id` matters.
 
+### 2.5 Temporal Deferral Note
+
+True temporal graph support -- interval-based edge validity, overlap queries,
+multi-validity edges, and open-ended intervals -- requires a fundamentally different
+CSR design where edges carry temporal metadata and the index structure supports
+time-range queries natively.
+
+This is deferred to a future **TGII** (Temporal Graph Incremental Index) construct.
+
+For now, temporal filtering is handled at query time by the existing TVFs via SQL
+WHERE clauses on raw tables. `graph_data_load()` already supports `timestamp_col`,
+`time_start`, and `time_end` parameters, which apply temporal predicates when loading
+edges directly from the source table.
+
+The GII CSR does NOT store timestamps. Temporal queries bypass the CSR and hit the
+raw edge tables through `graph_data_load()`. This means temporal queries do not
+benefit from the CSR acceleration, but they remain fully functional.
+
+The GII architecture is designed to be composable: a future TGII would wrap or extend
+GII (e.g., maintaining multiple CSR snapshots keyed by time intervals), not replace it.
+The namespace partitioning, delta cascade, and downstream emission patterns established
+here apply equally to a temporal extension.
+
+---
+
+## 2.6 Delta Cascade Architecture
+
+The delta cascade is the centerpiece of the GII's incremental maintenance strategy.
+It defines how changes propagate from raw edge mutations through the CSR layer and
+into downstream analytical layers (SSSP, components, communities). Each layer
+maintains its own delta queue, and changes flow lazily from lower layers to higher
+layers.
+
+### 2.6.1 Per-Layer Delta Queues
+
+The GII maintains a cascade of delta queues. Each layer has its own delta table:
+
+```
+_delta       ->  edge-level changes (Phase 1, this document)
+_sssp_delta  ->  stale SSSP source-node indices (Phase 2)
+_comp_delta  ->  nodes with potentially changed components (Phase 3)
+_comm_delta  ->  nodes in changed neighborhoods for Leiden (Phase 4)
+```
+
+Phase 1 only implements `_delta` (the edge-level delta queue). The remaining delta
+tables are created when their corresponding feature is enabled via the `features`
+parameter, but they are populated by the CSR rebuild logic defined here. This
+section documents the complete architecture because it defines:
+
+- **How downstream delta tables are populated:** During CSR rebuild, the GII
+  identifies which nodes were affected by the rebuild and INSERTs their indices
+  into the appropriate downstream delta tables.
+- **How downstream consumers detect staleness:** Each layer tracks a `generation`
+  counter per namespace. When a downstream layer's generation is behind the CSR
+  layer's generation, it knows it has stale data. Additionally, a non-empty delta
+  queue is an explicit staleness signal.
+- **The lazy evaluation principle:** Downstream layers are never eagerly rebuilt.
+  They check their delta queues and generation counters only when a query touches
+  them. If no query touches SSSP, the `_sssp_delta` table accumulates entries
+  indefinitely without triggering any work.
+
+The delta tables are scoped by namespace. Each entry carries a `namespace_id` so
+that downstream layers can rebuild only the affected namespace partition.
+
+### 2.6.2 Threshold-Based Rebuild Strategy
+
+For the CSR layer (`_delta`), three strategies are selected by the delta ratio:
+
+```
+delta_ratio = |_delta for this namespace| / total_edges_in_namespace
+```
+
+| Ratio Range | Strategy | Description | Cost |
+|-------------|----------|-------------|------|
+| 0 < ratio < theta_selective (default 0.05) | **Selective block rebuild** | Only CSR blocks containing affected nodes are reloaded and rewritten. Unaffected blocks remain untouched. | O(delta x block_size) |
+| theta_selective <= ratio < theta_full (default 0.30) | **Delta flush** | All delta operations are applied sequentially to the in-memory CSR (load full CSR, apply deltas via `csr_apply_delta()`, write back). | O(V + E + delta) |
+| ratio >= theta_full | **Full rebuild** | Discard CSR entirely. Reload all edges from source table with scope filter. Build CSR from scratch. | O(E_namespace) |
+
+The thresholds are configurable via `_config` keys:
+
+```
+delta_threshold_selective = 0.05
+delta_threshold_full = 0.30
+```
+
+Note: The existing code has a similar threshold (`delta_count > edge_count / 10`).
+This formalizes it into a two-threshold system and makes it configurable. The old
+single-threshold logic maps to approximately `theta_full = 0.10` with no selective
+tier.
+
+### 2.6.3 Downstream Delta Emission
+
+When the CSR rebuild completes, it emits change notifications to downstream delta
+queues. The emission strategy depends on the rebuild strategy used:
+
+**Selective block rebuild:**
+Identify all node indices within the rebuilt blocks. These are the "potentially
+affected" nodes. INSERT their indices into `_sssp_delta`, `_comp_delta`, and
+`_comm_delta` (when those features are enabled). The affected set is bounded by
+`rebuilt_block_count x block_size`, which is typically much smaller than the total
+node count.
+
+**Delta flush:**
+Same as selective, but the affected set is all nodes touched by any delta operation
+(the union of `src_idx` and `dst_idx` from each delta). For community detection,
+the affected set is expanded to include the 1-hop neighbors of each directly
+affected node, since community membership depends on neighborhood structure.
+
+**Full rebuild:**
+Increment the namespace's generation counter. Downstream layers detect the
+generation mismatch and perform their own full rebuilds. No per-node delta entries
+are needed -- the generation bump alone is sufficient as a staleness signal. This
+avoids writing O(V) rows into downstream delta tables when the entire namespace
+is being rebuilt anyway.
+
+### 2.6.4 Event Sequence Diagram
+
+The complete flow from edge mutation through downstream notification:
+
+```
+User SQL: INSERT INTO edges VALUES ('A', 'B', 1.0, 42, 'sess1')
+    |
+    v
+SQLite AFTER INSERT trigger fires
+    |
+    v
+INSERT INTO {name}_delta(scope_key, src, dst, weight, op)
+VALUES ('42\0sess1', 'A', 'B', 1.0, 1)
+    |
+    v
+[... time passes, more INSERTs may accumulate ...]
+    |
+    v
+User SQL: SELECT * FROM g WHERE namespace = ...
+    |
+    v
+gii_xFilter() called
+    |
+    v
+gii_ensure_fresh(vtab, namespace_id)
+    |
+    +-- Count deltas for this namespace
+    |
+    +-- Compute delta_ratio
+    |
+    +-- Select strategy: SELECTIVE / DELTA_FLUSH / FULL_REBUILD
+    |
+    +-- Execute CSR rebuild for this namespace only
+    |       |
+    |       +-- [SELECTIVE] Identify affected blocks, reload, rewrite
+    |       +-- [DELTA_FLUSH] Load full CSR, apply deltas, write back
+    |       +-- [FULL_REBUILD] SELECT from edge table, build CSR from scratch
+    |
+    +-- Emit downstream deltas
+    |       |
+    |       +-- [SELECTIVE/FLUSH] INSERT affected node indices into:
+    |       |       _sssp_delta(namespace_id, node_idx)
+    |       |       _comp_delta(namespace_id, node_idx)
+    |       |       _comm_delta(namespace_id, node_idx, ...)
+    |       |
+    |       +-- [FULL_REBUILD] Bump generation counter only
+    |
+    +-- Clear processed deltas from _delta
+    |
+    +-- Update per-namespace generation in _config
+    |
+    v
+gii_xFilter() proceeds with fresh CSR data
+```
+
+### 2.6.5 Event Pipeline: Complete Scenario Walkthroughs
+
+#### Scenario 1: Small Change (1 edge insert, ratio < 5%)
+
+Context: A GII with 5000 edges in namespace `'42\0sess1'`. One new edge arrives.
+
+1. **User executes:** `INSERT INTO edges VALUES ('A', 'B', 1.0, 42, 'sess1')`
+2. **Trigger fires:** INSERT into `_delta(scope_key='42\0sess1', src='A', dst='B', weight=1.0, op=1)`
+3. **Next query** on this namespace triggers `gii_ensure_fresh()`
+4. **Delta ratio:** `delta_ratio = 1 / 5000 = 0.0002` -- well below `theta_selective` (0.05)
+5. **Strategy selected:** SELECTIVE block rebuild
+6. **Identify affected blocks:** Look up node 'A' and node 'B' in `_nodes`. Suppose `idx_A = 17` and `idx_B = 203`. With `block_size = 4096`, both fall in block 0.
+7. **Rebuild block 0:** Load block 0 from `_csr_fwd`, deserialize offsets/targets/weights arrays, apply the new edge A->B, re-serialize and write back. Same for `_csr_rev` (edge B<-A).
+8. **Emit to `_sssp_delta`:** INSERT nodes 0..4095 (block 0 range) -- any SSSP rooted at these nodes may be stale.
+9. **Emit to `_comp_delta`:** INSERT nodes `{idx_A, idx_B}` -- component membership of these nodes may have changed (e.g., two components merged).
+10. **Emit to `_comm_delta`:** INSERT nodes `{idx_A, idx_B}` plus their 1-hop neighbors -- Leiden community assignments in this neighborhood may shift.
+11. **Clear processed deltas:** DELETE from `_delta` WHERE `scope_key = '42\0sess1'` AND `rowid <= last_processed`.
+12. **Update generation:** SET `ns:1:generation = old_gen + 1` in `_config`.
+
+**Total I/O:** 1 block read + 1 block write for `_csr_fwd`, same for `_csr_rev`, plus downstream delta INSERTs. Unaffected blocks (potentially hundreds) are never touched.
+
+#### Scenario 2: Medium Change (500 edges, 5% <= ratio < 30%)
+
+Context: A GII with 10,000 edges in namespace `'proj_7\0batch_3'`. A batch of 500 edges arrives.
+
+1. **Batch INSERT:** 500 edges inserted into the same namespace via a transaction or sequential INSERTs.
+2. **Delta accumulation:** 500 rows now in `_delta` with `scope_key = 'proj_7\0batch_3'`.
+3. **Next query triggers** `gii_ensure_fresh()`.
+4. **Delta ratio:** `500 / 10000 = 0.05` -- at the `theta_selective` boundary, so DELTA FLUSH is selected.
+5. **Load full CSR:** Read all blocks for this namespace from `_csr_fwd` and `_csr_rev` into memory.
+6. **Apply all 500 deltas:** Iterate the delta log. For each delta, call `csr_apply_delta()` which updates the in-memory offsets/targets/weights arrays. Handle both INSERT (op=1) and DELETE (op=2) operations. Node registry may grow if new node IDs appear.
+7. **Write back full CSR:** Serialize and write all blocks back to `_csr_fwd` and `_csr_rev`.
+8. **Emit downstream:** Compute the union of all affected `src_idx` and `dst_idx` from the 500 deltas. INSERT these into `_sssp_delta`, `_comp_delta`, and `_comm_delta`.
+9. **Clear `_delta`:** Remove all 500 processed rows.
+10. **Update generation.**
+
+**Total I/O:** Full CSR read + full CSR write for this namespace. More expensive than selective, but avoids the overhead of per-block accounting when many blocks are affected.
+
+#### Scenario 3: Large Change (3000 edges, ratio >= 30%)
+
+Context: A GII with 10,000 edges in namespace `'tenant_X\0workspace_Y'`. A bulk load adds 3000 edges.
+
+1. **Bulk INSERT:** 3000 edges inserted.
+2. **Delta accumulation:** 3000 rows in `_delta`.
+3. **Next query triggers** `gii_ensure_fresh()`.
+4. **Delta ratio:** `3000 / 10000 = 0.30` -- at the `theta_full` boundary, so FULL REBUILD is selected.
+5. **Discard existing CSR:** DELETE all blocks for this namespace from `_csr_fwd` and `_csr_rev`.
+6. **Reload from source:** `SELECT src, dst, weight FROM edges WHERE tenant_id = 'tenant_X' AND workspace_id = 'workspace_Y'` -- fetches all 13,000 edges (10,000 original + 3,000 new).
+7. **Build CSR from scratch:** Construct fresh node registry, compute degree sequence, build blocked CSR.
+8. **Generation counter bumped:** `ns:N:generation = old_gen + 1`.
+9. **Do NOT write to downstream delta queues.** The generation bump is the signal. When SSSP, components, or communities are next queried for this namespace, they will see the generation mismatch and perform their own full rebuilds.
+10. **Clear `_delta`.**
+
+**Total I/O:** Full edge table scan (filtered), full CSR write. No downstream delta writes. This is the most expensive CSR strategy but also the simplest, and it avoids writing O(V) rows into downstream delta tables.
+
+#### Scenario 4: Multi-Namespace Isolation
+
+Context: A GII managing 3 namespaces. Changes arrive in two of them.
+
+1. **INSERTs arrive** into namespace A (2 edges) and namespace B (1500 edges). Namespace C has no changes.
+2. **Delta for namespace A:** `delta_ratio = 2 / 5000 = 0.0004` -- SELECTIVE.
+3. **Delta for namespace B:** `delta_ratio = 1500 / 10000 = 0.15` -- DELTA FLUSH.
+4. **`gii_ensure_fresh()` processes each namespace independently:**
+   - Namespace A: selective block rebuild, touches 1-2 blocks.
+   - Namespace B: delta flush, loads and rewrites full CSR for B.
+   - Namespace C: **zero I/O**. No deltas exist, generation unchanged, CSR untouched.
+5. **Downstream emissions are also per-namespace:** Namespace A's downstream deltas only reference A's node indices. Namespace B's downstream deltas only reference B's node indices. No cross-contamination.
+6. **A query on namespace C** returns immediately from cached/stored CSR with no rebuild overhead.
+
+**Key property:** The cost of maintaining namespace A is completely independent of the size or activity of namespace B. A busy namespace does not impose overhead on quiet namespaces.
+
 ---
 
 ## 3. Implementation Steps
 
 ### Step 1: Parse `namespace_cols` in xCreate/xConnect
 
-**File:** `src/graph_adjacency.c`, lines 66-144 (`AdjParams` and `parse_adjacency_params`)
+**File:** `src/gii.c`, lines 66-144 (`GiiParams` and `parse_gii_params`)
 
-Add `namespace_cols` to the `AdjParams` struct and parse it in `parse_adjacency_params()`.
+Add `namespace_cols` to the `GiiParams` struct and parse it in `parse_gii_params()`.
 Split on commas, validate each column name with `id_validate()`, and store as a
 dynamically-allocated array of strings.
 
 ```c
-/* In AdjParams (line ~67) */
+/* In GiiParams (line ~67) */
 typedef struct {
     char *edge_table;
     char *src_col;
@@ -149,7 +399,7 @@ typedef struct {
     char *weight_col;
     char **namespace_cols;   /* array of column name strings, NULL if unscoped */
     int namespace_col_count; /* 0 if unscoped */
-} AdjParams;
+} GiiParams;
 ```
 
 In the parsing loop (line ~91), add:
@@ -162,11 +412,11 @@ In the parsing loop (line ~91), add:
 }
 ```
 
-Store parsed namespace columns in `AdjVtab` (see Step 4 for struct changes).
+Store parsed namespace columns in `GiiVtab` (see Step 4 for struct changes).
 
 ### Step 2: Create `{name}_namespace` Shadow Table
 
-**File:** `src/graph_adjacency.c`, function `adjacency_create_shadow_tables()` (line ~150)
+**File:** `src/gii.c`, function `gii_create_shadow_tables()` (line ~150)
 
 Add the namespace registry table:
 
@@ -185,13 +435,13 @@ INSERT INTO "{name}_namespace"(namespace_id, scope_key, scope_hash)
 VALUES (0, '', 0);
 ```
 
-Also add `"namespace"` to the shadow name list in `adj_xShadowName()` (line ~1401),
-the `drop_shadow_tables()` suffix list (line ~210), and the `adj_xRename()` suffix
+Also add `"namespace"` to the shadow name list in `gii_xShadowName()` (line ~1401),
+the `drop_shadow_tables()` suffix list (line ~210), and the `gii_xRename()` suffix
 list (line ~1378).
 
 ### Step 3: Add `namespace_id` to Shadow Tables
 
-**File:** `src/graph_adjacency.c`, function `adjacency_create_shadow_tables()` (line ~150)
+**File:** `src/gii.c`, function `gii_create_shadow_tables()` (line ~150)
 
 Modify all shadow table schemas:
 
@@ -283,9 +533,16 @@ key = "ns:{namespace_id}:block_size"
 Global keys remain unchanged: `edge_table`, `src_col`, `dst_col`, `weight_col`,
 `namespace_cols`, `generation` (global generation counter).
 
+Additionally, the threshold configuration keys are stored globally:
+
+```
+key = "delta_threshold_selective"   (default: "0.05")
+key = "delta_threshold_full"        (default: "0.30")
+```
+
 ### Step 4: Modify Triggers to Capture Scope Column Values
 
-**File:** `src/graph_adjacency.c`, function `install_triggers()` (line ~223)
+**File:** `src/gii.c`, function `install_triggers()` (line ~223)
 
 The trigger must capture scope column values from the `NEW` row and concatenate them
 into a `scope_key` stored in the delta table.
@@ -344,7 +601,7 @@ and `NEW.`).
 
 ### Step 5: Modify Full Rebuild to Iterate Per-Namespace
 
-**File:** `src/graph_adjacency.c`, function `adj_full_rebuild()` (line ~565)
+**File:** `src/gii.c`, function `gii_full_rebuild()` (line ~565)
 
 The full rebuild becomes a two-level operation:
 
@@ -355,10 +612,10 @@ The full rebuild becomes a two-level operation:
    scope columns matching this namespace's scope values, build CSR, store in shadow
    tables with the appropriate `namespace_id`.
 
-New function: `adj_full_rebuild_namespace()` — rebuilds a single namespace.
+New function: `gii_full_rebuild_namespace()` -- rebuilds a single namespace.
 
 ```c
-static int adj_full_rebuild_namespace(AdjVtab *vtab, int64_t namespace_id,
+static int gii_full_rebuild_namespace(GiiVtab *vtab, int64_t namespace_id,
                                       const char *scope_key);
 ```
 
@@ -369,19 +626,21 @@ This function:
 2. Executes `SELECT src, dst [, weight] FROM edge_table WHERE <scope_filter>`
 3. Builds GraphData, CSR, stores in shadow tables with `namespace_id` prefix
 4. Updates per-namespace config keys
+5. Bumps the namespace generation counter
+6. Downstream layers detect generation mismatch on next query
 
-The top-level `adj_full_rebuild()` becomes:
+The top-level `gii_full_rebuild()` becomes:
 
 ```c
-static int adj_full_rebuild(AdjVtab *vtab) {
+static int gii_full_rebuild(GiiVtab *vtab) {
     if (vtab->namespace_col_count == 0) {
         /* Unscoped: single namespace, same as current behavior */
-        return adj_full_rebuild_namespace(vtab, 0, "");
+        return gii_full_rebuild_namespace(vtab, 0, "");
     }
     /* Scoped: iterate all namespaces */
     /* 1. Collect all known namespace_ids from _namespace table */
     /* 2. Collect any new scope_keys from _delta not yet in _namespace */
-    /* 3. Register new scope_keys → new namespace_ids */
+    /* 3. Register new scope_keys -> new namespace_ids */
     /* 4. For each namespace_id: rebuild */
     /* 5. Clear delta log */
     /* 6. Increment global generation */
@@ -390,21 +649,21 @@ static int adj_full_rebuild(AdjVtab *vtab) {
 
 ### Step 6: Modify Incremental Rebuild to Rebuild Only Affected Namespaces
 
-**File:** `src/graph_adjacency.c`, function `adj_incremental_rebuild()` (line ~721)
+**File:** `src/gii.c`, function `gii_incremental_rebuild()` (line ~721)
 
 The incremental rebuild gains a namespace-grouping step:
 
 1. **Group deltas by scope_key:** `SELECT DISTINCT scope_key FROM _delta`
 2. **Resolve each scope_key to namespace_id:** look up in `_namespace`, auto-register
    if new
-3. **Per affected namespace:** load that namespace's CSR blocks, apply deltas for
-   that namespace only, store updated blocks
+3. **Per affected namespace:** evaluate the delta ratio and select the appropriate
+   rebuild strategy (selective, delta flush, or full rebuild per Section 2.6.2)
 4. **Unaffected namespaces:** zero I/O (no blocks loaded, no blocks written)
 
-New function: `adj_incremental_rebuild_namespace()`:
+New function: `gii_incremental_rebuild_namespace()`:
 
 ```c
-static int adj_incremental_rebuild_namespace(AdjVtab *vtab, int64_t namespace_id,
+static int gii_incremental_rebuild_namespace(GiiVtab *vtab, int64_t namespace_id,
                                               const char *scope_key);
 ```
 
@@ -420,39 +679,50 @@ Node registry loading becomes namespace-scoped:
 SELECT idx, id FROM "{name}_nodes" WHERE namespace_id = ? ORDER BY idx
 ```
 
-The threshold for incremental vs full rebuild is evaluated per-namespace:
+The threshold for rebuild strategy selection is evaluated per-namespace using the
+two-threshold system:
 
 ```c
 int64_t ns_delta = delta_count_for_namespace(vtab->db, vtab->vtab_name, scope_key);
 int64_t ns_edges = config_get_int(vtab->db, vtab->vtab_name,
                                    ns_edge_count_key, 0);
-int64_t threshold = ns_edges / 10;
-if (threshold < 10) threshold = 10;
+double delta_ratio = (ns_edges > 0) ? (double)ns_delta / ns_edges : 1.0;
 
-if (ns_delta <= threshold)
-    adj_incremental_rebuild_namespace(vtab, namespace_id, scope_key);
-else
-    adj_full_rebuild_namespace(vtab, namespace_id, scope_key);
+double theta_selective = config_get_double(vtab->db, vtab->vtab_name,
+                                            "delta_threshold_selective", 0.05);
+double theta_full = config_get_double(vtab->db, vtab->vtab_name,
+                                       "delta_threshold_full", 0.30);
+
+if (delta_ratio >= theta_full) {
+    gii_full_rebuild_namespace(vtab, namespace_id, scope_key);
+} else if (delta_ratio >= theta_selective) {
+    gii_delta_flush_namespace(vtab, namespace_id, scope_key);
+} else {
+    gii_selective_rebuild_namespace(vtab, namespace_id, scope_key);
+}
 ```
+
+After each namespace rebuild, the affected node set is emitted to downstream delta
+queues as described in Section 2.6.3.
 
 ### Step 7: Add Namespace Filter to xBestIndex/xFilter
 
-**File:** `src/graph_adjacency.c`, functions `adj_xBestIndex()` (line ~1200) and
-`adj_xFilter()` (line ~1230)
+**File:** `src/gii.c`, functions `gii_xBestIndex()` (line ~1200) and
+`gii_xFilter()` (line ~1230)
 
 Add a hidden `namespace` column to the VT schema. The column enum becomes:
 
 ```c
 enum {
-    ADJ_COL_NODE = 0,
-    ADJ_COL_NODE_IDX,
-    ADJ_COL_IN_DEGREE,
-    ADJ_COL_OUT_DEGREE,
-    ADJ_COL_W_IN_DEGREE,
-    ADJ_COL_W_OUT_DEGREE,
-    ADJ_COL_NAMESPACE,  /* NEW: hidden, for filtering */
-    ADJ_COL_COMMAND,    /* hidden: same name as table, for command pattern */
-    ADJ_NUM_COLS
+    GII_COL_NODE = 0,
+    GII_COL_NODE_IDX,
+    GII_COL_IN_DEGREE,
+    GII_COL_OUT_DEGREE,
+    GII_COL_W_IN_DEGREE,
+    GII_COL_W_OUT_DEGREE,
+    GII_COL_NAMESPACE,  /* NEW: hidden, for filtering */
+    GII_COL_COMMAND,    /* hidden: same name as table, for command pattern */
+    GII_NUM_COLS
 };
 ```
 
@@ -479,7 +749,7 @@ The `idxNum` bitmask encoding becomes:
 | 1 (0x02) | namespace = ? (namespace filter) |
 
 ```c
-static int adj_xBestIndex(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo) {
+static int gii_xBestIndex(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo) {
     (void)pVTab;
     int has_node = -1;
     int has_namespace = -1;
@@ -488,9 +758,9 @@ static int adj_xBestIndex(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo) {
         if (!pInfo->aConstraint[i].usable) continue;
         if (pInfo->aConstraint[i].op != SQLITE_INDEX_CONSTRAINT_EQ) continue;
 
-        if (pInfo->aConstraint[i].iColumn == ADJ_COL_NODE)
+        if (pInfo->aConstraint[i].iColumn == GII_COL_NODE)
             has_node = i;
-        else if (pInfo->aConstraint[i].iColumn == ADJ_COL_NAMESPACE)
+        else if (pInfo->aConstraint[i].iColumn == GII_COL_NAMESPACE)
             has_namespace = i;
     }
 
@@ -530,7 +800,7 @@ static int adj_xBestIndex(sqlite3_vtab *pVTab, sqlite3_index_info *pInfo) {
 Parse `idxNum` to determine which filters are active, then build the appropriate SQL:
 
 ```c
-static int adj_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
+static int gii_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
                        const char *idxStr, int argc, sqlite3_value **argv) {
     /* ... existing cleanup ... */
 
@@ -586,23 +856,23 @@ static int adj_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
 }
 ```
 
-The `adj_xColumn` function (line ~1293) gains a case for `ADJ_COL_NAMESPACE`:
+The `gii_xColumn` function (line ~1293) gains a case for `GII_COL_NAMESPACE`:
 
 ```c
-case ADJ_COL_NAMESPACE:
+case GII_COL_NAMESPACE:
     sqlite3_result_value(ctx, sqlite3_column_value(cur->stmt, 6));
     break;
 ```
 
-### Step 8: Update `graph_data_load_from_adjacency()`
+### Step 8: Update `graph_data_load_from_gii()`
 
-**File:** `src/graph_adjacency.h` (line ~39) and `src/graph_adjacency.c` (line ~1532)
+**File:** `src/gii.h` (line ~39) and `src/gii.c` (line ~1532)
 
 The function signature changes to accept an optional namespace key:
 
 ```c
 /* New signature */
-int graph_data_load_from_adjacency(sqlite3 *db, const char *vtab_name,
+int graph_data_load_from_gii(sqlite3 *db, const char *vtab_name,
                                    const char *namespace_key,
                                    GraphData *g, char **pzErrMsg);
 ```
@@ -637,18 +907,18 @@ static int load_graph_from_shadow(sqlite3 *db, const char *name,
                                   GraphData *g, char **pzErrMsg);
 ```
 
-### Step 9: Update `is_graph_adjacency()` and All TVFs That Call It
+### Step 9: Update `is_gii()` and All TVFs That Call It
 
-**File:** `src/graph_adjacency.c` (line ~1414), `src/graph_centrality.c`, `src/graph_community.c`
+**File:** `src/gii.c` (line ~1414), `src/graph_centrality.c`, `src/graph_community.c`
 
-The `is_graph_adjacency()` function itself does not change its signature. It still
-returns 1 if the name corresponds to a graph_adjacency VT.
+The `is_gii()` function itself does not change its signature. It still
+returns 1 if the name corresponds to a GII VT.
 
 However, every call site that follows the pattern:
 
 ```c
-if (config.edge_table && is_graph_adjacency(vtab->db, config.edge_table)) {
-    rc = graph_data_load_from_adjacency(vtab->db, config.edge_table, &g, &errmsg);
+if (config.edge_table && is_gii(vtab->db, config.edge_table)) {
+    rc = graph_data_load_from_gii(vtab->db, config.edge_table, &g, &errmsg);
 } else {
     rc = graph_data_load(vtab->db, &config, &g, &errmsg);
 }
@@ -671,8 +941,8 @@ Each TVF gains an optional hidden `namespace` parameter column. The pattern beco
 ```c
 const char *namespace_key = graph_safe_text(argv_namespace);  /* NULL if not provided */
 
-if (config.edge_table && is_graph_adjacency(vtab->db, config.edge_table)) {
-    rc = graph_data_load_from_adjacency(vtab->db, config.edge_table,
+if (config.edge_table && is_gii(vtab->db, config.edge_table)) {
+    rc = graph_data_load_from_gii(vtab->db, config.edge_table,
                                          namespace_key, &g, &errmsg);
 } else {
     rc = graph_data_load(vtab->db, &config, &g, &errmsg);
@@ -685,9 +955,9 @@ cross-namespace graph merging.
 
 ---
 
-## 4. AdjVtab Struct Changes
+## 4. GiiVtab Struct Changes
 
-**File:** `src/graph_adjacency.c`, lines 33-42
+**File:** `src/gii.c`, lines 33-42
 
 Current struct:
 
@@ -701,7 +971,7 @@ typedef struct {
     char *dst_col;
     char *weight_col;
     int64_t generation;
-} AdjVtab;
+} GiiVtab;
 ```
 
 New struct:
@@ -720,14 +990,14 @@ typedef struct {
     /* Namespace support */
     char **namespace_cols;     /* array of scope column names, NULL if unscoped */
     int namespace_col_count;   /* 0 if unscoped */
-} AdjVtab;
+} GiiVtab;
 ```
 
-The `adj_xDisconnect()` function (line ~1155) must free `namespace_cols`:
+The `gii_xDisconnect()` function (line ~1155) must free `namespace_cols`:
 
 ```c
-static int adj_xDisconnect(sqlite3_vtab *pVTab) {
-    AdjVtab *vtab = (AdjVtab *)pVTab;
+static int gii_xDisconnect(sqlite3_vtab *pVTab) {
+    GiiVtab *vtab = (GiiVtab *)pVTab;
     sqlite3_free(vtab->vtab_name);
     sqlite3_free(vtab->edge_table);
     sqlite3_free(vtab->src_col);
@@ -746,7 +1016,7 @@ static int adj_xDisconnect(sqlite3_vtab *pVTab) {
 ## 5. Shadow Table Schemas (Complete)
 
 All `CREATE TABLE` statements for the new schema. These replace the current statements
-in `adjacency_create_shadow_tables()`.
+in `gii_create_shadow_tables()`.
 
 ```sql
 -- Config: global KV store (unchanged schema, new key conventions)
@@ -1035,7 +1305,7 @@ static char *build_scope_where(const char **namespace_cols, int count) {
 
 ### 8.1 Current Pattern
 
-The existing `adj_xBestIndex` (line ~1200) uses a simple boolean for node point lookup:
+The existing `gii_xBestIndex` (line ~1200) uses a simple boolean for node point lookup:
 
 - `idxNum = 0`: full scan
 - `idxNum = 1`: node = ? (point lookup, argvIndex=1)
@@ -1085,16 +1355,16 @@ When `namespace_cols` is omitted from `CREATE VIRTUAL TABLE`:
 | Aspect | Behavior |
 |--------|----------|
 | `_namespace` table | Created with single row: `(0, '', 0)` |
-| `_nodes` PK | `(0, idx)` — always namespace_id=0 |
-| `_degree` PK | `(0, idx)` — always namespace_id=0 |
-| `_csr_fwd` PK | `(0, block_id)` — always namespace_id=0 |
-| `_csr_rev` PK | `(0, block_id)` — always namespace_id=0 |
+| `_nodes` PK | `(0, idx)` -- always namespace_id=0 |
+| `_degree` PK | `(0, idx)` -- always namespace_id=0 |
+| `_csr_fwd` PK | `(0, block_id)` -- always namespace_id=0 |
+| `_csr_rev` PK | `(0, block_id)` -- always namespace_id=0 |
 | `_delta.scope_key` | Always `''` |
 | Triggers | `scope_key` expression is `''` (literal empty string) |
-| `adj_full_rebuild` | Single iteration over namespace_id=0 |
-| `adj_incremental_rebuild` | Single iteration over namespace_id=0 |
+| `gii_full_rebuild` | Single iteration over namespace_id=0 |
+| `gii_incremental_rebuild` | Single iteration over namespace_id=0 |
 | xFilter without namespace constraint | Returns all nodes (same as current) |
-| `graph_data_load_from_adjacency(db, name, NULL, &g, &err)` | Loads namespace_id=0 |
+| `graph_data_load_from_gii(db, name, NULL, &g, &err)` | Loads namespace_id=0 |
 | All existing TVF calls | Pass NULL for namespace_key (loads namespace_id=0) |
 
 **Migration path for existing databases:** When xConnect detects an existing VT
@@ -1113,11 +1383,11 @@ Alternatively, since this is a pre-1.0 extension, document that existing VTs mus
 be dropped and recreated. The simpler approach is preferred:
 
 ```c
-/* In adj_init() for xConnect path */
+/* In gii_init() for xConnect path */
 if (!namespace_table_exists(db, argv[2])) {
     /* Pre-namespace VT: drop and recreate shadow tables */
     drop_shadow_tables(db, argv[2]);
-    adjacency_create_shadow_tables(db, argv[2]);
+    gii_create_shadow_tables(db, argv[2]);
     /* Force full rebuild on next query */
     config_set_int(db, argv[2], "generation", 0);
 }
@@ -1136,9 +1406,10 @@ CREATE TABLE edges (
     project_id INTEGER, session_id TEXT
 );
 
-CREATE VIRTUAL TABLE g USING graph_adjacency(
+CREATE VIRTUAL TABLE g USING gii(
     edge_table='edges', src_col='src', dst_col='dst',
-    weight_col='weight', namespace_cols='project_id,session_id'
+    weight_col='weight', namespace_cols='project_id,session_id',
+    features='sssp,components,communities'
 );
 
 -- Insert edges into two different scopes
@@ -1218,7 +1489,7 @@ SELECT node, centrality FROM graph_degree(
 CREATE TABLE simple_edges (src TEXT, dst TEXT);
 INSERT INTO simple_edges VALUES ('P', 'Q'), ('Q', 'R');
 
-CREATE VIRTUAL TABLE g2 USING graph_adjacency(
+CREATE VIRTUAL TABLE g2 USING gii(
     edge_table='simple_edges', src_col='src', dst_col='dst'
 );
 
@@ -1236,7 +1507,7 @@ SELECT * FROM g2_namespace;
 ```sql
 -- Attempting to load from multi-namespace VT without specifying namespace
 -- should return an error (not silently merge all namespaces)
--- This is verified by calling graph_data_load_from_adjacency with NULL namespace_key
+-- This is verified by calling graph_data_load_from_gii with NULL namespace_key
 -- on a VT that has namespace_col_count > 0 and multiple registered namespaces
 ```
 
@@ -1255,24 +1526,43 @@ SELECT COUNT(*) FROM g_namespace WHERE scope_key IN (
 -- Expected: 2 (distinct entries)
 ```
 
+### Test 8: Threshold-Based Rebuild Strategy Selection
+
+```sql
+-- Verify configurable thresholds
+SELECT value FROM g_config WHERE key = 'delta_threshold_selective';
+-- Expected: '0.05'
+
+SELECT value FROM g_config WHERE key = 'delta_threshold_full';
+-- Expected: '0.30'
+
+-- Override thresholds
+INSERT OR REPLACE INTO g_config(key, value)
+VALUES ('delta_threshold_selective', '0.10');
+INSERT OR REPLACE INTO g_config(key, value)
+VALUES ('delta_threshold_full', '0.50');
+```
+
 ### C Unit Tests
 
-Add to `test/test_graph_adjacency.c`:
+Add to `test/test_gii.c`:
 
-1. `test_namespace_parse` — verify `namespace_cols` parameter parsing with 0, 1, and 3 columns
-2. `test_scope_key_build` — verify NUL-separated scope_key construction
-3. `test_scope_key_decompose` — verify round-trip: build -> decompose -> match original values
-4. `test_namespace_hash` — verify `graph_bytes_hash()` produces different hashes for NUL-containing variants
+1. `test_namespace_parse` -- verify `namespace_cols` parameter parsing with 0, 1, and 3 columns
+2. `test_scope_key_build` -- verify NUL-separated scope_key construction
+3. `test_scope_key_decompose` -- verify round-trip: build -> decompose -> match original values
+4. `test_namespace_hash` -- verify `graph_bytes_hash()` produces different hashes for NUL-containing variants
+5. `test_threshold_strategy_selection` -- verify correct strategy is chosen for various delta ratios
 
 ### Python Integration Tests
 
-Add to `pytests/test_graph_adjacency.py`:
+Add to `pytests/test_gii.py`:
 
-1. `test_scoped_adjacency_creation` — create VT with namespace_cols, verify shadow tables
-2. `test_scoped_insert_and_query` — insert edges with different scopes, verify filtered results
-3. `test_scoped_incremental_rebuild` — insert into one scope, verify only that scope rebuilds
-4. `test_unscoped_backward_compat` — verify current behavior is unchanged
-5. `test_namespace_tvf_integration` — verify centrality/community TVFs accept namespace param
+1. `test_scoped_gii_creation` -- create VT with namespace_cols, verify shadow tables
+2. `test_scoped_insert_and_query` -- insert edges with different scopes, verify filtered results
+3. `test_scoped_incremental_rebuild` -- insert into one scope, verify only that scope rebuilds
+4. `test_unscoped_backward_compat` -- verify current behavior is unchanged
+5. `test_namespace_tvf_integration` -- verify centrality/community TVFs accept namespace param
+6. `test_threshold_configuration` -- verify threshold keys in _config, custom thresholds work
 
 ---
 
@@ -1285,20 +1575,20 @@ Add to `pytests/test_graph_adjacency.py`:
 - [xShadowName](https://sqlite.org/vtab.html#xshadowname) (shadow table registration)
 
 ### Graph Storage Approaches
-- [GRainDB: Predefined Joins (VLDB 2022)](https://arxiv.org/abs/2108.10540) — trigger-based graph acceleration
-- [A+ Indexes: Lightweight Adjacency Lists (Kuzu/Waterloo)](https://arxiv.org/abs/2004.00130) — blocked columnar storage inspiration
-- [DuckPGQ: SQL/PGQ in DuckDB (CIDR 2023)](https://www.cidrdb.org/cidr2023/papers/p66-wolde.pdf) — schema-based namespace separation
-- [SuiteSparse:GraphBLAS Algorithm 1000](https://dl.acm.org/doi/10.1145/3322125) — delta+merge pattern
+- [GRainDB: Predefined Joins (VLDB 2022)](https://arxiv.org/abs/2108.10540) -- trigger-based graph acceleration
+- [A+ Indexes: Lightweight Adjacency Lists (Kuzu/Waterloo)](https://arxiv.org/abs/2004.00130) -- blocked columnar storage inspiration
+- [DuckPGQ: SQL/PGQ in DuckDB (CIDR 2023)](https://www.cidrdb.org/cidr2023/papers/p66-wolde.pdf) -- schema-based namespace separation
+- [SuiteSparse:GraphBLAS Algorithm 1000](https://dl.acm.org/doi/10.1145/3322125) -- delta+merge pattern
 
 ### Namespace/Projection Prior Art
-- [Neo4j GDS: Graph Projections](https://neo4j.com/docs/graph-data-science/current/management-ops/graph-creation/graph-project/) — label-based graph partitioning
-- [MV4PG: Materialized Views for Property Graphs (2024)](https://arxiv.org/html/2411.18847v1) — scoped graph views
+- [Neo4j GDS: Graph Projections](https://neo4j.com/docs/graph-data-science/current/management-ops/graph-creation/graph-project/) -- label-based graph partitioning
+- [MV4PG: Materialized Views for Property Graphs (2024)](https://arxiv.org/html/2411.18847v1) -- scoped graph views
 
 ### Competitor Projects (None Support Scoped Adjacency)
-- [GraphQLite (Rust, Cypher)](https://github.com/colliery-io/graphqlite) — in-memory, no namespace support
-- [sqlite-graph (C99, Cypher alpha)](https://github.com/agentflare-ai/sqlite-graph) — no namespace support
-- [simple-graph (pure SQL)](https://github.com/dpapathanasiou/simple-graph) — no namespace support
+- [GraphQLite (Rust, Cypher)](https://github.com/colliery-io/graphqlite) -- in-memory, no namespace support
+- [sqlite-graph (C99, Cypher alpha)](https://github.com/agentflare-ai/sqlite-graph) -- no namespace support
+- [simple-graph (pure SQL)](https://github.com/dpapathanasiou/simple-graph) -- no namespace support
 
 ---
 
-**Prev:** [Phase 0 — Gap Analysis](./00_gap_analysis.md) | **Next:** [Phase 2 — SSSP Shadow Tables](./02_sssp_shadow_tables.md)
+**Prev:** [Phase 0 -- Gap Analysis](./00_gap_analysis.md) | **Next:** [Phase 2 -- SSSP Shadow Tables](./02_sssp_shadow_tables.md)

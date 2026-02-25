@@ -2,6 +2,14 @@
 
 Handles staging directories, hierarchical logging (debug/info/error log files),
 phase orchestration, atomic move on success, and staging preservation on failure.
+
+Public API follows a setup/run/teardown lifecycle:
+    build = DemoBuild(book_id, model_name, output_folder)
+    build.setup()
+    try:
+        build.run()
+    finally:
+        build.teardown()
 """
 
 from __future__ import annotations
@@ -11,28 +19,13 @@ import logging
 import shutil
 import sqlite3
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from benchmarks.demo_builder.common import load_muninn
-from benchmarks.demo_builder.constants import PHASE_NAMES
-from benchmarks.demo_builder.phases import (
-    phase_1_chunks,
-    phase_2_ner,
-    phase_3_re,
-    phase_4_entity_embeddings,
-    phase_5_umap,
-    phase_6_entity_resolution,
-    phase_7_node2vec,
-    phase_8_metadata,
-)
-
-if TYPE_CHECKING:
-    from benchmarks.demo_builder.models import ModelPool
+from benchmarks.demo_builder.phases import Phase, default_phases
 
 
 @dataclass
@@ -68,12 +61,10 @@ class DemoBuild:
         book_id: int,
         model_name: str,
         output_folder: Path,
-        models: ModelPool,
     ) -> None:
         self._book_id = book_id
         self._model_name = model_name
         self._output_folder = output_folder
-        self._models = models
         self._ctx = PhaseContext()
         self._conn: sqlite3.Connection | None = None
         # Attach file handlers to the package-level logger so that all
@@ -81,11 +72,12 @@ class DemoBuild:
         self._pkg_logger = logging.getLogger("benchmarks.demo_builder")
         self._log = logging.getLogger(f"benchmarks.demo_builder.build.{self.perm_id}")
         self._file_handlers: list[logging.FileHandler] = []
+        self._build_succeeded = False
 
     @property
     def _db(self) -> sqlite3.Connection:
         """Return the open database connection; raises if not yet opened."""
-        assert self._conn is not None, "Database not opened — call _open_db() first"
+        assert self._conn is not None, "Database not opened — call setup() first"
         return self._conn
 
     @property
@@ -106,22 +98,51 @@ class DemoBuild:
 
     # ── Public API ────────────────────────────────────────────────
 
-    def run(self) -> None:
-        """Execute the full build lifecycle."""
+    def setup(self) -> None:
+        """Create staging dir, set up hierarchical log files, open DB."""
         self._setup_staging()
         self._setup_logging()
+        self._open_db()
+
+    def run(self, phases: list[Phase] | None = None) -> None:
+        """Execute phases sequentially. Default: default_phases()."""
+        if phases is None:
+            phases = default_phases(self._book_id, self._model_name)
+
+        t_total = time.monotonic()
+
+        self._log.info("=" * 60)
+        self._log.info("Building %s", self.perm_id)
+        self._log.info("  Book: %d | Model: %s", self._book_id, self._model_name)
+        self._log.info("  Staging: %s", self.staging_db_path)
+        self._log.info("=" * 60)
+
+        for i, phase in enumerate(phases, 1):
+            self._log.info("Phase %d/%d: %s", i, len(phases), phase.name)
+            t0 = time.monotonic()
+            phase(self._db, self._ctx)
+            self._db.commit()
+            self._record_phase(i, phase.name)
+            self._db.commit()
+            self._log.info("Phase %d complete (%.1fs)", i, time.monotonic() - t0)
+
+        elapsed = time.monotonic() - t_total
+        self._log.info("All phases complete (%.1fs total)", elapsed)
+        self._build_succeeded = True
+
+    def teardown(self) -> None:
+        """Finalize on success; preserve staging on failure; always close logs."""
         try:
-            self._open_db()
-            self._run_phases()
-            self._drop_build_progress()
-            self._vacuum()
-            self._atomic_move()
-            self._cleanup_staging()
-        except Exception:
-            self._log.error("Build FAILED -- staging preserved: %s", self.staging_dir)
-            if self._conn is not None:
-                self._conn.close()
-            raise
+            if self._build_succeeded:
+                self._drop_build_progress()
+                self._vacuum()
+                self._atomic_move()
+                self._cleanup_staging()
+            else:
+                self._log.error("Build FAILED -- staging preserved: %s", self.staging_dir)
+                if self._conn is not None:
+                    self._conn.close()
+                    self._conn = None
         finally:
             self._teardown_logging()
 
@@ -145,7 +166,7 @@ class DemoBuild:
         """Create three log file handlers on the package-level logger.
 
         By attaching to 'benchmarks.demo_builder' (the package logger), we
-        capture output from all module loggers (phases, common, models, etc.)
+        capture output from all module loggers (phases, common, etc.)
         via Python's logger hierarchy propagation.
         """
         self._pkg_logger.setLevel(logging.DEBUG)
@@ -194,11 +215,11 @@ class DemoBuild:
         """)
         self._db.commit()
 
-    def _record_phase(self, phase_num: int) -> None:
+    def _record_phase(self, phase_num: int, phase_name: str) -> None:
         """Record completion of a build phase (1-indexed)."""
         self._db.execute(
             "INSERT INTO _build_progress (phase, name, completed_at) VALUES (?, ?, ?)",
-            (phase_num, PHASE_NAMES[phase_num - 1], datetime.datetime.now(datetime.UTC).isoformat()),
+            (phase_num, phase_name, datetime.datetime.now(datetime.UTC).isoformat()),
         )
 
     def _drop_build_progress(self) -> None:
@@ -221,38 +242,3 @@ class DemoBuild:
 
         db_size = self.final_path.stat().st_size
         self._log.info("Done! %s (%.1f MB)", self.final_path.name, db_size / 1e6)
-
-    # ── Phase orchestration ───────────────────────────────────────
-
-    def _run_phases(self) -> None:
-        """Execute all 8 build phases sequentially."""
-        t_total = time.monotonic()
-
-        self._log.info("=" * 60)
-        self._log.info("Building %s", self.perm_id)
-        self._log.info("  Book: %d | Model: %s", self._book_id, self._model_name)
-        self._log.info("  Staging: %s", self.staging_db_path)
-        self._log.info("=" * 60)
-
-        phase_fns: list[Callable[[], None]] = [
-            lambda: phase_1_chunks(self._db, self._ctx, self._book_id, self._model_name, self._models),
-            lambda: phase_2_ner(self._db, self._ctx, self._models),
-            lambda: phase_3_re(self._db, self._ctx, self._models),
-            lambda: phase_4_entity_embeddings(self._db, self._ctx, self._model_name, self._models),
-            lambda: phase_5_umap(self._db, self._ctx),
-            lambda: phase_6_entity_resolution(self._db, self._ctx),
-            lambda: phase_7_node2vec(self._db, self._ctx),
-            lambda: phase_8_metadata(self._db, self._ctx, self._book_id, self._model_name),
-        ]
-
-        for i, fn in enumerate(phase_fns, 1):
-            self._log.info("Phase %d/%d: %s", i, len(PHASE_NAMES), PHASE_NAMES[i - 1])
-            t0 = time.monotonic()
-            fn()
-            self._db.commit()
-            self._record_phase(i)
-            self._db.commit()
-            self._log.info("Phase %d complete (%.1fs)", i, time.monotonic() - t0)
-
-        elapsed = time.monotonic() - t_total
-        self._log.info("All phases complete (%.1fs total)", elapsed)

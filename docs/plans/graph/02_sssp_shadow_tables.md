@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-24
 **Status:** Plan (not started)
-**Depends on:** [Phase 1: Scoped Adjacency VT](./01_scoped_adjacency_vt.md)
+**Depends on:** [Phase 1: Scoped GII](./01_scoped_adjacency_vt.md)
 **Depended on by:** [Phase 5: TVF/VT Integration](./05_tvf_vt_integration.md)
 
 ---
@@ -15,11 +15,16 @@ This phase delivers two things:
    static functions currently buried in `graph_centrality.c`. This gives betweenness,
    closeness, and any future algorithm a single, well-tested SSSP implementation.
 
-2. **An optional `_sssp` shadow table** in the `graph_adjacency` virtual table,
-   activated by `features='sssp'`. When enabled, the adjacency VT caches all-pairs
+2. **An optional `_sssp` shadow table** in the GII virtual table,
+   activated by `features='sssp'`. When enabled, the GII caches all-pairs
    shortest-path distances and path counts as packed BLOBs. A generation counter
    tracks staleness relative to the CSR adjacency, so betweenness and closeness
    TVFs can read from cache when fresh and recompute when stale.
+
+3. **A `_sssp_delta` queue table** that integrates with the Phase 1 delta cascade.
+   When the CSR is rebuilt, affected node indices are recorded in `_sssp_delta`.
+   Betweenness and closeness TVFs consume this queue to determine whether partial
+   or full SSSP recomputation is needed.
 
 ### Why This Matters
 
@@ -32,6 +37,14 @@ Extracting SSSP into a shared module eliminates code duplication. Caching the
 all-pairs distance matrix (when the graph is small enough) eliminates redundant
 computation across TVF calls.
 
+### Temporal Filtering Note
+
+Temporal filtering is handled at query time by TVFs via raw table SQL (existing
+behavior). The SSSP cache stores distances for the full (non-temporal) graph.
+Temporal queries bypass the SSSP cache and compute from `graph_data_load()` with
+temporal WHERE clauses. A future TGII (Temporal GII) would have time-windowed
+SSSP caches, but that is out of scope for this phase.
+
 ### Complexity Analysis
 
 | Algorithm | SSSP Runs | Per-Run Cost (unweighted) | Per-Run Cost (weighted) | Total |
@@ -39,8 +52,8 @@ computation across TVF calls.
 | Betweenness (exact) | V | O(V + E) BFS | O(E + V log V) Dijkstra | O(VE) / O(VE + V^2 log V) |
 | Betweenness (approx) | sqrt(V) | O(V + E) | O(E + V log V) | O(sqrt(V) * E) |
 | Closeness | V | O(V + E) BFS | O(E + V log V) Dijkstra | O(VE) / O(VE + V^2 log V) |
-| **Both (no cache)** | **2V** | — | — | **2x total** |
-| **Both (with cache)** | **V (first call) + 0 (second call)** | — | — | **1x total** |
+| **Both (no cache)** | **2V** | -- | -- | **2x total** |
+| **Both (with cache)** | **V (first call) + 0 (second call)** | -- | -- | **1x total** |
 
 For a graph with V=5000, E=50000: each all-pairs SSSP takes ~5000 BFS runs at
 O(55000) each = ~275M operations. Caching saves 275M operations on every subsequent
@@ -57,14 +70,14 @@ double BLOBs in the `_sssp` shadow table. Total storage: O(V^2) for distances
 plus O(V^2) for sigma (path counts).
 
 **Pros:**
-- Closeness becomes O(V) — just sum the cached dist row per source
-- Betweenness avoids recomputing dist[] and sigma[] — only pred[] and
+- Closeness becomes O(V) -- just sum the cached dist row per source
+- Betweenness avoids recomputing dist[] and sigma[] -- only pred[] and
   back-propagation need live computation
 - Second query on the same graph is instantaneous for closeness
 
 **Cons:**
 - O(V^2) storage: infeasible above ~10K nodes (see Section 8)
-- Rebuild cost is still O(VE) — caching doesn't reduce first-query time
+- Rebuild cost is still O(VE) -- caching doesn't reduce first-query time
 - sigma[] is only needed by betweenness, wasted for closeness-only workloads
 
 ### Option B: Extract Shared Module Only (No Caching)
@@ -73,7 +86,7 @@ Move `sssp_bfs`, `sssp_dijkstra`, and supporting types into `graph_sssp.c`.
 Both TVFs call the shared functions. No shadow table, no generation tracking.
 
 **Pros:**
-- Zero overhead — pure code reuse
+- Zero overhead -- pure code reuse
 - No storage cost, no staleness checking
 - Simpler implementation
 
@@ -86,11 +99,11 @@ Both TVFs call the shared functions. No shadow table, no generation tracking.
 Only cache SSSP results for sources that have been queried. Populate lazily.
 
 **Pros:**
-- Amortized cost — only cache what is actually queried
+- Amortized cost -- only cache what is actually queried
 - Lower storage than full all-pairs
 
 **Cons:**
-- Betweenness and closeness both need ALL sources — this degenerates to
+- Betweenness and closeness both need ALL sources -- this degenerates to
   Option A for the primary use case
 - Complex lazy population logic with partial staleness
 
@@ -135,7 +148,7 @@ typedef struct { int *items; int count; int capacity; } IntList;
 static int double_eq(double a, double b);
 ```
 
-### graph_sssp.h — Public API
+### graph_sssp.h -- Public API
 
 ```c
 /*
@@ -150,7 +163,7 @@ static int double_eq(double a, double b);
 
 #include "graph_load.h"
 
-/* ── Double-precision priority queue (Dijkstra) ─────────── */
+/* -- Double-precision priority queue (Dijkstra) ----------- */
 
 typedef struct {
     int node;
@@ -168,7 +181,7 @@ void sssp_pq_destroy(SsspPQ *pq);
 void sssp_pq_push(SsspPQ *pq, int node, double dist);
 SsspPQEntry sssp_pq_pop(SsspPQ *pq);
 
-/* ── Predecessor list (dynamic int array) ────────────────── */
+/* -- Predecessor list (dynamic int array) ----------------- */
 
 typedef struct {
     int *items;
@@ -181,11 +194,11 @@ void sssp_pred_push(SsspPredList *l, int val);
 void sssp_pred_clear(SsspPredList *l);
 void sssp_pred_destroy(SsspPredList *l);
 
-/* ── Epsilon comparison for tie detection ────────────────── */
+/* -- Epsilon comparison for tie detection ----------------- */
 
 int sssp_double_eq(double a, double b);
 
-/* ── SSSP working set ────────────────────────────────────── */
+/* -- SSSP working set ------------------------------------- */
 
 /*
  * Caller-allocated working arrays for SSSP. Reusable across
@@ -214,7 +227,7 @@ int sssp_working_set_init(SsspWorkingSet *ws, int node_count, int needs_brandes)
 /* Free all memory owned by the working set. */
 void sssp_working_set_destroy(SsspWorkingSet *ws);
 
-/* ── Core SSSP functions ─────────────────────────────────── */
+/* -- Core SSSP functions ---------------------------------- */
 
 /*
  * BFS-based SSSP for unweighted graphs.
@@ -267,7 +280,7 @@ void sssp_run(const GraphData *g, int source,
 ## 4. Shadow Table Schema
 
 When `features='sssp'` is enabled in the `CREATE VIRTUAL TABLE` statement,
-the adjacency VT creates the following additional shadow table:
+the GII virtual table creates the following additional shadow tables:
 
 ### `{name}_sssp` Table
 
@@ -302,6 +315,26 @@ CREATE TABLE IF NOT EXISTS "{name}_sssp" (
   `dist[]` by sorting nodes by non-decreasing distance. This costs O(V log V)
   per source but avoids storing V^2 integers.
 
+### `{name}_sssp_delta` Table
+
+```sql
+CREATE TABLE IF NOT EXISTS "{name}_sssp_delta" (
+    namespace_id  INTEGER NOT NULL,
+    source_idx    INTEGER NOT NULL,
+    PRIMARY KEY (namespace_id, source_idx)
+);
+```
+
+This table tracks which source-node SSSP rows are stale and need recomputation.
+It is:
+- **Populated eagerly** by the CSR rebuild in Phase 1 (when `features` includes `'sssp'`)
+- **Consumed lazily** by betweenness/closeness TVFs when they query SSSP data
+
+The `_sssp_delta` table acts as the bridge between the Phase 1 CSR delta cascade
+and the Phase 2 SSSP cache. Rather than invalidating the entire SSSP cache on
+every CSR rebuild, the delta queue allows partial recomputation of only the
+affected sources.
+
 ### BLOB Encoding
 
 All values are stored as raw `double` (IEEE 754 binary64) in platform-native
@@ -324,7 +357,7 @@ int n_doubles = sqlite3_column_bytes(stmt, col) / (int)sizeof(double);
 
 ### Generation Storage
 
-The adjacency VT's `_config` shadow table stores generation counters:
+The GII's `_config` shadow table stores generation counters:
 
 ```sql
 -- Written by Phase 1 rebuild:
@@ -340,6 +373,24 @@ The `generation_adj` counter increments on every CSR rebuild (full or
 incremental). The `generation_sssp` counter records which `generation_adj`
 the SSSP cache was computed against.
 
+### Interaction Between Generation Counter and Delta Queue
+
+The generation counter is the **primary** staleness mechanism. The `_sssp_delta`
+queue is an **additional** optimization for partial recomputation. They interact
+as follows:
+
+- **Full CSR rebuild** (ratio >= 30%): `generation_adj` is bumped. The
+  `_sssp_delta` queue is ignored entirely because the generation mismatch
+  already signals that a full SSSP rebuild is required.
+- **Selective block rebuild** (ratio < 5%) or **delta flush** (5% <= ratio < 30%):
+  `generation_adj` is NOT bumped. Instead, affected node indices are written to
+  `_sssp_delta`. The generation still matches, but the delta queue signals
+  partial staleness.
+
+This two-tier design means:
+1. A full CSR rebuild always forces a full SSSP rebuild (simple, correct).
+2. Small incremental CSR changes allow surgical SSSP recomputation (efficient).
+
 ### Staleness Check
 
 ```
@@ -347,10 +398,14 @@ On SSSP cache read:
     G_adj  = SELECT value FROM {name}_config WHERE key = 'generation_adj'
     G_sssp = SELECT value FROM {name}_config WHERE key = 'generation_sssp'
 
-    if G_sssp == G_adj:
-        cache is FRESH → read from _sssp
+    if G_sssp != G_adj:
+        cache is STALE (generation mismatch) -> full SSSP rebuild
     else:
-        cache is STALE → recompute, write to _sssp, set G_sssp = G_adj
+        check _sssp_delta for this namespace
+        if _sssp_delta is empty:
+            cache is FRESH -> read from _sssp
+        else:
+            cache is PARTIALLY STALE -> partial or full rebuild (see Section 5a)
 ```
 
 ### Namespace Scoping
@@ -379,12 +434,135 @@ SSSP rebuild occurs in these scenarios:
    the SSSP cache. The next TVF query detects staleness and recomputes.
 
 2. **TVF query on stale cache:** When `bet_filter` or `clo_filter` detects
-   `G_sssp < G_adj`, it recomputes all-pairs SSSP in-line and writes back
-   to the `_sssp` shadow table before returning results.
+   `G_sssp < G_adj` or entries in `_sssp_delta`, it recomputes the appropriate
+   SSSP sources in-line and writes back to the `_sssp` shadow table before
+   returning results.
 
 3. **Proactive SSSP rebuild:** A new command `INSERT INTO g(g) VALUES('rebuild_sssp')`
    explicitly rebuilds the SSSP cache. Useful after a series of edge insertions
    when the user knows queries are coming.
+
+---
+
+## 5a. SSSP Delta Queue
+
+### How CSR Rebuild Emits to `_sssp_delta`
+
+When the GII CSR is rebuilt (Phase 1 delta cascade), the rebuild emits affected
+node information into the `_sssp_delta` table. The emission strategy depends on
+the type of CSR rebuild:
+
+- **Selective block rebuild** (ratio < 5%): All node indices in the rebuilt blocks
+  are inserted into `_sssp_delta`. This is conservative -- not all nodes in the
+  block are necessarily affected, but determining exactly which ones are is
+  expensive.
+- **Delta flush** (5% <= ratio < 30%): All source and destination node indices
+  from the applied deltas are inserted into `_sssp_delta`.
+- **Full CSR rebuild** (ratio >= 30%): Generation counter is bumped. No entries
+  are written to `_sssp_delta` -- the generation mismatch signals full SSSP
+  invalidation.
+
+```c
+/* Called by gii_rebuild after CSR rebuild completes */
+static int sssp_delta_emit(sqlite3 *db, const char *vtab_name,
+                            int64_t namespace_id,
+                            const int32_t *affected_nodes, int count) {
+    sqlite3_stmt *stmt;
+    char *sql = sqlite3_mprintf(
+        "INSERT OR IGNORE INTO \"%w_sssp_delta\"(namespace_id, source_idx) "
+        "VALUES (?1, ?2)", vtab_name);
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) return rc;
+
+    for (int i = 0; i < count; i++) {
+        sqlite3_bind_int64(stmt, 1, namespace_id);
+        sqlite3_bind_int(stmt, 2, affected_nodes[i]);
+        sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+    }
+    sqlite3_finalize(stmt);
+    return SQLITE_OK;
+}
+```
+
+### SSSP Threshold-Based Rebuild Strategy
+
+When betweenness or closeness is invoked and the SSSP feature is enabled, the
+TVF checks the staleness state and decides on a rebuild strategy:
+
+1. **Generation match?** If `gen_sssp != gen_adj` -- full SSSP rebuild (all V sources).
+2. **`_sssp_delta` count?**
+   - `sssp_delta_ratio = |_sssp_delta for this namespace| / V`
+   - ratio < theta_sssp_selective (default 0.10): Recompute ONLY the stale sources
+     listed in `_sssp_delta`. Read other sources from `_sssp` cache.
+   - ratio >= theta_sssp_full (default 0.50): Full all-pairs SSSP rebuild (cheaper
+     than many individual recomputations at this point).
+
+### Correctness Caveats: Betweenness vs Closeness
+
+**Important caveat:** A single edge change can theoretically affect the shortest
+paths from ANY source, not just sources near the changed edge. The `_sssp_delta`
+approach is an optimization that trades theoretical correctness for practical
+performance. For most real-world workloads (sparse graphs, localized changes),
+recomputing only nearby sources gives correct results. For complete correctness,
+the user can force full rebuild via `INSERT INTO g(g) VALUES('rebuild_sssp')`.
+
+However, the correctness properties differ between betweenness and closeness:
+
+**For betweenness: always recompute all sources when any delta exists.**
+Betweenness centrality accumulates path-count contributions from ALL sources.
+If source 50000's shortest path changes because of an edge near source 0, the
+betweenness of intermediate nodes changes. Therefore, partial recomputation is
+INCORRECT for betweenness -- the delta queue tells us SOMETHING changed, but
+betweenness needs all-pairs. The optimization for betweenness is: if `_sssp_delta`
+is empty AND generation matches, it is a cache hit (zero recomputation). Any
+non-empty `_sssp_delta` triggers a full all-pairs SSSP rebuild for betweenness.
+
+**For closeness: can use partial recomputation.** Closeness of node v only depends
+on v's own SSSP (the sum of distances from v to all other nodes). So recomputing
+only stale sources and reading fresh sources from cache is correct. A changed
+edge near source 0 does not affect the closeness of source 50000 unless that
+edge lies on a shortest path FROM source 50000.
+
+Summary table:
+
+| TVF | Delta empty + gen match | Delta non-empty + gen match | Gen mismatch |
+|-----|------------------------|----------------------------|--------------|
+| Betweenness | Cache hit (0 work) | Full SSSP rebuild (all V) | Full SSSP rebuild (all V) |
+| Closeness | Cache hit (0 work) | Selective rebuild (stale only) | Full SSSP rebuild (all V) |
+
+### Event Pipeline Walkthrough: Betweenness
+
+1. User inserts 10 edges into namespace 42.
+2. CSR rebuild (delta flush) applies 10 deltas, writes back CSR.
+3. CSR rebuild identifies 20 affected nodes, INSERTs 20 rows into `_sssp_delta`.
+4. User queries `graph_betweenness` on the same GII.
+5. Betweenness checks: `_sssp_delta` has 20 entries -- at least one source is stale.
+6. Since betweenness needs all-pairs: recomputes ALL V sources, writes to `_sssp`,
+   clears `_sssp_delta`.
+7. Immediately re-query: `_sssp_delta` empty + generation matches -- full cache hit.
+
+### Event Pipeline Walkthrough: Closeness
+
+1. Same setup: 20 entries in `_sssp_delta` for namespace 42.
+2. User queries `graph_closeness`.
+3. Closeness checks: `_sssp_delta` has 20 entries, ratio = 20/5000 = 0.004 -- SELECTIVE.
+4. Read 4980 fresh rows from `_sssp` cache.
+5. Recompute 20 stale sources, update their rows in `_sssp`.
+6. Clear `_sssp_delta` for this namespace.
+7. Return closeness results.
+
+### Event Pipeline Walkthrough: Full Rebuild
+
+1. User runs `INSERT INTO g(g) VALUES('rebuild')` (explicit full CSR rebuild).
+2. `generation_adj` is bumped from 42 to 43.
+3. `_sssp_delta` is NOT written to (generation bump is sufficient).
+4. User queries `graph_betweenness`.
+5. Betweenness checks: `gen_sssp` (42) != `gen_adj` (43) -- generation mismatch.
+6. Full SSSP rebuild: recomputes all V sources, writes to `_sssp`, sets
+   `gen_sssp` = 43.
+7. Immediately re-query: `gen_sssp` == `gen_adj` and `_sssp_delta` empty -- cache hit.
 
 ---
 
@@ -393,8 +571,8 @@ SSSP rebuild occurs in these scenarios:
 ### Current Flow (bet_filter, lines 645-837)
 
 ```
-1. Parse argv → GraphLoadConfig
-2. Load graph → GraphData (from adjacency VT or raw SQL)
+1. Parse argv -> GraphLoadConfig
+2. Load graph -> GraphData (from GII or raw SQL)
 3. Allocate: CB[V], dist[V], sigma[V], delta[V], stack[V], pred[V]
 4. For each source s in {0..V-1} (or sampled subset):
    a. sssp_bfs/dijkstra(g, s, dist, sigma, pred, stack, &stack_size, direction)
@@ -406,23 +584,29 @@ SSSP rebuild occurs in these scenarios:
 ### Modified Flow (with SSSP cache)
 
 ```
-1. Parse argv → GraphLoadConfig
-2. Load graph → GraphData (from adjacency VT or raw SQL)
-3. Check if edge_table is a graph_adjacency VT with 'sssp' feature
-4. IF sssp cache exists AND is fresh:
+1. Parse argv -> GraphLoadConfig
+2. Load graph -> GraphData (from GII or raw SQL)
+3. Check if edge_table is a GII with 'sssp' feature
+4. IF sssp cache exists AND is fresh (gen match + _sssp_delta empty):
    a. Allocate: CB[V], delta[V], stack[V], pred[V]
    b. For each source s:
       i.   Read dist[V] and sigma[V] from _sssp shadow table
       ii.  Reconstruct stack[] by sorting reachable nodes by dist[] (ascending)
       iii. Compute pred[v] on-the-fly from dist[] and graph adjacency:
-           For each edge (v → w): if dist[w] == dist[v] + weight(v,w)
+           For each edge (v -> w): if dist[w] == dist[v] + weight(v,w)
                                    then v is a predecessor of w
       iv.  Backward accumulation (unchanged)
       v.   CB[w] += delta[w]
    c. Normalize, build results
-5. ELSE (no cache or stale):
+5. ELSE IF _sssp_delta non-empty (partial staleness):
+   a. Betweenness requires all-pairs: full SSSP rebuild
+   b. Original flow (steps 3-5 from current implementation)
+   c. Write all dist[] and sigma[] to _sssp shadow table
+   d. Clear _sssp_delta for this namespace
+   e. Update generation_sssp = generation_adj
+6. ELSE (no cache, gen mismatch, or no GII):
    a. Original flow (steps 3-5 from current implementation)
-   b. IF graph_adjacency VT with 'sssp' feature AND V <= max_sssp_nodes:
+   b. IF GII with 'sssp' feature AND V <= max_sssp_nodes:
       Write dist[] and sigma[] to _sssp shadow table after computation
       Update generation_sssp = generation_adj
 ```
@@ -438,7 +622,7 @@ and the graph's adjacency lists. This avoids caching O(VE) predecessor data.
  * For each node w, scan its incoming edges. If dist[v] + weight(v,w) == dist[w],
  * then v is a predecessor of w on a shortest path from s.
  *
- * Cost: O(E) per source — same as the original SSSP traversal.
+ * Cost: O(E) per source -- same as the original SSSP traversal.
  */
 static void reconstruct_predecessors(
     const GraphData *g, const double *dist,
@@ -495,7 +679,7 @@ The Brandes back-propagation requires nodes in reverse BFS/Dijkstra order
  * Unreachable nodes (dist < 0) are excluded.
  *
  * Uses a simple insertion sort since V is bounded by max_sssp_nodes (10K).
- * For V=10K, O(V^2) insertion sort takes ~0.1ms — negligible vs I/O.
+ * For V=10K, O(V^2) insertion sort takes ~0.1ms -- negligible vs I/O.
  */
 static int reconstruct_stack(const double *dist, int N, int *stack) {
     int count = 0;
@@ -525,8 +709,8 @@ static int reconstruct_stack(const double *dist, int N, int *stack) {
 ### Current Flow (clo_filter, lines 963-1101)
 
 ```
-1. Parse argv → GraphLoadConfig
-2. Load graph → GraphData
+1. Parse argv -> GraphLoadConfig
+2. Load graph -> GraphData
 3. Allocate: dist[V], sigma[V], stack[V], pred[V], closeness[V]
 4. For each source s in {0..V-1}:
    a. sssp_bfs/dijkstra(g, s, dist, sigma, pred, stack, &stack_size, direction)
@@ -543,25 +727,37 @@ pred structures.
 ### Modified Flow (with SSSP cache)
 
 ```
-1. Parse argv → GraphLoadConfig
-2. Load graph → GraphData
-3. Check if edge_table is a graph_adjacency VT with 'sssp' feature
-4. IF sssp cache exists AND is fresh:
+1. Parse argv -> GraphLoadConfig
+2. Load graph -> GraphData
+3. Check if edge_table is a GII with 'sssp' feature
+4. IF sssp cache exists AND is fresh (gen match + _sssp_delta empty):
    a. Allocate: closeness[V]
    b. For each source s:
-      i.   Read dist[V] from _sssp shadow table (skip sigma — not needed)
+      i.   Read dist[V] from _sssp shadow table (skip sigma -- not needed)
       ii.  Sum dist[i] for reachable nodes, count reachable
       iii. closeness[s] = reachable / sum_dist
    c. Build results
    NOTE: Zero SSSP computation. Cost is O(V^2) reads from shadow table.
-5. ELSE IF no cache, but shared SSSP module available:
+5. ELSE IF _sssp_delta non-empty (partial staleness):
    a. Allocate: closeness[V]
-   b. Init SsspWorkingSet with needs_brandes=0  ← KEY CHANGE
+   b. Init SsspWorkingSet with needs_brandes=0
+   c. For each source s:
+      IF s is in _sssp_delta:
+         i.   sssp_run(g, s, &ws, direction)
+         ii.  Write updated dist[] to _sssp
+      ELSE:
+         i.   Read dist[V] from _sssp cache
+      ii.  Sum dist[i], count reachable, compute closeness[s]
+   d. Clear _sssp_delta for this namespace
+   e. Build results
+6. ELSE IF no cache, but shared SSSP module available:
+   a. Allocate: closeness[V]
+   b. Init SsspWorkingSet with needs_brandes=0  <-- KEY CHANGE
       (only allocates dist[], skips sigma/pred/stack)
    c. For each source s:
       i.   sssp_run(g, s, &ws, direction)
       ii.  Sum dist[i], count reachable, compute closeness[s]
-   d. IF graph_adjacency VT with 'sssp' feature AND V <= max_sssp_nodes:
+   d. IF GII with 'sssp' feature AND V <= max_sssp_nodes:
       Write dist[] rows to _sssp (sigma=NULL for each row)
       Update generation_sssp
    e. Build results
@@ -603,10 +799,13 @@ The `_sssp` shadow table stores two BLOBs per source node: `distances`
 
 **Formula:** `V * V * sizeof(double) = V^2 * 8 bytes` per matrix.
 
+The `_sssp_delta` table has negligible storage overhead: at most V rows of
+(INTEGER, INTEGER) = 16 bytes per row = 16V bytes worst case.
+
 ### Configurable Threshold
 
 ```sql
-CREATE VIRTUAL TABLE g USING graph_adjacency(
+CREATE VIRTUAL TABLE g USING gii(
     edge_table='edges', src_col='src', dst_col='dst',
     features='sssp',
     max_sssp_nodes=5000   -- override default 10000
@@ -617,17 +816,17 @@ The `max_sssp_nodes` parameter (default: 10000) controls the upper bound.
 
 **Behavior when V > max_sssp_nodes:**
 
-- The `_sssp` shadow table is created (schema is fixed at VT creation time)
+- The `_sssp` and `_sssp_delta` shadow tables are created (schema is fixed at VT creation time)
 - The `_sssp` shadow table remains empty
 - The shared SSSP module is used for live computation (Option B behavior)
-- No error is raised — the feature silently degrades to uncached mode
+- No error is raised -- the feature silently degrades to uncached mode
 - The `_config` table stores `sssp_skipped_reason = 'node_count_exceeds_threshold'`
   so the user can diagnose why caching is not active
 
 **Behavior when V <= max_sssp_nodes:**
 
 - SSSP is cached on first betweenness or closeness query
-- Subsequent queries read from cache if generation is fresh
+- Subsequent queries read from cache if generation is fresh and `_sssp_delta` is empty
 - `INSERT INTO g(g) VALUES('rebuild_sssp')` forces explicit recomputation
 
 ### Disk vs Memory
@@ -642,7 +841,7 @@ Per-source: dist[V] + sigma[V] + pred[V] + stack[V] + delta[V]
 ```
 
 This is the same as the current implementation. The shadow table does not
-increase peak memory — it only adds disk I/O (which SQLite page cache
+increase peak memory -- it only adds disk I/O (which SQLite page cache
 amortizes).
 
 ---
@@ -715,14 +914,14 @@ Add `graph_sssp.h` to `HEADERS`.
 
 **File:** `scripts/generate_build.py`
 
-### Step 5: Add _sssp shadow table creation
+### Step 5: Add _sssp and _sssp_delta shadow table creation
 
-In `graph_adjacency.c`, extend `adjacency_create_shadow_tables()` to
-conditionally create the `_sssp` table when the `features` parameter
-includes `'sssp'`. This depends on Phase 1 adding `features` parsing.
+In `gii.c`, extend `gii_create_shadow_tables()` to conditionally create the
+`_sssp` and `_sssp_delta` tables when the `features` parameter includes
+`'sssp'`. This depends on Phase 1 adding `features` parsing.
 
 ```c
-/* In adjacency_create_shadow_tables(), after existing shadow tables: */
+/* In gii_create_shadow_tables(), after existing shadow tables: */
 if (params->features & FEATURE_SSSP) {
     sql = sqlite3_mprintf(
         "CREATE TABLE IF NOT EXISTS \"%w_sssp\" ("
@@ -735,15 +934,48 @@ if (params->features & FEATURE_SSSP) {
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK) return rc;
+
+    sql = sqlite3_mprintf(
+        "CREATE TABLE IF NOT EXISTS \"%w_sssp_delta\" ("
+        "  namespace_id INTEGER NOT NULL,"
+        "  source_idx   INTEGER NOT NULL,"
+        "  PRIMARY KEY (namespace_id, source_idx)"
+        ")", name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) return rc;
 }
 ```
 
-**File:** `src/graph_adjacency.c`
+**File:** `src/gii.c`
 
-### Step 6: Add SSSP cache population
+### Step 6: Add SSSP delta emission from CSR rebuild
 
-Create a new static function in `graph_adjacency.c` that populates the
-`_sssp` shadow table for a given namespace:
+Create the `sssp_delta_emit()` function in `gii.c` that is called after
+CSR rebuild completes. This function writes affected node indices to the
+`_sssp_delta` table based on the rebuild strategy:
+
+```c
+/*
+ * Emit affected node indices to _sssp_delta after CSR rebuild.
+ * Called only when features & FEATURE_SSSP is set.
+ */
+static int sssp_delta_emit(
+    sqlite3 *db, const char *vtab_name,
+    int64_t namespace_id,
+    const int32_t *affected_nodes, int count
+);
+```
+
+The caller (`gii_rebuild`) determines the affected nodes based on the
+rebuild strategy and passes them to this function.
+
+**File:** `src/gii.c`
+
+### Step 7: Add SSSP cache population
+
+Create a new static function in `gii.c` that populates the `_sssp` shadow
+table for a given namespace:
 
 ```c
 /*
@@ -759,20 +991,22 @@ static int sssp_cache_populate(
 );
 ```
 
-**File:** `src/graph_adjacency.c`
+**File:** `src/gii.c`
 
-### Step 7: Add SSSP cache read in bet_filter and clo_filter
+### Step 8: Add SSSP cache read in bet_filter and clo_filter
 
 Add helper functions that check for and read from the SSSP cache:
 
 ```c
 /*
- * Check if SSSP cache is available and fresh for the given adjacency VT.
+ * Check if SSSP cache is available and fresh for the given GII.
  * Returns 1 if cache hit, 0 if miss. On hit, *gen_sssp is set.
+ * Also checks _sssp_delta: returns 2 if partially stale (delta non-empty).
  */
 static int sssp_cache_check(
     sqlite3 *db, const char *vtab_name,
-    int64_t namespace_id, int64_t *gen_adj, int64_t *gen_sssp
+    int64_t namespace_id, int64_t *gen_adj, int64_t *gen_sssp,
+    int *delta_count
 );
 
 /*
@@ -786,15 +1020,32 @@ static int sssp_cache_read_row(
     double *dist_out, int dist_size,
     double *sigma_out, int sigma_size  /* sigma_out may be NULL */
 );
+
+/*
+ * Read all stale source indices from _sssp_delta for a namespace.
+ * Caller frees the returned array.
+ */
+static int sssp_delta_read(
+    sqlite3 *db, const char *vtab_name,
+    int64_t namespace_id,
+    int32_t **out_sources, int *out_count
+);
+
+/*
+ * Clear _sssp_delta entries for a namespace after recomputation.
+ */
+static int sssp_delta_clear(
+    sqlite3 *db, const char *vtab_name,
+    int64_t namespace_id
+);
 ```
 
 These helpers are called from `bet_filter` and `clo_filter` in
-`graph_centrality.c`, gated by the `is_graph_adjacency()` check that
-already exists.
+`graph_centrality.c`, gated by the `is_gii()` check that already exists.
 
 **File:** `src/graph_centrality.c`
 
-### Step 8: Add generation check logic
+### Step 9: Add generation check logic
 
 Add generation read/write functions that query `_config`:
 
@@ -810,28 +1061,35 @@ static int write_generation(
 );
 ```
 
-The `rebuild` command in `graph_adjacency.c` already increments
-`generation_adj`. Step 8 adds the corresponding reads in the TVF code
-and writes in the SSSP population code.
+The `rebuild` command in `gii.c` already increments `generation_adj`.
+Step 9 adds the corresponding reads in the TVF code and writes in the
+SSSP population code.
 
-**File:** `src/graph_adjacency.c` (write), `src/graph_centrality.c` (read)
+**File:** `src/gii.c` (write), `src/graph_centrality.c` (read)
 
-### Step 9: Add namespace_id scoping
+### Step 10: Add namespace_id scoping
 
-All SSSP operations (check, populate, read) include `namespace_id` in
-their WHERE clauses. When Phase 1 is not yet implemented (namespace_id is
-always 0), this is a no-op filter on the primary key.
+All SSSP operations (check, populate, read, delta emit, delta read, delta clear)
+include `namespace_id` in their WHERE clauses. When Phase 1 is not yet implemented
+(namespace_id is always 0), this is a no-op filter on the primary key.
 
 ```sql
 -- Read cache for namespace 0, source 42:
 SELECT distances, sigma FROM "{name}_sssp"
     WHERE namespace_id = 0 AND source_idx = 42;
 
+-- Read delta entries for namespace 3:
+SELECT source_idx FROM "{name}_sssp_delta"
+    WHERE namespace_id = 3;
+
 -- Invalidate cache for namespace 3:
 DELETE FROM "{name}_sssp" WHERE namespace_id = 3;
+
+-- Clear delta queue for namespace 3:
+DELETE FROM "{name}_sssp_delta" WHERE namespace_id = 3;
 ```
 
-**Files:** `src/graph_adjacency.c`, `src/graph_centrality.c`
+**Files:** `src/gii.c`, `src/graph_centrality.c`
 
 ---
 
@@ -861,34 +1119,46 @@ DELETE FROM "{name}_sssp" WHERE namespace_id = 3;
 
 ### Python Integration Tests
 
-6. **Betweenness with SSSP cache matches without cache.** Create a graph
-   adjacency VT with `features='sssp'`. Run betweenness. Then create the same
-   graph as a plain edge table. Run betweenness. Assert identical results
-   (within floating-point tolerance).
+6. **Betweenness with SSSP cache matches without cache.** Create a GII
+   with `features='sssp'`. Run betweenness. Then create the same graph as
+   a plain edge table. Run betweenness. Assert identical results (within
+   floating-point tolerance).
 
 7. **Closeness with SSSP cache matches without cache.** Same comparison
    as test 6 but for closeness.
 
 8. **Performance: second call is faster.** Run betweenness twice on the same
-   adjacency VT. Measure wall time. Assert the second call is measurably
-   faster (cache hit avoids SSSP computation). Use a graph large enough
-   that SSSP is non-trivial (V >= 500).
+   GII. Measure wall time. Assert the second call is measurably faster
+   (cache hit avoids SSSP computation). Use a graph large enough that SSSP
+   is non-trivial (V >= 500).
 
-9. **Generation staleness.** Create adjacency VT with `features='sssp'`.
-   Run betweenness (populates cache). Insert a new edge. Run `rebuild`.
-   Run betweenness again. Verify the cache was invalidated (generation
-   mismatch) and results reflect the new edge.
+9. **Generation staleness.** Create GII with `features='sssp'`. Run
+   betweenness (populates cache). Insert a new edge. Run `rebuild`. Run
+   betweenness again. Verify the cache was invalidated (generation mismatch)
+   and results reflect the new edge.
 
-10. **Namespace scoping.** Create adjacency VT with `features='sssp'` and
+10. **Delta queue partial rebuild (closeness).** Create GII with
+    `features='sssp'`. Run closeness (populates cache). Insert a few edges
+    (triggering delta flush, not full rebuild). Run closeness again. Verify
+    that `_sssp_delta` was consumed and results reflect the new edges.
+    Verify that only the stale sources were recomputed (check `_sssp_delta`
+    is empty after query).
+
+11. **Delta queue full rebuild (betweenness).** Same setup as test 10 but
+    query betweenness instead. Verify that betweenness triggers a full SSSP
+    rebuild (all sources recomputed) even though only a few deltas exist.
+    Verify results are correct.
+
+12. **Namespace scoping.** Create GII with `features='sssp'` and
     `namespace_cols='project_id'`. Populate two namespaces. Run betweenness
     on namespace A. Modify namespace B's edges. Verify namespace A's SSSP
-    cache is still fresh (independent generations).
+    cache is still fresh (independent generations and independent delta queues).
 
-11. **V > max_sssp_nodes.** Create an adjacency VT with `max_sssp_nodes=10`
-    and a graph with 50 nodes. Run betweenness. Verify `_sssp` table is
-    empty (caching skipped). Verify results are still correct (live computation).
+13. **V > max_sssp_nodes.** Create a GII with `max_sssp_nodes=10` and a
+    graph with 50 nodes. Run betweenness. Verify `_sssp` table is empty
+    (caching skipped). Verify results are still correct (live computation).
 
-12. **Closeness does not allocate sigma.** This is a behavioral test: run
+14. **Closeness does not allocate sigma.** This is a behavioral test: run
     closeness on a plain edge table (no VT, no cache). Verify correct results.
     The memory savings are verified by ASan (no leaks of unused sigma/pred
     arrays).
@@ -939,4 +1209,4 @@ DELETE FROM "{name}_sssp" WHERE namespace_id = 3;
 
 ---
 
-**Prev:** [Phase 1 — Scoped Adjacency VT](./01_scoped_adjacency_vt.md) | **Next:** [Phase 3 — Components Shadow Table](./03_components_shadow_tables.md)
+**Prev:** [Phase 1 -- Scoped GII](./01_scoped_adjacency_vt.md) | **Next:** [Phase 3 -- Components Shadow Table](./03_components_shadow_tables.md)

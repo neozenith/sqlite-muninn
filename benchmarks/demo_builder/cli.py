@@ -2,14 +2,13 @@
 
 Subcommands:
     manifest     Show permutation status and generate commands
-    build        Build demo database(s)
+    build        Build a single demo database
     list-books   List discovered books with metadata
     list-models  List available embedding models
 
 Usage:
     uv run -m benchmarks.demo_builder manifest
     uv run -m benchmarks.demo_builder manifest --missing --commands
-    uv run -m benchmarks.demo_builder build --output-folder wasm/assets/
     uv run -m benchmarks.demo_builder build --output-folder wasm/assets/ --book-id 3300 --embedding-model MiniLM
     uv run -m benchmarks.demo_builder list-books
     uv run -m benchmarks.demo_builder list-models
@@ -21,7 +20,6 @@ import argparse
 import logging
 import shutil
 import sys
-import time
 from pathlib import Path
 
 from benchmarks.demo_builder.constants import EMBEDDING_MODELS, MUNINN_PATH, PROJECT_ROOT
@@ -58,13 +56,13 @@ def _cmd_manifest(args: argparse.Namespace) -> None:
 def _cmd_build(args: argparse.Namespace) -> None:
     """Handle the 'build' subcommand.
 
-    Deferred imports: models.py, build.py, and phases.py are only
-    imported here so that info subcommands work without ML dependencies.
+    Builds a single permutation (book_id + embedding_model).
+    Deferred import: build.py (and thus phases/) is only imported here
+    so that info subcommands work without ML dependencies.
     """
     from benchmarks.demo_builder.build import DemoBuild  # noqa: E402 — deferred for ML deps
-    from benchmarks.demo_builder.models import ModelPool  # noqa: E402 — deferred for ML deps
 
-    # ── Discover available books ──────────────────────────────────
+    # ── Validate book exists ──────────────────────────────────────
     available_books = discover_book_ids()
     if not available_books:
         log.error(
@@ -76,70 +74,40 @@ def _cmd_build(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    if args.book_id is not None:
-        assert args.book_id in available_books, f"Book {args.book_id} not available. Discovered: {available_books}"
-        book_ids = [args.book_id]
-    else:
-        book_ids = available_books
+    assert args.book_id in available_books, f"Book {args.book_id} not available. Discovered: {sorted(available_books)}"
 
-    model_names = [args.embedding_model] if args.embedding_model else list(EMBEDDING_MODELS.keys())
-
-    # ── Build permutation list ────────────────────────────────────
+    # ── Handle existing output / --force ──────────────────────────
     output_folder = _resolve_output_folder(args)
+    perm_id = f"{args.book_id}_{args.embedding_model}"
+    final_path = output_folder / f"{perm_id}.db"
 
-    permutations: list[tuple[int, str]] = []
-    skipped: list[str] = []
-    for bid in book_ids:
-        for mname in model_names:
-            perm_id = f"{bid}_{mname}"
-            out = output_folder / f"{perm_id}.db"
-            if out.exists() and not args.force:
-                skipped.append(out.name)
-                continue
-            if out.exists() and args.force:
-                log.info("Will overwrite: %s", out.name)
-                out.unlink()
-            # Clean stale staging dir on --force
-            stale_staging = output_folder / "_build" / perm_id
-            if stale_staging.exists() and args.force:
-                log.info("Removing stale staging dir: %s", stale_staging)
-                shutil.rmtree(stale_staging)
-            permutations.append((bid, mname))
-
-    if skipped:
-        log.info(
-            "Skipping %d existing database(s): %s (use --force to overwrite)",
-            len(skipped),
-            ", ".join(skipped),
-        )
-
-    if not permutations:
-        log.info("Nothing to build -- all databases already exist.")
+    if final_path.exists() and not args.force:
+        log.info("Already exists: %s (use --force to overwrite)", final_path.name)
         return
 
-    log.info("Building %d database(s):", len(permutations))
-    for bid, mname in permutations:
-        log.info("  %s_%s", bid, mname)
+    if final_path.exists() and args.force:
+        log.info("Will overwrite: %s", final_path.name)
+        final_path.unlink()
+
+    # Clean stale staging dir on --force
+    stale_staging = output_folder / "_build" / perm_id
+    if stale_staging.exists() and args.force:
+        log.info("Removing stale staging dir: %s", stale_staging)
+        shutil.rmtree(stale_staging)
 
     # ── Pre-flight checks ─────────────────────────────────────────
     assert Path(MUNINN_PATH).with_suffix(".dylib").exists() or Path(MUNINN_PATH).with_suffix(".so").exists(), (
         f"Muninn extension not found at {MUNINN_PATH}. Run: make all"
     )
 
-    # ── Pre-load ML models (shared across all permutations) ──────
-    needed_st_models = sorted({m for _, m in permutations})
-    pool = ModelPool(needed_st_models)
-    pool.load_all()
-
-    # ── Build each permutation ────────────────────────────────────
-    t_total = time.monotonic()
-    for i, (bid, mname) in enumerate(permutations, 1):
-        log.info("\n[%d/%d] Building %s_%s", i, len(permutations), bid, mname)
-        build = DemoBuild(bid, mname, output_folder, pool)
+    # ── Build ─────────────────────────────────────────────────────
+    log.info("Building %s_%s", args.book_id, args.embedding_model)
+    build = DemoBuild(args.book_id, args.embedding_model, output_folder)
+    build.setup()
+    try:
         build.run()
-
-    elapsed = time.monotonic() - t_total
-    log.info("All done! Built %d database(s) in %.1fs", len(permutations), elapsed)
+    finally:
+        build.teardown()
 
 
 def main() -> None:
@@ -173,7 +141,7 @@ def main() -> None:
     )
 
     # ── build ─────────────────────────────────────────────────────
-    build_p = subparsers.add_parser("build", help="Build demo database(s)")
+    build_p = subparsers.add_parser("build", help="Build a single demo database")
     build_p.add_argument(
         "--output-folder",
         type=str,
@@ -183,15 +151,15 @@ def main() -> None:
     build_p.add_argument(
         "--book-id",
         type=int,
-        default=None,
-        help="Filter to a specific Gutenberg book ID (default: all discovered)",
+        required=True,
+        help="Gutenberg book ID to build",
     )
     build_p.add_argument(
         "--embedding-model",
         type=str,
-        default=None,
+        required=True,
         choices=list(EMBEDDING_MODELS.keys()),
-        help="Filter to a specific embedding model (default: all models)",
+        help="Embedding model to use",
     )
     build_p.add_argument("--force", action="store_true", help="Overwrite existing output files")
 
