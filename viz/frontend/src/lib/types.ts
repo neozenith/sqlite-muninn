@@ -188,6 +188,8 @@ export interface KGSearchResult {
   vss_results: KGSearchVssResult[]
   graph_nodes: KGSearchGraphNode[]
   graph_edges: KGSearchGraphEdge[]
+  node_community?: Record<string, number>
+  community_count?: number
 }
 
 export interface StageItemsResponse {

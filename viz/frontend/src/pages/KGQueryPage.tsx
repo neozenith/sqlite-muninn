@@ -12,7 +12,8 @@ import { DEFAULT_FCOSE_PARAMS, toLayoutOptions } from '@/lib/fcose'
 import type { FcoseParams } from '@/lib/fcose'
 import { useKGSearch } from '@/hooks/useKGPipeline'
 import type { KGSearchResult, EmbeddingPoint } from '@/lib/types'
-import type { ElementDefinition } from 'cytoscape'
+import { applyCommunityColors, applyCommunityGrouping } from '@/lib/transforms/cytoscape'
+import type { CytoscapeElement } from '@/lib/transforms/cytoscape'
 
 /**
  * Rank-based color gradient: red (top) → orange → purple (lowest).
@@ -47,33 +48,30 @@ function toEmbeddingPoints(result: KGSearchResult): EmbeddingPoint[] {
 }
 
 /** Build Cytoscape elements from graph search results. */
-function toCytoscapeElements(result: KGSearchResult): ElementDefinition[] {
-  const elements: ElementDefinition[] = []
+function toCytoscapeElements(result: KGSearchResult): CytoscapeElement[] {
+  const elements: CytoscapeElement[] = []
   const nodeSet = new Set<string>()
 
   for (const n of result.graph_nodes) {
     nodeSet.add(n.name)
     elements.push({
-      group: 'nodes',
       data: {
         id: n.name,
         label: n.name,
         size: n.is_anchor ? 40 : 20 + Math.min(n.similarity, 1) * 20,
         color: n.is_anchor ? '#f87171' : n.similarity > 0.5 ? '#f59e0b' : n.similarity > 0.2 ? '#8b5cf6' : '#6b7280',
       },
-      classes: n.is_anchor ? 'query-node' : '',
     })
   }
 
   for (const e of result.graph_edges) {
     if (nodeSet.has(e.src) && nodeSet.has(e.dst)) {
       elements.push({
-        group: 'edges',
         data: {
           id: `${e.src}-${e.rel}-${e.dst}`,
           source: e.src,
           target: e.dst,
-          label: e.rel || '',
+          weight: 1,
         },
       })
     }
@@ -120,7 +118,16 @@ export function KGQueryPage() {
   // Derived data from search results
   const embeddingPoints = useMemo(() => (kgSearch.data ? toEmbeddingPoints(kgSearch.data) : []), [kgSearch.data])
 
-  const graphElements = useMemo(() => (kgSearch.data ? toCytoscapeElements(kgSearch.data) : []), [kgSearch.data])
+  const graphElements = useMemo(() => {
+    if (!kgSearch.data) return []
+    let elements = toCytoscapeElements(kgSearch.data)
+    const nc = kgSearch.data.node_community
+    if (nc && Object.keys(nc).length > 0) {
+      elements = applyCommunityColors(elements, nc)
+      elements = applyCommunityGrouping(elements, nc)
+    }
+    return elements
+  }, [kgSearch.data])
 
   const hasResults = kgSearch.data != null
 

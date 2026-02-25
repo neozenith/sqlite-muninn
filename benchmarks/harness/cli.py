@@ -1,4 +1,4 @@
-"""CLI entry point: `python -m benchmarks.harness.cli`
+"""CLI entry point: `uv run -m benchmarks.harness`
 
 Four subcommands:
     prep        — Download models, texts, build caches
@@ -21,8 +21,8 @@ def _cmd_prep(args):
     target = args.prep_target
 
     if target is None:
-        print("Usage: benchmarks.harness.cli prep {vectors,texts,kg-chunks,kg,gguf,all}")
-        print("Run 'benchmarks.harness.cli prep --help' for details.")
+        print("Usage: benchmarks.harness prep {vectors,texts,kg-chunks,kg,gguf,all}")
+        print("Run 'benchmarks.harness prep --help' for details.")
         sys.exit(1)
 
     status_only = getattr(args, "status", False)
@@ -159,7 +159,7 @@ def _cmd_manifest(args):
         # Print runnable commands (sorted within category, categories in alpha order)
         force_suffix = " --force" if getattr(args, "force", False) else ""
         for s in flat_entries:
-            print(f"uv run -m benchmarks.harness.cli benchmark --id {s['permutation_id']}{force_suffix}")
+            print(f"uv run -m benchmarks.harness benchmark --id {s['permutation_id']}{force_suffix}")
         return
 
     total_done = sum(1 for s in flat_entries if s["done"])

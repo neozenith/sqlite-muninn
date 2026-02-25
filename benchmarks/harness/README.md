@@ -36,39 +36,39 @@ Build the muninn extension first, then run the full pipeline:
 make all
 
 # 2. Prepare vector caches (downloads models + embeds datasets)
-uv run -m benchmarks.harness.cli prep vectors
+uv run -m benchmarks.harness prep vectors
 
 # 3. See what needs to run
-uv run -m benchmarks.harness.cli manifest --missing
+uv run -m benchmarks.harness manifest --missing
 
 # 4. Run a single benchmark
-uv run -m benchmarks.harness.cli benchmark --id vss_muninn-hnsw_MiniLM_ag-news_n1000
+uv run -m benchmarks.harness benchmark --id vss_muninn-hnsw_MiniLM_ag-news_n1000
 
 # 5. Generate analysis charts
-uv run -m benchmarks.harness.cli analyse
+uv run -m benchmarks.harness analyse
 ```
 
 To run all missing benchmarks in sequence:
 
 ```bash
-uv run -m benchmarks.harness.cli manifest --missing --commands | sh
+uv run -m benchmarks.harness manifest --missing --commands | sh
 ```
 
 ## CLI Reference
 
-Invoke via `uv run -m benchmarks.harness.cli <subcommand>`.
+Invoke via `uv run -m benchmarks.harness <subcommand>`.
 
 ### prep -- Prepare data caches
 
 Downloads models, embeds text datasets, and builds `.npy` vector caches.
 
 ```bash
-uv run -m benchmarks.harness.cli prep vectors              # Embed all models x datasets
-uv run -m benchmarks.harness.cli prep vectors --model MiniLM  # One model only
-uv run -m benchmarks.harness.cli prep texts                # Download Gutenberg texts
-uv run -m benchmarks.harness.cli prep kg-chunks            # Chunk texts for KG extraction
-uv run -m benchmarks.harness.cli prep er-datasets          # Prepare entity resolution datasets
-uv run -m benchmarks.harness.cli prep all                  # Everything
+uv run -m benchmarks.harness prep vectors              # Embed all models x datasets
+uv run -m benchmarks.harness prep vectors --model MiniLM  # One model only
+uv run -m benchmarks.harness prep texts                # Download Gutenberg texts
+uv run -m benchmarks.harness prep kg-chunks            # Chunk texts for KG extraction
+uv run -m benchmarks.harness prep er-datasets          # Prepare entity resolution datasets
+uv run -m benchmarks.harness prep all                  # Everything
 ```
 
 ### manifest -- Show completion status
@@ -76,11 +76,11 @@ uv run -m benchmarks.harness.cli prep all                  # Everything
 Lists all registered permutations and their done/missing status.
 
 ```bash
-uv run -m benchmarks.harness.cli manifest                  # Full status table
-uv run -m benchmarks.harness.cli manifest --missing        # Only incomplete
-uv run -m benchmarks.harness.cli manifest --category vss   # Filter by category
-uv run -m benchmarks.harness.cli manifest --commands       # Print runnable commands
-uv run -m benchmarks.harness.cli manifest --sort name      # Alphabetical (default: size)
+uv run -m benchmarks.harness manifest                  # Full status table
+uv run -m benchmarks.harness manifest --missing        # Only incomplete
+uv run -m benchmarks.harness manifest --category vss   # Filter by category
+uv run -m benchmarks.harness manifest --commands       # Print runnable commands
+uv run -m benchmarks.harness manifest --sort name      # Alphabetical (default: size)
 ```
 
 ### benchmark -- Run a single permutation
@@ -88,7 +88,7 @@ uv run -m benchmarks.harness.cli manifest --sort name      # Alphabetical (defau
 Executes one Treatment by its `permutation_id`:
 
 ```bash
-uv run -m benchmarks.harness.cli benchmark --id vss_muninn-hnsw_MiniLM_ag-news_n5000
+uv run -m benchmarks.harness benchmark --id vss_muninn-hnsw_MiniLM_ag-news_n5000
 ```
 
 The harness creates `results/<permutation_id>/db.sqlite`, runs setup/run/teardown with timing, and appends a JSONL record to `results/<category>_<variant>.jsonl`.
@@ -98,9 +98,9 @@ The harness creates `results/<permutation_id>/db.sqlite`, runs setup/run/teardow
 Aggregates JSONL results and renders Plotly charts:
 
 ```bash
-uv run -m benchmarks.harness.cli analyse                   # All categories
-uv run -m benchmarks.harness.cli analyse --category vss    # One category
-uv run -m benchmarks.harness.cli analyse --render-docs     # Also render Jinja2 doc templates
+uv run -m benchmarks.harness analyse                   # All categories
+uv run -m benchmarks.harness analyse --category vss    # One category
+uv run -m benchmarks.harness analyse --render-docs     # Also render Jinja2 doc templates
 ```
 
 ## Architecture
@@ -289,7 +289,7 @@ Add `perms.extend(_my_category_permutations())` to `all_permutations()`.
 4. **Verify** with:
 
 ```bash
-uv run -m benchmarks.harness.cli manifest --category my-category
+uv run -m benchmarks.harness manifest --category my-category
 ```
 
 ## Directory Layout
@@ -297,7 +297,7 @@ uv run -m benchmarks.harness.cli manifest --category my-category
 ```
 benchmarks/harness/
     __init__.py             Package init
-    __main__.py             Entry point: python -m benchmarks.harness.cli
+    __main__.py             Entry point: uv run -m benchmarks.harness
     cli.py                  Argparse CLI with prep/manifest/benchmark/analyse subcommands
     common.py               Shared utilities: pack_vector, load_muninn, graph generators, constants
     harness.py              Treatment execution engine (setup -> run -> teardown lifecycle)

@@ -11,15 +11,15 @@ from benchmarks.harness.common import PROJECT_ROOT
 
 
 def run_cli(*args, timeout=30):
-    """Run benchmarks.harness.cli as a subprocess with correct CWD.
+    """Run benchmarks.harness as a subprocess with correct CWD.
 
     When tests are invoked via `make -C benchmarks/harness`, the CWD is
-    benchmarks/harness/ — but `python -m benchmarks.harness.cli` needs
+    benchmarks/harness/ — but `uv run -m benchmarks.harness` needs
     the project root on sys.path.  This helper ensures the subprocess
     always starts from the project root.
     """
     return subprocess.run(
-        [sys.executable, "-m", "benchmarks.harness.cli", *args],
+        [sys.executable, "-m", "benchmarks.harness", *args],
         capture_output=True,
         text=True,
         timeout=timeout,

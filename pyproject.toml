@@ -35,7 +35,7 @@ sqlite_muninn = ["*.so", "*.dylib", "*.dll"]
 # Development dependency groups (not package dependencies)
 [dependency-groups]
 benchmark = [
-    "numpy>=2.0",
+    "numpy>=2.0,<2.4",
     "numba>=0.60",
     "umap-learn>=0.5.7",
     "plotly>=6.5.2",
@@ -51,7 +51,11 @@ benchmark = [
     "sentence-transformers>=5.2.2",
     "gliner",
     "glirel",
+    "loguru",
     "spacy",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "en-core-web-md @ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl",
+    "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
     "textacy",
     "recordlinkage",
     "llama-cpp-python>=0.3.16",
@@ -69,6 +73,7 @@ dev = [
     "gcovr>=8.6",
     "git-cliff>=2.12.0",
     "mypy>=1.19.1",
+    "pip>=26.0.1",
     "pytest>=8.0",
     "pytest-cov>=7.0.0",
     "ruff>=0.15.0",

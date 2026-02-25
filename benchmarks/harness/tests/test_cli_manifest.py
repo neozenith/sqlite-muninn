@@ -25,7 +25,7 @@ class TestManifestCLI:
         """--commands should output runnable benchmark commands."""
         result = run_cli("manifest", "--missing", "--category", "vss", "--commands")
         assert result.returncode == 0
-        assert "benchmarks.harness.cli benchmark --id" in result.stdout
+        assert "benchmarks.harness benchmark --id" in result.stdout
         # Should have one line per missing permutation
         lines = [line for line in result.stdout.strip().split("\n") if line.strip()]
         assert len(lines) > 0

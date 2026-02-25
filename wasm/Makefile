@@ -19,7 +19,7 @@ SQLITE_SRC   = build/sqlite3.c
 WASM_JS      = build/muninn_sqlite3.js
 WASM_BIN     = build/muninn_sqlite3.wasm
 DEMO_DB	  	 = assets/3300.db
-DEMO_DB_BUILD = ../benchmarks/kg/3300.db
+DEMO_DB_BUILD = assets/3300.db
 
 # llama.cpp WASM static libraries (build-full only)
 LLAMA_DIR        = ../vendor/llama.cpp
@@ -95,17 +95,18 @@ build-full: $(SQLITE_SRC) $(LLAMA_WASM_LIBS)       ## Build full WASM (with llam
 	@echo "WASM full build complete:"
 	@ls -lh $(WASM_JS) $(WASM_BIN)
 
-build: build-lite                                  ## Build WASM module (lite by default)
+build: build-full                                  ## Build WASM module (full by default)
 
+$(WASM_JS): build
+$(WASM_BIN): build
 ######################################################################
 # DEV
 ######################################################################
-$(DEMO_DB_BUILD):
-	make -C ../benchmarks kg-demo
+	
 
-$(DEMO_DB): $(DEMO_DB_BUILD)   ## Download demo DB if missing
+$(DEMO_DB): ## Download demo DB if missing
 	@mkdir -p $(dir $@)
-	cp $< $@
+	make -C .. demo-db
 	@echo "Demo DB ready at $@"
 
 dev: build $(DEMO_DB)                                         ## Start dev server on port 8300
@@ -116,10 +117,10 @@ dev: build $(DEMO_DB)                                         ## Start dev serve
 # DIST
 ######################################################################
 
-dist: $(WASM_JS)                                   ## Copy WASM artifacts to ../dist/
+dist: $(WASM_JS) $(WASM_BIN)                                   ## Copy WASM artifacts to ../dist/
 	@mkdir -p ../dist/nodejs/platforms/wasm/
-	cp build/muninn_sqlite3.js ../dist/nodejs/platforms/wasm/
-	cp build/muninn_sqlite3.wasm ../dist/nodejs/platforms/wasm/
+	cp $(WASM_JS) ../dist/nodejs/platforms/wasm/
+	cp $(WASM_BIN) ../dist/nodejs/platforms/wasm/
 	@echo "WASM artifacts copied to dist/"
 	@ls -lh ../dist/nodejs/platforms/wasm/muninn_sqlite3.*
 

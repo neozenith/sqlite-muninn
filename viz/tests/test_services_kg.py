@@ -8,11 +8,16 @@ try:
 except ImportError:
     import sqlite3
 
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+
 from server.services.kg import (
     _build_n2v_rowid_map,
     get_pipeline_summary,
     get_stage_detail,
     run_graphrag_query,
+    run_kg_search,
 )
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -457,4 +462,107 @@ def test_graphrag_query_no_entity_clusters(tmp_path: pathlib.Path) -> None:
     result = run_graphrag_query(conn, "test")
     assert result["stages"]["1_fts_chunks"]["count"] > 0
     assert result["stages"]["2_seed_entities"]["count"] == 0
+    conn.close()
+
+
+# --- run_kg_search ---
+
+
+def _make_kg_search_conn(tmp_path: pathlib.Path) -> sqlite3.Connection:
+    """Create a connection with entities_vec, entity_vec_map, relations for KG search tests."""
+    db_path = str(tmp_path / "kg_search.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.enable_load_extension(True)
+    conn.load_extension(EXTENSION_PATH)
+
+    # Chunks + FTS
+    conn.execute("CREATE TABLE chunks (chunk_id INTEGER PRIMARY KEY, text TEXT)")
+    conn.executemany(
+        "INSERT INTO chunks VALUES (?, ?)",
+        [(1, "Adam Smith wrote about the division of labor."), (2, "Free trade promotes economic growth.")],
+    )
+    conn.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id, text)")
+    conn.executemany(
+        "INSERT INTO chunks_fts VALUES (?, ?)",
+        [(1, "Adam Smith wrote about the division of labor."), (2, "Free trade promotes economic growth.")],
+    )
+
+    # HNSW entity embeddings (4-dim for test simplicity)
+    conn.execute("""
+        CREATE VIRTUAL TABLE entities_vec USING hnsw_index(
+            dimensions=4, metric='cosine', m=8, ef_construction=50
+        )
+    """)
+    vecs = [
+        (1, struct.pack("4f", 1.0, 0.0, 0.0, 0.0)),
+        (2, struct.pack("4f", 0.9, 0.1, 0.0, 0.0)),
+        (3, struct.pack("4f", 0.0, 1.0, 0.0, 0.0)),
+    ]
+    for rowid, vec in vecs:
+        conn.execute("INSERT INTO entities_vec (rowid, vector) VALUES (?, ?)", (rowid, vec))
+
+    # Entity vec map
+    conn.execute("CREATE TABLE entity_vec_map (rowid INTEGER PRIMARY KEY, name TEXT)")
+    conn.executemany(
+        "INSERT INTO entity_vec_map VALUES (?, ?)",
+        [(1, "Adam Smith"), (2, "division of labor"), (3, "free trade")],
+    )
+
+    # Relations
+    conn.execute("CREATE TABLE relations (src TEXT, dst TEXT, rel_type TEXT, weight REAL)")
+    conn.executemany(
+        "INSERT INTO relations VALUES (?, ?, ?, ?)",
+        [
+            ("Adam Smith", "division of labor", "wrote_about", 1.0),
+            ("Adam Smith", "free trade", "promoted", 1.0),
+            ("division of labor", "free trade", "related_to", 1.0),
+        ],
+    )
+    conn.commit()
+    return conn
+
+
+def test_kg_search_returns_community_data(tmp_path: pathlib.Path) -> None:
+    """run_kg_search returns node_community and community_count with graph results."""
+    conn = _make_kg_search_conn(tmp_path)
+
+    # Mock embedding model to return a 4-dim vector close to "Adam Smith"
+    mock_model = MagicMock()
+    mock_model.encode.return_value = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+
+    with patch("server.services.kg._get_embedding_model", return_value=mock_model):
+        result = run_kg_search(conn, "Adam Smith")
+
+    assert "node_community" in result
+    assert "community_count" in result
+    assert isinstance(result["node_community"], dict)
+    assert isinstance(result["community_count"], int)
+
+    # With 3 connected nodes and depth 3, BFS should find all of them
+    assert len(result["graph_nodes"]) > 0
+    # Leiden should assign communities to BFS nodes
+    if result["graph_nodes"]:
+        assert result["community_count"] >= 1
+        for name in result["node_community"]:
+            assert isinstance(result["node_community"][name], int)
+    conn.close()
+
+
+def test_kg_search_community_empty_without_graph(tmp_path: pathlib.Path) -> None:
+    """run_kg_search returns empty community data when graph search has no results."""
+    db_path = str(tmp_path / "no_graph.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.enable_load_extension(True)
+    conn.load_extension(EXTENSION_PATH)
+    conn.execute("CREATE TABLE chunks (chunk_id INTEGER PRIMARY KEY, text TEXT)")
+    conn.commit()
+
+    # No embedding model → no graph search → no communities
+    with patch("server.services.kg._get_embedding_model", side_effect=RuntimeError("no model")):
+        result = run_kg_search(conn, "test query")
+
+    assert result["node_community"] == {}
+    assert result["community_count"] == 0
     conn.close()

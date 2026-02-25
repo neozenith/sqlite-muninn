@@ -728,7 +728,7 @@ def run_kg_search(
             # Query 1: Get nodes via CTE (references virtual tables once)
             rows = conn.execute(
                 _CTE_NODES_SQL,
-                (query_blob, 50, 1),
+                (query_blob, 50, 3),
             ).fetchall()
             node_names: list[str] = []
             for row in rows:
@@ -762,5 +762,23 @@ def run_kg_search(
             log.warning("CTE graph search failed: %s", e)
     result["graph_nodes"] = graph_nodes
     result["graph_edges"] = graph_edges
+
+    # 4. Leiden community detection scoped to BFS nodes
+    node_community: dict[str, int] = {}
+    if graph_nodes and _table_exists(conn, "relations"):
+        try:
+            node_set = {n["name"] for n in graph_nodes}
+            leiden_rows = conn.execute(
+                "SELECT node, community_id FROM graph_leiden("
+                "  'relations', 'src', 'dst', 'both', 1.0"
+                ")"
+            ).fetchall()
+            for row in leiden_rows:
+                if row["node"] in node_set:
+                    node_community[row["node"]] = row["community_id"]
+        except Exception as e:
+            log.warning("Leiden community detection failed: %s", e)
+    result["node_community"] = node_community
+    result["community_count"] = len(set(node_community.values())) if node_community else 0
 
     return result

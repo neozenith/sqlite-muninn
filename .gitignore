@@ -80,3 +80,4 @@ docs/benchmarks/refactored_output/
 .env
 
 .hf_cache/
+wasm/assets/
