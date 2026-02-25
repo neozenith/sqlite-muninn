@@ -29,9 +29,9 @@ class TestNerAdapters:
     def test_fts5_adapter_is_concrete(self):
         assert NER_ADAPTERS["fts5"] is not None
 
-    def test_missing_adapters_are_none(self):
-        for slug in ["gliner_medium-v2.1", "gliner_large-v2.1", "numind_NuNerZero", "gner-t5-base", "gner-t5-large"]:
-            assert NER_ADAPTERS[slug] is None
+    def test_all_adapters_are_callable(self):
+        for slug, factory in NER_ADAPTERS.items():
+            assert callable(factory), f"NER_ADAPTERS[{slug!r}] is not callable: {factory}"
 
 
 class TestDataSourceParsing:

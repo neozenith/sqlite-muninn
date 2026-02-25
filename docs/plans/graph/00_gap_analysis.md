@@ -109,7 +109,7 @@ must also be namespace-scoped.
 
 **Current state:** Zero namespace awareness in any shadow table schema.
 
-**Detailed plan:** [Phase 1: Scoped GII](./01_scoped_adjacency_vt.md)
+**Detailed plan:** [Phase 1-2: GII Core + SSSP + Session-Log KG](./01_gii_sssp_session_kg.md)
 
 ---
 
@@ -128,7 +128,7 @@ cache when fresh.
 **Current state:** SSSP is re-computed from scratch on every betweenness/closeness
 TVF invocation. No shared module. No caching.
 
-**Detailed plan:** [Phase 2: SSSP Shadow Tables](./02_sssp_shadow_tables.md)
+**Detailed plan:** [Phase 1-2: GII Core + SSSP + Session-Log KG](./01_gii_sssp_session_kg.md) (Section 9+)
 
 ---
 
@@ -399,8 +399,7 @@ This would be a differentiating feature.
 
 | Phase | Document | Depends On | Core Deliverable |
 |-------|----------|------------|------------------|
-| **1** | [Scoped GII](./01_scoped_adjacency_vt.md) | — | Namespace-aware shadow tables, triggers, rebuild, query |
-| **2** | [SSSP Shadow Tables](./02_sssp_shadow_tables.md) | Phase 1 | Shared SSSP module, cached all-pairs distances |
+| **1-2** | [GII Core + SSSP + Session-Log KG](./01_gii_sssp_session_kg.md) | — | Namespace-aware shadow tables, triggers, rebuild, SSSP cache, session-log demo builder |
 | **3** | [Components Shadow Table](./03_components_shadow_tables.md) | Phase 1 | Cached Union-Find, O(V+E) |
 | **4** | [Communities Shadow Table](./04_communities_shadow_tables.md) | Phase 1, 3 | Cached Leiden partition, warm-start |
 | **5** | [TVF/VT Integration](./05_tvf_vt_integration.md) | Phase 1-4 | All TVFs leverage shadow tables, unified feature flags |
@@ -434,4 +433,4 @@ fallback, or "skip with warning".
 
 ---
 
-**Next:** [Phase 1 — Scoped GII](./01_scoped_adjacency_vt.md)
+**Next:** [Phase 1-2 — GII Core + SSSP + Session-Log KG](./01_gii_sssp_session_kg.md)

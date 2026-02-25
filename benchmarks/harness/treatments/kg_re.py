@@ -1,12 +1,10 @@
 """KG relation extraction treatment.
 
 Benchmarks relation extraction models on RE benchmark datasets.
-Uses the same NER adapter pattern as kg_extract, treating extracted entity pairs
-as crude relation proxies. More sophisticated RE adapters can be added later.
+Runs NER first to extract entities, then passes entities to an RE model adapter
+to extract typed relations. Computes triple-level F1 against gold-standard triples.
 
-When gold triples are available, computes triple-level F1 via kg_metrics.triple_f1().
-
-Source: docs/plans/ner_extraction_models_and_datasets.md
+Source: docs/plans/kg/02_relation_extraction.md
 """
 
 import json
@@ -15,8 +13,9 @@ import time
 
 from benchmarks.harness.common import KG_DIR
 from benchmarks.harness.treatments.base import Treatment
-from benchmarks.harness.treatments.kg_extract import NER_ADAPTERS, FTS5Adapter
+from benchmarks.harness.treatments.kg_extract import NER_ADAPTERS
 from benchmarks.harness.treatments.kg_metrics import triple_f1
+from benchmarks.harness.treatments.kg_re_adapters import RE_ADAPTERS
 
 log = logging.getLogger(__name__)
 
@@ -47,17 +46,27 @@ def _load_re_dataset(dataset_name: str) -> tuple[list[dict], list[dict]]:
     return texts, triples
 
 
+# Map model_slug to the RE adapter it should use.
+# Models that have a dedicated RE adapter use it; others fall back to entity_pair proxy.
+_MODEL_TO_RE_ADAPTER: dict[str, str] = {
+    "fts5": "entity_pair",
+    "gliner_small-v2.1": "glirel",
+    "spacy_en_core_web_lg": "spacy_svo",
+}
+
+
 class KGRelationExtractionTreatment(Treatment):
     """Single KG relation extraction benchmark permutation.
 
-    Runs NER-based entity pair extraction on RE benchmark datasets
-    and computes triple-level F1 against gold-standard triples.
+    Runs NER to extract entities, then RE adapter to extract typed relations.
+    Computes triple-level F1 against gold-standard triples when available.
     """
 
     def __init__(self, model_slug: str, dataset: str):
         self._model_slug = model_slug
         self._dataset = dataset
-        self._adapter = None
+        self._ner_adapter = None
+        self._re_adapter = None
 
     @property
     def requires_muninn(self) -> bool:
@@ -80,9 +89,11 @@ class KGRelationExtractionTreatment(Treatment):
         return (self._dataset, self._model_slug)
 
     def params_dict(self):
+        re_slug = _MODEL_TO_RE_ADAPTER.get(self._model_slug, "entity_pair")
         return {
             "model_slug": self._model_slug,
             "dataset": self._dataset,
+            "re_adapter": re_slug,
         }
 
     def setup(self, conn, db_path):
@@ -92,27 +103,36 @@ class KGRelationExtractionTreatment(Treatment):
                 text_id INTEGER,
                 subject TEXT,
                 predicate TEXT,
-                object TEXT
+                object TEXT,
+                score REAL DEFAULT 1.0
             )
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS text_timing (
                 text_id INTEGER PRIMARY KEY,
-                time_ms REAL
+                ner_time_ms REAL,
+                re_time_ms REAL,
+                total_time_ms REAL
             )
         """)
         conn.commit()
 
-        # Load adapter
-        adapter_cls = NER_ADAPTERS.get(self._model_slug)
-        if adapter_cls is None:
-            log.warning("NER adapter for %s not available — using FTS5 fallback", self._model_slug)
-            adapter_cls = FTS5Adapter
+        # Load NER adapter
+        ner_factory = NER_ADAPTERS[self._model_slug]
+        self._ner_adapter = ner_factory()
+        self._ner_adapter.load()
 
-        self._adapter = adapter_cls()
-        self._adapter.load()
+        # Load RE adapter
+        re_slug = _MODEL_TO_RE_ADAPTER.get(self._model_slug, "entity_pair")
+        re_factory = RE_ADAPTERS[re_slug]
+        self._re_adapter = re_factory()
+        self._re_adapter.load()
 
-        return {"model_slug": self._model_slug, "dataset": self._dataset}
+        return {
+            "model_slug": self._model_slug,
+            "dataset": self._dataset,
+            "re_adapter": re_slug,
+        }
 
     def run(self, conn):
         texts, gold_triples = _load_re_dataset(self._dataset)
@@ -134,6 +154,7 @@ class KGRelationExtractionTreatment(Treatment):
             tid = tr["text_id"]
             gold_by_text.setdefault(tid, []).append((tr["subject"], tr["predicate"], tr["object"]))
 
+        # Extract labels from gold entities if available, else use defaults
         labels = ["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "PRODUCT"]
         total_triples = 0
         text_times = []
@@ -144,25 +165,32 @@ class KGRelationExtractionTreatment(Treatment):
             text_id = text_entry["id"]
             text = text_entry["text"]
 
+            # Phase 1: NER extraction
             t0 = time.perf_counter()
-            mentions = self._adapter.extract(text, labels)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            text_times.append(elapsed_ms)
+            entities = self._ner_adapter.extract(text, labels)
+            ner_ms = (time.perf_counter() - t0) * 1000
 
-            # Generate entity pair triples as crude relation proxy
+            # Phase 2: Relation extraction
+            t1 = time.perf_counter()
+            relations = self._re_adapter.extract_relations(text, entities)
+            re_ms = (time.perf_counter() - t1) * 1000
+
+            total_ms = ner_ms + re_ms
+            text_times.append(total_ms)
+
+            # Store predicted triples
             predicted = []
-            for i, m1 in enumerate(mentions):
-                for m2 in mentions[i + 1 :]:
-                    triple = (m1.text, "related_to", m2.text)
-                    predicted.append(triple)
-                    conn.execute(
-                        "INSERT INTO predicted_triples(text_id, subject, predicate, object) VALUES (?,?,?,?)",
-                        (text_id, triple[0], triple[1], triple[2]),
-                    )
+            for rel in relations:
+                triple = (rel.subject, rel.predicate, rel.object)
+                predicted.append(triple)
+                conn.execute(
+                    "INSERT INTO predicted_triples(text_id, subject, predicate, object, score) VALUES (?,?,?,?,?)",
+                    (text_id, rel.subject, rel.predicate, rel.object, rel.score),
+                )
 
             conn.execute(
-                "INSERT OR IGNORE INTO text_timing(text_id, time_ms) VALUES (?,?)",
-                (text_id, elapsed_ms),
+                "INSERT OR IGNORE INTO text_timing(text_id, ner_time_ms, re_time_ms, total_time_ms) VALUES (?,?,?,?)",
+                (text_id, ner_ms, re_ms, total_ms),
             )
             total_triples += len(predicted)
 
@@ -189,4 +217,5 @@ class KGRelationExtractionTreatment(Treatment):
         return metrics
 
     def teardown(self, conn):
-        self._adapter = None
+        self._ner_adapter = None
+        self._re_adapter = None

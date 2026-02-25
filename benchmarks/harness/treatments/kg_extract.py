@@ -10,47 +10,20 @@ Source: docs/plans/ner_extraction_models_and_datasets.md
 import json
 import logging
 import time
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from collections.abc import Callable
 
 from benchmarks.harness.common import KG_DIR
 from benchmarks.harness.treatments.base import Treatment
 from benchmarks.harness.treatments.kg_metrics import entity_micro_f1
+from benchmarks.harness.treatments.kg_ner_adapters import (
+    GLiNERAdapter,
+    GNERAdapter,
+    NuNerZeroAdapter,
+    SpaCyAdapter,
+)
+from benchmarks.harness.treatments.kg_types import EntityMention, NerModelAdapter
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class EntityMention:
-    """A single entity mention extracted from text."""
-
-    text: str
-    label: str
-    start: int
-    end: int
-    score: float = 1.0
-
-
-class NerModelAdapter(ABC):
-    """Common interface for all NER extraction models."""
-
-    @abstractmethod
-    def load(self) -> None:
-        """Load the model into memory."""
-
-    @abstractmethod
-    def extract(self, text: str, labels: list[str]) -> list[EntityMention]:
-        """Extract entity mentions from text."""
-
-    @property
-    @abstractmethod
-    def model_id(self) -> str:
-        """Model identifier string."""
-
-    @property
-    @abstractmethod
-    def model_type(self) -> str:
-        """Model family: 'gliner', 'gner', 'spacy', 'fts5', 'nuner'."""
 
 
 class FTS5Adapter(NerModelAdapter):
@@ -85,17 +58,18 @@ class FTS5Adapter(NerModelAdapter):
         return "fts5"
 
 
-# Model slug -> adapter factory
-# None entries use FTS5Adapter as fallback until the real ML packages are available.
-NER_ADAPTERS: dict[str, type[NerModelAdapter] | None] = {
+# Model slug -> adapter factory callable.
+# Each entry is a callable that returns an NerModelAdapter instance.
+# Factory lambdas parameterize model IDs for multi-variant adapter classes.
+NER_ADAPTERS: dict[str, type[NerModelAdapter] | Callable[[], NerModelAdapter]] = {
     "fts5": FTS5Adapter,
-    "gliner_small-v2.1": None,  # Requires gliner package
-    "gliner_medium-v2.1": None,  # Requires gliner package
-    "gliner_large-v2.1": None,  # Requires gliner package
-    "numind_NuNerZero": None,  # Requires NuNerZero; labels must be lowercase
-    "gner-t5-base": None,  # Requires transformers; seq2seq, slower
-    "gner-t5-large": None,  # Requires transformers; seq2seq, slower
-    "spacy_en_core_web_lg": None,  # Requires spacy package
+    "gliner_small-v2.1": lambda: GLiNERAdapter("urchade/gliner_small-v2.1"),
+    "gliner_medium-v2.1": lambda: GLiNERAdapter("urchade/gliner_medium-v2.1"),
+    "gliner_large-v2.1": lambda: GLiNERAdapter("urchade/gliner_large-v2.1"),
+    "numind_NuNerZero": NuNerZeroAdapter,
+    "gner-t5-base": lambda: GNERAdapter("dyyyyyyyy/GNER-T5-base"),
+    "gner-t5-large": lambda: GNERAdapter("dyyyyyyyy/GNER-T5-large"),
+    "spacy_en_core_web_lg": SpaCyAdapter,
 }
 
 
@@ -209,12 +183,8 @@ class KGNerExtractionTreatment(Treatment):
         conn.commit()
 
         # Load adapter
-        adapter_cls = NER_ADAPTERS.get(self._model_slug)
-        if adapter_cls is None:
-            log.warning("NER adapter for %s not available — using FTS5 fallback", self._model_slug)
-            adapter_cls = FTS5Adapter
-
-        self._adapter = adapter_cls()
+        adapter_factory = NER_ADAPTERS[self._model_slug]
+        self._adapter = adapter_factory()
         self._adapter.load()
 
         return {"model_slug": self._model_slug}
@@ -289,7 +259,11 @@ class KGNerExtractionTreatment(Treatment):
             tid = ent["text_id"]
             gold_by_text.setdefault(tid, []).append((ent["start"], ent["end"], ent["label"]))
 
-        labels = ["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "PRODUCT"]
+        # Extract unique entity labels from gold annotations — each dataset uses its own label vocabulary
+        labels = sorted({ent["label"] for ent in gold_entities}) if gold_entities else []
+        if not labels:
+            labels = ["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "PRODUCT"]
+        log.info("NER labels for %s: %s", dataset_name, labels)
         total_entities = 0
         chunk_times = []
         all_predicted: list[tuple[int, int, str]] = []

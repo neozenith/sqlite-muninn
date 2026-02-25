@@ -97,7 +97,7 @@ KG_CHARTS = [
         y_label="Triple F1",
         x_label="Avg ms/text",
     ),
-    # ── ER charts (unchanged) ─────────────────────────────────────
+    # ── ER charts ─────────────────────────────────────────────────
     ChartSpec(
         name="er_pairwise_f1",
         title="Entity Resolution Pairwise F1 by Dataset",
@@ -110,18 +110,43 @@ KG_CHARTS = [
         repeat_fields=["dataset"],
         y_label="Pairwise F1",
     ),
-    # ── GraphRAG charts (unchanged) ───────────────────────────────
     ChartSpec(
-        name="graphrag_retrieval_quality",
-        title="GraphRAG Passage Recall by Entry+Expansion",
+        name="er_bcubed_f1",
+        title="Entity Resolution B-Cubed F1 by Dataset",
+        sources=["kg-resolve_*.jsonl"],
+        filters={},
+        x_field="dataset",
+        y_field="bcubed_f1",
+        group_fields=["dataset"],
+        variant_fields=[],
+        repeat_fields=["dataset"],
+        y_label="B-Cubed F1",
+    ),
+    # ── GraphRAG charts ───────────────────────────────────────────
+    ChartSpec(
+        name="graphrag_recall_at_10",
+        title="GraphRAG Passage Recall@10 by Entry+Expansion",
         sources=["kg-graphrag_*.jsonl"],
         filters={},
         x_field="expansion",
-        y_field="passage_recall",
+        y_field="passage_recall_at_10",
         group_fields=["entry_method"],
         variant_fields=["expansion"],
         repeat_fields=["entry_method", "expansion", "book_id"],
-        y_label="Passage Recall",
+        y_label="Passage Recall@10",
+        x_label="Graph Expansion",
+    ),
+    ChartSpec(
+        name="graphrag_latency",
+        title="GraphRAG Retrieval Latency by Entry+Expansion",
+        sources=["kg-graphrag_*.jsonl"],
+        filters={},
+        x_field="expansion",
+        y_field="retrieval_latency_ms",
+        group_fields=["entry_method"],
+        variant_fields=["expansion"],
+        repeat_fields=["entry_method", "expansion", "book_id"],
+        y_label="Avg Latency (ms)",
         x_label="Graph Expansion",
     ),
 ]

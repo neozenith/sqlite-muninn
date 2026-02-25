@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-24
 **Status:** Plan (not started)
-**Depends on:** [Phase 1: Scoped Adjacency VT](./01_scoped_adjacency_vt.md)
+**Depends on:** [Phase 1-2: GII Core + SSSP](./01_gii_sssp_session_kg.md)
 **Downstream:** [Phase 4: Communities Shadow Table](./04_communities_shadow_tables.md) (warm-start seeding)
 
 ---
@@ -1032,10 +1032,9 @@ on large graphs.
 ### Related Plan Documents
 
 - [Phase 0: Gap Analysis](./00_gap_analysis.md) -- complete gap analysis and roadmap
-- [Phase 1: Scoped Adjacency VT](./01_scoped_adjacency_vt.md) -- prerequisite: namespace support, feature flags
-- [Phase 2: SSSP Shadow Tables](./02_sssp_shadow_tables.md) -- parallel cache: all-pairs shortest paths
+- [Phase 1-2: GII Core + SSSP](./01_gii_sssp_session_kg.md) -- prerequisite: namespace support, feature flags, SSSP cache
 - [Phase 4: Communities Shadow Table](./04_communities_shadow_tables.md) -- downstream consumer: Leiden warm-start from components
 
 ---
 
-**Prev:** [Phase 2 — SSSP Shadow Tables](./02_sssp_shadow_tables.md) | **Next:** [Phase 4 — Communities Shadow Table](./04_communities_shadow_tables.md)
+**Prev:** [Phase 1-2 — GII Core + SSSP + Session-Log KG](./01_gii_sssp_session_kg.md) | **Next:** [Phase 4 — Communities Shadow Table](./04_communities_shadow_tables.md)
