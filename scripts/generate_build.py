@@ -23,6 +23,7 @@ import json
 import logging
 import re
 import shutil
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -257,23 +258,23 @@ def _llama_lib_paths() -> list[str]:
 
 # Each entry: variable name → lambda returning its space-separated string value.
 # Makefile evaluates these via: VAR := $(shell python3 scripts/generate_build.py query VAR)
-QUERY_VARS: dict[str, callable] = {
+QUERY_VARS: dict[str, Callable[[], str]] = {
     # File lists
-    "SRC":                    lambda: " ".join(SOURCES),
-    "HEADERS":                lambda: " ".join(HEADERS),
-    "TEST_SRC":               lambda: " ".join(TEST_SOURCES),
-    "TEST_LINK_SRC":          lambda: " ".join(TEST_LINK_SOURCES),
+    "SRC": lambda: " ".join(SOURCES),
+    "HEADERS": lambda: " ".join(HEADERS),
+    "TEST_SRC": lambda: " ".join(TEST_SOURCES),
+    "TEST_LINK_SRC": lambda: " ".join(TEST_LINK_SOURCES),
     # WASM file lists (prefixed with ../ for wasm/ subdirectory)
-    "MUNINN_SRC_WASM":        lambda: " ".join(f"../{s}" for s in SOURCES),
-    "MUNINN_SRC_WASM_LITE":   lambda: " ".join(f"../{s}" for s in SOURCES_WASM_LITE),
-    "SOURCES_WASM_EXTRA":     lambda: " ".join(f"../{s}" for s in SOURCES_WASM_EXTRA),
+    "MUNINN_SRC_WASM": lambda: " ".join(f"../{s}" for s in SOURCES),
+    "MUNINN_SRC_WASM_LITE": lambda: " ".join(f"../{s}" for s in SOURCES_WASM_LITE),
+    "SOURCES_WASM_EXTRA": lambda: " ".join(f"../{s}" for s in SOURCES_WASM_EXTRA),
     # CMake flags
-    "LLAMA_CMAKE_FLAGS":      lambda: _cmake_flags_str(CMAKE_FLAGS_BASE),
+    "LLAMA_CMAKE_FLAGS": lambda: _cmake_flags_str(CMAKE_FLAGS_BASE),
     "LLAMA_CMAKE_FLAGS_WASM": lambda: _cmake_flags_str(CMAKE_FLAGS_WASM),
     # llama.cpp paths
-    "LLAMA_INCLUDE":          lambda: " ".join(f"-I{d}" for d in LLAMA_INCLUDE_DIRS),
-    "LLAMA_INCLUDE_WASM":     lambda: " ".join(f"-I../{d}" for d in LLAMA_INCLUDE_DIRS),
-    "LLAMA_LIBS_CORE":        lambda: " ".join(_llama_lib_paths()),
+    "LLAMA_INCLUDE": lambda: " ".join(f"-I{d}" for d in LLAMA_INCLUDE_DIRS),
+    "LLAMA_INCLUDE_WASM": lambda: " ".join(f"-I../{d}" for d in LLAMA_INCLUDE_DIRS),
+    "LLAMA_LIBS_CORE": lambda: " ".join(_llama_lib_paths()),
 }
 
 
