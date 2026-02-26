@@ -395,14 +395,6 @@ KG_NER_MODELS: list[dict[str, Any]] = [
         "params": None,
         "size_mb": 560,
     },
-    {
-        "slug": "fts5",
-        "display": "FTS5",
-        "type": "Keyword matching",
-        "description": "SQLite full-text search as a baseline",
-        "params": None,
-        "size_mb": 0,
-    },
 ]
 
 KG_NER_DATASETS: list[dict[str, Any]] = [
@@ -478,7 +470,7 @@ KG_NER_DATASETS: list[dict[str, Any]] = [
     },
 ]
 
-KG_RE_MODEL_SLUGS: list[str] = ["fts5", "gliner_small-v2.1", "spacy_en_core_web_lg"]
+KG_RE_MODEL_SLUGS: list[str] = ["gliner_small-v2.1", "spacy_en_core_web_lg"]
 
 KG_RE_DATASETS: list[dict[str, Any]] = [
     {
