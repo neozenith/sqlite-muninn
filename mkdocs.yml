@@ -60,6 +60,8 @@ nav:
     - Graph VT: benchmarks/graph_vt.md
     - Embed: benchmarks/embed.md
     - KG: benchmarks/kg.md
+  - Misc:
+    - Logo Pipeline: misc/logo-pipeline/README.md
 
 
 markdown_extensions:
