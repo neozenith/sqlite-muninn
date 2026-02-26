@@ -38,4 +38,4 @@ class NerModelAdapter(ABC):
     @property
     @abstractmethod
     def model_type(self) -> str:
-        """Model family: 'gliner', 'gner', 'spacy', 'fts5', 'nuner'."""
+        """Model family: 'gliner', 'gner', 'spacy', 'nuner'."""

@@ -8,33 +8,24 @@ The KG benchmark suite benchmarks NER, RE, ER, and GraphRAG pipelines using muni
 
 | Component | File | Status |
 |-----------|------|--------|
-| `NerModelAdapter` ABC | `kg_extract.py:34-54` | Complete |
-| `FTS5Adapter` | `kg_extract.py:56-85` | Complete |
-| `EntityMention` dataclass | `kg_extract.py:24-31` | Complete |
-| `KGNerExtractionTreatment` | `kg_extract.py:148-343` | Complete |
-| `KGRelationExtractionTreatment` wrapper | `kg_re.py:50-192` | Wrapper complete, uses entity-pair proxy |
-| `KGEntityResolutionTreatment` wrapper | `kg_resolve.py:18-123` | Wrapper complete, `_run_*` return zeroed metrics |
-| `KGGraphRAGTreatment` wrapper | `kg_graphrag.py:18-91` | Wrapper complete, `run()` returns zeroed metrics |
+| `NerModelAdapter` ABC | `kg_types.py` | Complete |
+| `EntityMention` dataclass | `kg_types.py` | Complete |
+| NER adapters (7) | `kg_ner_adapters.py` | Complete: GLiNER (3), NuNerZero, GNER-T5 (2), spaCy |
+| `KGNerExtractionTreatment` | `kg_extract.py` | Complete — gutenberg + NER dataset modes, F1 computation |
+| RE adapters (3) | `kg_re_adapters.py` | Complete: GLiREL, spaCy SVO, EntityPair |
+| `KGRelationExtractionTreatment` | `kg_re.py` | Complete — NER+RE pipeline, triple F1 |
+| `KGEntityResolutionTreatment` | `kg_resolve.py` | Complete — HNSW blocking + Jaro-Winkler + Leiden |
+| `KGGraphRAGTreatment` | `kg_graphrag.py` | Complete — VSS/BM25 entry + BFS expansion |
 | `kg_metrics.py` | All 3 functions | Complete: `entity_micro_f1`, `triple_f1`, `bcubed_f1` |
 | Dataset prep | `prep/kg_datasets.py` | Complete: 14 datasets |
-| Registry | `registry.py:133-194` | Complete |
-| Constants | `common.py:341-524` | Complete |
-| Charts | `analysis/charts_kg.py` | Complete |
-
-## What's Stub/Missing
-
-| Component | Gap | Phase |
-|-----------|-----|-------|
-| 7 of 8 `NER_ADAPTERS` entries are `None` | GLiNER (3), NuNerZero, GNER-T5 (2), spaCy | Phase 1 |
-| RE model integration | No GLiREL/spaCy SVO adapter | Phase 2 |
-| ER pipeline (`kg_resolve.py`) | `_run_kg_coalesce()` and `_run_er_dataset()` empty | Phase 3 |
-| GraphRAG pipeline (`kg_graphrag.py`) | `run()` empty | Phase 4 |
-| NER dataset label mapping | Hardcoded labels → need dataset-specific extraction | Phase 1 |
+| Registry | `registry.py` | Complete |
+| Constants | `common.py` | Complete — 7 NER models, 10 datasets |
+| Charts | `analysis/charts_kg.py` | Complete — 11 chart specs |
 
 ## Implementation Roadmap
 
-1. **Phase 1**: NER model adapters (`kg_ner_adapters.py`)
-2. **Phase 2**: RE model adapters (`kg_re_adapters.py`) + treatment update
-3. **Phase 3**: ER pipeline in `kg_resolve.py`
-4. **Phase 4**: GraphRAG retrieval in `kg_graphrag.py`
-5. **Phase 5**: Charts already done — verify after data flows through
+1. **Phase 1**: NER model adapters — DONE
+2. **Phase 2**: RE model adapters — DONE
+3. **Phase 3**: ER pipeline — DONE
+4. **Phase 4**: GraphRAG retrieval — DONE
+5. **Phase 5**: Charts — DONE (verify after data flows)

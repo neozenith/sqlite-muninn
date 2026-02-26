@@ -49,7 +49,6 @@ def _load_re_dataset(dataset_name: str) -> tuple[list[dict], list[dict]]:
 # Map model_slug to the RE adapter it should use.
 # Models that have a dedicated RE adapter use it; others fall back to entity_pair proxy.
 _MODEL_TO_RE_ADAPTER: dict[str, str] = {
-    "fts5": "entity_pair",
     "gliner_small-v2.1": "glirel",
     "spacy_en_core_web_lg": "spacy_svo",
 }

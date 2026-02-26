@@ -1,7 +1,7 @@
 """KG NER extraction treatment with model adapter pattern.
 
 Benchmarks NER model performance on Gutenberg text chunks and NER benchmark datasets.
-Supports: GLiNER, NuNerZero, GNER-T5, spaCy, FTS5.
+Supports: GLiNER, NuNerZero, GNER-T5, spaCy.
 When gold labels are available (NER datasets), computes entity-level micro F1.
 
 Source: docs/plans/ner_extraction_models_and_datasets.md
@@ -21,48 +21,15 @@ from benchmarks.harness.treatments.kg_ner_adapters import (
     NuNerZeroAdapter,
     SpaCyAdapter,
 )
-from benchmarks.harness.treatments.kg_types import EntityMention, NerModelAdapter
+from benchmarks.harness.treatments.kg_types import NerModelAdapter
 
 log = logging.getLogger(__name__)
-
-
-class FTS5Adapter(NerModelAdapter):
-    """Lexical entity extraction using FTS5 pattern matching."""
-
-    def load(self):
-        pass  # No model to load
-
-    def extract(self, text, labels):
-        # Simple keyword extraction — returns entity mentions for known patterns
-        mentions = []
-        text_lower = text.lower()
-        for label in labels:
-            label_lower = label.lower()
-            start = 0
-            while True:
-                idx = text_lower.find(label_lower, start)
-                if idx == -1:
-                    break
-                mentions.append(
-                    EntityMention(text=text[idx : idx + len(label)], label="KEYWORD", start=idx, end=idx + len(label))
-                )
-                start = idx + 1
-        return mentions
-
-    @property
-    def model_id(self):
-        return "fts5"
-
-    @property
-    def model_type(self):
-        return "fts5"
 
 
 # Model slug -> adapter factory callable.
 # Each entry is a callable that returns an NerModelAdapter instance.
 # Factory lambdas parameterize model IDs for multi-variant adapter classes.
 NER_ADAPTERS: dict[str, type[NerModelAdapter] | Callable[[], NerModelAdapter]] = {
-    "fts5": FTS5Adapter,
     "gliner_small-v2.1": lambda: GLiNERAdapter("urchade/gliner_small-v2.1"),
     "gliner_medium-v2.1": lambda: GLiNERAdapter("urchade/gliner_medium-v2.1"),
     "gliner_large-v2.1": lambda: GLiNERAdapter("urchade/gliner_large-v2.1"),

@@ -34,9 +34,10 @@ Implement 7 NER model adapters conforming to `NerModelAdapter` ABC, wire them in
 
 ## Label Mapping Strategy
 
-The `_run_ner_dataset()` method extracts unique entity labels from gold annotations (`entities.jsonl`) and passes those as the `labels` parameter to adapters. This replaces the hardcoded `["PERSON", "ORGANIZATION", ...]` list.
+The `_run_ner_dataset()` method extracts unique entity labels from gold annotations (`entities.jsonl`) and passes those as the `labels` parameter to adapters. This replaces the previously hardcoded label list.
 
 ## Files
 
-- **NEW**: `benchmarks/harness/treatments/kg_ner_adapters.py`
-- **MODIFY**: `benchmarks/harness/treatments/kg_extract.py` — update `NER_ADAPTERS` dict, fix label mapping
+- `benchmarks/harness/treatments/kg_types.py` — shared `EntityMention` and `NerModelAdapter` ABC
+- `benchmarks/harness/treatments/kg_ner_adapters.py` — adapter implementations
+- `benchmarks/harness/treatments/kg_extract.py` — `NER_ADAPTERS` dict + treatment

@@ -9,10 +9,10 @@ from benchmarks.harness.treatments.kg_re import KGRelationExtractionTreatment
 
 class TestKGRETreatment:
     def test_instantiates(self):
-        t = KGRelationExtractionTreatment("fts5", "docred")
+        t = KGRelationExtractionTreatment("gliner_small-v2.1", "docred")
         assert t.category == "kg-re"
-        assert t.permutation_id == "kg-re_fts5_docred"
-        assert "fts5" in t.label
+        assert t.permutation_id == "kg-re_gliner_small-v2.1_docred"
+        assert "gliner_small-v2.1" in t.label
         assert "docred" in t.label
 
     def test_params_dict(self):
@@ -22,11 +22,11 @@ class TestKGRETreatment:
         assert params["dataset"] == "webnlg"
 
     def test_sort_key(self):
-        t = KGRelationExtractionTreatment("fts5", "docred")
-        assert t.sort_key == ("docred", "fts5")
+        t = KGRelationExtractionTreatment("gliner_small-v2.1", "docred")
+        assert t.sort_key == ("docred", "gliner_small-v2.1")
 
     def test_setup_creates_tables(self):
-        t = KGRelationExtractionTreatment("fts5", "docred")
+        t = KGRelationExtractionTreatment("gliner_small-v2.1", "docred")
         conn = sqlite3.connect(":memory:")
         t.setup(conn, "/tmp/test.db")
 
@@ -39,7 +39,7 @@ class TestKGRETreatment:
 
     def test_run_with_empty_data(self, tmp_path):
         """Run with missing dataset returns zero metrics gracefully."""
-        t = KGRelationExtractionTreatment("fts5", "nonexistent_dataset")
+        t = KGRelationExtractionTreatment("gliner_small-v2.1", "nonexistent_dataset")
         conn = sqlite3.connect(":memory:")
         t.setup(conn, tmp_path / "db.sqlite")
 
@@ -69,7 +69,7 @@ class TestKGRETreatment:
         (ds_dir / "texts.jsonl").write_text("\n".join(json.dumps(t) for t in texts), encoding="utf-8")
         (ds_dir / "triples.jsonl").write_text("\n".join(json.dumps(t) for t in triples), encoding="utf-8")
 
-        t = KGRelationExtractionTreatment("fts5", "test_re")
+        t = KGRelationExtractionTreatment("gliner_small-v2.1", "test_re")
         conn = sqlite3.connect(":memory:")
         t.setup(conn, tmp_path / "db.sqlite")
 
