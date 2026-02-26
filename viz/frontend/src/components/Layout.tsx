@@ -2,6 +2,7 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { AppSidebar } from '@/components/AppSidebar'
+import { DatabaseSelector } from '@/components/DatabaseSelector'
 import { KGStagePills } from '@/components/KGStagePills'
 import { fetchJSON } from '@/lib/services/api-client'
 import type { HealthStatus } from '@/lib/types'
@@ -27,9 +28,10 @@ export function Layout() {
               extension loaded
             </Badge>
           )}
+          <DatabaseSelector />
           {health && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{health.db_path.split('/').pop()}</span>
+              {!health.active_database && <span>{health.db_path.split('/').pop()}</span>}
               {health.hnsw_index_count != null && (
                 <Badge variant="outline" className="text-[10px]">
                   {health.hnsw_index_count} indexes

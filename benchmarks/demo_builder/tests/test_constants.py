@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from benchmarks.demo_builder.constants import (
     BOOK_ID_TO_DATASET,
+    CHARS_PER_WORD_TOKEN,
     EMBEDDING_MODELS,
     GLINER_LABELS,
     GLIREL_LABELS,
     MUNINN_PATH,
+    NER_MAX_TOKENS,
+    NER_RE_CHUNK_CHARS_MAX,
     PHASE_NAMES,
     PROJECT_ROOT,
+    RE_MAX_TOKENS,
 )
 
 
@@ -52,3 +56,20 @@ def test_book_id_to_dataset_values() -> None:
         assert isinstance(book_id, int)
         assert isinstance(slug, str)
         assert len(slug) > 0
+
+
+def test_ner_re_chunk_chars_max_is_reasonable() -> None:
+    """NER_RE_CHUNK_CHARS_MAX is a sensible value derived from model limits."""
+    assert NER_RE_CHUNK_CHARS_MAX == int(min(NER_MAX_TOKENS, RE_MAX_TOKENS) * CHARS_PER_WORD_TOKEN)
+    assert NER_RE_CHUNK_CHARS_MAX > 500, "Cap too small — would produce tiny chunks"
+    assert NER_RE_CHUNK_CHARS_MAX < 3000, "Cap too large — NER/RE models would truncate"
+
+
+def test_ner_re_cap_affects_large_models_only() -> None:
+    """Models with chunk_chars <= NER_RE_CHUNK_CHARS_MAX are unaffected by the cap."""
+    for name, info in EMBEDDING_MODELS.items():
+        effective = min(info["chunk_chars"], NER_RE_CHUNK_CHARS_MAX)
+        if info["chunk_chars"] <= NER_RE_CHUNK_CHARS_MAX:
+            assert effective == info["chunk_chars"], f"{name} should not be capped"
+        else:
+            assert effective == NER_RE_CHUNK_CHARS_MAX, f"{name} should be capped"

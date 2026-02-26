@@ -8,9 +8,27 @@ export interface HealthStatus {
   db_exists: boolean
   extension_path: string
   extension_loaded: boolean
+  active_database: string | null
   hnsw_index_count?: number
   edge_table_count?: number
   error?: string
+}
+
+// ── Databases ──────────────────────────────────────────────────────────
+
+export interface DatabaseInfo {
+  id: string
+  book_id: number
+  model: string
+  dim: number
+  file: string
+  size_bytes: number
+  label: string
+}
+
+export interface DatabasesResponse {
+  databases: DatabaseInfo[]
+  active: string | null
 }
 
 // ── VSS ─────────────────────────────────────────────────────────────

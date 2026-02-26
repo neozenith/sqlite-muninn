@@ -1,7 +1,7 @@
 """Filesystem scanning for available books and models.
 
 This module has no ML dependencies — it only reads the filesystem and
-SQLite chunk databases to discover what inputs are available.
+SQLite databases to discover what inputs are available.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from pathlib import Path
 from benchmarks.demo_builder.constants import (
     BOOK_ID_TO_DATASET,
     EMBEDDING_MODELS,
-    KG_DIR,
     TEXTS_DIR,
     VECTORS_DIR,
 )
@@ -31,10 +30,11 @@ def _fmt_size(size: int | float) -> str:
 
 
 def discover_book_ids() -> list[int]:
-    """Discover book IDs that have both text and chunks available.
+    """Discover book IDs that have text files available.
 
-    Scans benchmarks/texts/gutenberg_{id}.txt and benchmarks/kg/{id}_chunks.db,
-    returns sorted IDs present in both directories.
+    Scans benchmarks/texts/gutenberg_{id}.txt and returns sorted IDs.
+    Chunks are now computed inline during the build (model-dependent sizing),
+    so only text files are required.
     """
     text_ids: set[int] = set()
     if TEXTS_DIR.exists():
@@ -43,38 +43,41 @@ def discover_book_ids() -> list[int]:
             if len(parts) == 2 and parts[1].isdigit():
                 text_ids.add(int(parts[1]))
 
-    chunk_ids: set[int] = set()
-    if KG_DIR.exists():
-        for path in KG_DIR.glob("*_chunks.db"):
-            stem_id = path.stem.split("_")[0]
-            if stem_id.isdigit():
-                chunk_ids.add(int(stem_id))
-
-    available = sorted(text_ids & chunk_ids)
+    available = sorted(text_ids)
     log.info(
-        "Discovered %d book(s) with text + chunks: %s",
+        "Discovered %d book(s) with text files: %s",
         len(available),
         available,
     )
     return available
 
 
-def _chunk_count(book_id: int) -> int:
-    """Get chunk count for a book from its chunks DB."""
-    chunks_db = KG_DIR / f"{book_id}_chunks.db"
-    if not chunks_db.exists():
+def _chunk_count(book_id: int, output_folder: Path | None = None) -> int:
+    """Get chunk count for a book from a built demo DB.
+
+    Since chunks are now model-dependent and computed at build time,
+    we check for an existing built DB in the output folder.
+    Returns 0 if no DB is found or output_folder is None.
+    """
+    if output_folder is None:
         return 0
-    conn = sqlite3.connect(str(chunks_db))
-    count: int = conn.execute("SELECT COUNT(*) FROM text_chunks").fetchone()[0]
-    conn.close()
-    return count
+    # Check all built DBs for this book_id (could be multiple models)
+    for db_path in output_folder.glob(f"{book_id}_*.db"):
+        conn = sqlite3.connect(str(db_path))
+        try:
+            count: int = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            conn.close()
+            return count
+        except sqlite3.OperationalError:
+            conn.close()
+    return 0
 
 
 def print_books() -> None:
-    """Print discovered books with text size and chunk count."""
+    """Print discovered books with text size and cached vector info."""
     print("\n=== Available Books ===\n")
-    print(f"  {'BOOK_ID':>7s}   {'TEXT_FILE':<28s}   {'TEXT_SIZE':>10s}   {'CHUNKS':>8s}   {'VECTORS'}")
-    print(f"  {'-' * 7}   {'-' * 28}   {'-' * 10}   {'-' * 8}   {'-' * 30}")
+    print(f"  {'BOOK_ID':>7s}   {'TEXT_FILE':<28s}   {'TEXT_SIZE':>10s}   {'VECTORS'}")
+    print(f"  {'-' * 7}   {'-' * 28}   {'-' * 10}   {'-' * 30}")
 
     # Scan texts
     text_paths: dict[int, Path] = {}
@@ -84,31 +87,11 @@ def print_books() -> None:
             if len(parts) == 2 and parts[1].isdigit():
                 text_paths[int(parts[1])] = path
 
-    # Scan chunks
-    chunk_paths: dict[int, Path] = {}
-    if KG_DIR.exists():
-        for path in KG_DIR.glob("*_chunks.db"):
-            stem_id = path.stem.split("_")[0]
-            if stem_id.isdigit():
-                chunk_paths[int(stem_id)] = path
-
-    all_ids = sorted(text_paths.keys() | chunk_paths.keys())
+    all_ids = sorted(text_paths.keys())
 
     for book_id in all_ids:
-        text_path = text_paths.get(book_id)
-        chunk_path = chunk_paths.get(book_id)
-
-        text_name = text_path.name if text_path else "(missing)"
-        text_size = _fmt_size(text_path.stat().st_size) if text_path else ""
-
-        # Count chunks from DB
-        chunk_str = ""
-        if chunk_path:
-            conn = sqlite3.connect(str(chunk_path))
-            chunk_str = str(conn.execute("SELECT COUNT(*) FROM text_chunks").fetchone()[0])
-            conn.close()
-        else:
-            chunk_str = "(missing)"
+        text_path = text_paths[book_id]
+        text_size = _fmt_size(text_path.stat().st_size)
 
         # Check which models have cached vectors
         dataset_name = BOOK_ID_TO_DATASET.get(book_id)
@@ -121,22 +104,21 @@ def print_books() -> None:
 
         vec_str = ", ".join(cached_models) if cached_models else "(compute on-the-fly)"
 
-        ready = text_path and chunk_path
-        marker = "" if ready else "  <-- incomplete"
-        print(f"  {book_id:>7d}   {text_name:<28s}   {text_size:>10s}   {chunk_str:>8s}   {vec_str}{marker}")
+        print(f"  {book_id:>7d}   {text_path.name:<28s}   {text_size:>10s}   {vec_str}")
 
-    print(f"\n  Text dir:   {TEXTS_DIR}")
-    print(f"  Chunks dir: {KG_DIR}")
+    print(f"\n  Text dir: {TEXTS_DIR}")
     print()
 
 
 def print_models() -> None:
     """Print available embedding models."""
     print("\n=== Embedding Models ===\n")
-    print(f"  {'NAME':<14s}   {'DIM':>5s}   {'SENTENCE-TRANSFORMERS ID'}")
-    print(f"  {'-' * 14}   {'-' * 5}   {'-' * 40}")
+    print(f"  {'NAME':<14s}   {'DIM':>5s}   {'MAX_TOK':>7s}   {'CHUNK_CH':>8s}   {'SENTENCE-TRANSFORMERS ID'}")
+    print(f"  {'-' * 14}   {'-' * 5}   {'-' * 7}   {'-' * 8}   {'-' * 40}")
 
     for name, info in EMBEDDING_MODELS.items():
-        print(f"  {name:<14s}   {info['dim']:>5d}   {info['st_name']}")
+        print(
+            f"  {name:<14s}   {info['dim']:>5d}   {info['max_tokens']:>7d}   {info['chunk_chars']:>8d}   {info['st_name']}"
+        )
 
     print()

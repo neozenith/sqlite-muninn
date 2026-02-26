@@ -62,17 +62,27 @@ def load_chunk_vectors(
         npy_path = VECTORS_DIR / f"{model_name}_{dataset_name}_docs.npy"
         if npy_path.exists():
             vectors = np.load(str(npy_path))
-            assert vectors.shape[0] == num_chunks, (
-                f"Cached vector count mismatch: {vectors.shape[0]} vectors vs {num_chunks} chunks"
-            )
-            assert vectors.shape[1] == dim, f"Cached vector dim mismatch: {vectors.shape[1]} vs expected {dim}"
-            log.info(
-                "  Loaded cached vectors (%d x %d) from %s",
-                vectors.shape[0],
-                vectors.shape[1],
-                npy_path.name,
-            )
-            return vectors
+            if vectors.shape[0] != num_chunks:
+                log.warning(
+                    "  Cached vector count mismatch: %d vectors vs %d chunks "
+                    "(chunk sizes changed). Recomputing...",
+                    vectors.shape[0],
+                    num_chunks,
+                )
+            elif vectors.shape[1] != dim:
+                log.warning(
+                    "  Cached vector dim mismatch: %d vs expected %d. Recomputing...",
+                    vectors.shape[1],
+                    dim,
+                )
+            else:
+                log.info(
+                    "  Loaded cached vectors (%d x %d) from %s",
+                    vectors.shape[0],
+                    vectors.shape[1],
+                    npy_path.name,
+                )
+                return vectors
 
     # Compute embeddings on the fly
     log.info("  Computing %d chunk embeddings with %s (dim=%d)...", num_chunks, model_name, dim)

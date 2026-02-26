@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from server.routes import graph, health, kg, vss
+from server.routes import databases, graph, health, kg, vss
 from server.services.db import close_connection
 
 log = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ app.add_middleware(
 
 # Register routers
 app.include_router(health.router)
+app.include_router(databases.router)
 app.include_router(vss.router)
 app.include_router(graph.router)
 app.include_router(kg.router)

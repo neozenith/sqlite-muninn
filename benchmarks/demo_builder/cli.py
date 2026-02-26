@@ -3,13 +3,15 @@
 Subcommands:
     manifest     Show permutation status and generate commands
     build        Build a single demo database
+    write-manifest  Generate manifest.json from existing built DBs
     list-books   List discovered books with metadata
     list-models  List available embedding models
 
 Usage:
     uv run -m benchmarks.demo_builder manifest
     uv run -m benchmarks.demo_builder manifest --missing --commands
-    uv run -m benchmarks.demo_builder build --output-folder wasm/assets/ --book-id 3300 --embedding-model MiniLM
+    uv run -m benchmarks.demo_builder build --book-id 3300 --embedding-model MiniLM
+    uv run -m benchmarks.demo_builder write-manifest
     uv run -m benchmarks.demo_builder list-books
     uv run -m benchmarks.demo_builder list-models
 """
@@ -22,9 +24,9 @@ import shutil
 import sys
 from pathlib import Path
 
-from benchmarks.demo_builder.constants import EMBEDDING_MODELS, MUNINN_PATH, PROJECT_ROOT
+from benchmarks.demo_builder.constants import DEFAULT_OUTPUT_FOLDER, EMBEDDING_MODELS, MUNINN_PATH, PROJECT_ROOT
 from benchmarks.demo_builder.discovery import discover_book_ids, print_books, print_models
-from benchmarks.demo_builder.manifest import permutation_manifest, print_manifest
+from benchmarks.demo_builder.manifest import permutation_manifest, print_manifest, write_manifest_json
 
 log = logging.getLogger(__name__)
 
@@ -66,11 +68,8 @@ def _cmd_build(args: argparse.Namespace) -> None:
     available_books = discover_book_ids()
     if not available_books:
         log.error(
-            "No books found with both text and chunks. Ensure both"
-            " benchmarks/texts/gutenberg_{id}.txt and"
-            " benchmarks/kg/{id}_chunks.db exist."
+            "No books found. Ensure benchmarks/texts/gutenberg_{id}.txt exists."
             " Run: uv run -m benchmarks.harness prep texts"
-            " && uv run -m benchmarks.harness prep kg-chunks"
         )
         sys.exit(1)
 
@@ -109,10 +108,22 @@ def _cmd_build(args: argparse.Namespace) -> None:
     finally:
         build.teardown()
 
+    # ── Update manifest.json after successful build ───────────────
+    write_manifest_json(output_folder)
+
+
+def _cmd_write_manifest(args: argparse.Namespace) -> None:
+    """Handle the 'write-manifest' subcommand."""
+    output_folder = _resolve_output_folder(args)
+    if not output_folder.exists():
+        log.error("Output folder does not exist: %s", output_folder)
+        sys.exit(1)
+    write_manifest_json(output_folder)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build KG demo databases for WASM and viz demos.",
+        description="Build KG demo databases for viz demos.",
     )
     subparsers = parser.add_subparsers(dest="command", help="Subcommand")
 
@@ -121,8 +132,8 @@ def main() -> None:
     manifest_p.add_argument(
         "--output-folder",
         type=str,
-        default="wasm/assets",
-        help="Output folder to check (default: wasm/assets)",
+        default=DEFAULT_OUTPUT_FOLDER,
+        help=f"Output folder to check (default: {DEFAULT_OUTPUT_FOLDER})",
     )
     manifest_p.add_argument("--missing", action="store_true", help="Only show missing permutations")
     manifest_p.add_argument("--done", action="store_true", help="Only show completed permutations")
@@ -145,8 +156,8 @@ def main() -> None:
     build_p.add_argument(
         "--output-folder",
         type=str,
-        default="wasm/assets",
-        help="Output folder for generated databases (default: wasm/assets)",
+        default=DEFAULT_OUTPUT_FOLDER,
+        help=f"Output folder for generated databases (default: {DEFAULT_OUTPUT_FOLDER})",
     )
     build_p.add_argument(
         "--book-id",
@@ -162,6 +173,15 @@ def main() -> None:
         help="Embedding model to use",
     )
     build_p.add_argument("--force", action="store_true", help="Overwrite existing output files")
+
+    # ── write-manifest ────────────────────────────────────────────
+    wm_p = subparsers.add_parser("write-manifest", help="Generate manifest.json from existing built DBs")
+    wm_p.add_argument(
+        "--output-folder",
+        type=str,
+        default=DEFAULT_OUTPUT_FOLDER,
+        help=f"Output folder containing built databases (default: {DEFAULT_OUTPUT_FOLDER})",
+    )
 
     # ── list-books ────────────────────────────────────────────────
     subparsers.add_parser("list-books", help="List discovered books with metadata")
@@ -185,6 +205,8 @@ def main() -> None:
         _cmd_manifest(args)
     elif args.command == "build":
         _cmd_build(args)
+    elif args.command == "write-manifest":
+        _cmd_write_manifest(args)
     elif args.command == "list-books":
         print_books()
     elif args.command == "list-models":

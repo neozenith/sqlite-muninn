@@ -5,6 +5,7 @@ No ML dependencies — works with just sqlite3 and filesystem access.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from pathlib import Path
@@ -61,7 +62,7 @@ def permutation_manifest(output_folder: Path) -> list[dict[str, Any]]:
 
     entries = []
     for book_id in available_books:
-        chunks = _chunk_count(book_id)
+        chunks = _chunk_count(book_id, output_folder)
         for model_name in model_names:
             dim = EMBEDDING_MODELS[model_name]["dim"]
             perm_id = f"{book_id}_{model_name}"
@@ -158,3 +159,72 @@ def print_manifest(
         print(f"\n  In-progress builds: {total_building}")
     print(f"\n  Output folder: {output_folder}")
     print()
+
+
+def _read_meta(db_path: Path) -> dict[str, str]:
+    """Read key/value pairs from a built DB's meta table."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute("SELECT key, value FROM meta").fetchall()
+        return {key: value for key, value in rows}
+    except sqlite3.OperationalError:
+        return {}
+    finally:
+        conn.close()
+
+
+def write_manifest_json(output_folder: Path) -> Path:
+    """Scan output_folder for built .db files and write manifest.json.
+
+    Reads each DB's meta table for book_id, embedding_model, embedding_dim.
+    Writes atomically via .tmp rename.
+
+    Returns the path to the written manifest.json.
+    """
+    databases: list[dict[str, Any]] = []
+
+    for db_path in sorted(output_folder.glob("*.db")):
+        meta = _read_meta(db_path)
+        if not meta:
+            log.warning("  Skipping %s (no meta table)", db_path.name)
+            continue
+
+        book_id_str = meta.get("book_id", "")
+        model = meta.get("embedding_model", "")
+        dim_str = meta.get("embedding_dim", "0")
+
+        if not book_id_str or not model:
+            log.warning("  Skipping %s (missing book_id or embedding_model in meta)", db_path.name)
+            continue
+
+        perm_id = f"{book_id_str}_{model}"
+        book_id = int(book_id_str)
+        dim = int(dim_str)
+
+        # Build a human-readable label from the text_file or book_id
+        text_file = meta.get("text_file", f"book_{book_id}")
+        # Strip gutenberg_ prefix and .txt suffix for a cleaner label
+        book_label = text_file.replace("gutenberg_", "").replace(".txt", "")
+        label = f"Book {book_label} + {model} ({dim}d)"
+
+        databases.append(
+            {
+                "id": perm_id,
+                "book_id": book_id,
+                "model": model,
+                "dim": dim,
+                "file": db_path.name,
+                "size_bytes": db_path.stat().st_size,
+                "label": label,
+            }
+        )
+
+    manifest = {"databases": databases}
+
+    manifest_path = output_folder / "manifest.json"
+    tmp_path = output_folder / "manifest.json.tmp"
+    tmp_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    tmp_path.rename(manifest_path)
+
+    log.info("Wrote manifest.json with %d database(s) to %s", len(databases), manifest_path)
+    return manifest_path

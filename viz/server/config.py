@@ -14,5 +14,8 @@ EXTENSION_PATH = str(PROJECT_ROOT / "build" / "muninn")
 DEFAULT_DB_PATH = str(PROJECT_ROOT / "benchmarks" / "kg" / "3300.db")
 DB_PATH = os.environ.get("MUNINN_DB_PATH", DEFAULT_DB_PATH)
 
+# Demo databases directory (where manifest.json and built .db files live)
+DEMOS_DIR = VIZ_ROOT / "frontend" / "public" / "demos"
+
 # Server ports
 DEFAULT_PORT = 8200

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 from benchmarks.demo_builder.discovery import _chunk_count, _fmt_size, discover_book_ids
 
 
@@ -27,8 +30,23 @@ def test_chunk_count_nonexistent_book() -> None:
     assert _chunk_count(999999) == 0
 
 
-def test_chunk_count_existing_book() -> None:
-    ids = discover_book_ids()
-    if ids:
-        count = _chunk_count(ids[0])
-        assert count > 0
+def test_chunk_count_no_output_folder() -> None:
+    """_chunk_count returns 0 when output_folder is None."""
+    assert _chunk_count(3300, None) == 0
+
+
+def test_chunk_count_empty_output_folder(tmp_path: Path) -> None:
+    """_chunk_count returns 0 when output folder has no matching DBs."""
+    assert _chunk_count(3300, tmp_path) == 0
+
+
+def test_chunk_count_from_built_db(tmp_path: Path) -> None:
+    """_chunk_count reads from a built DB's chunks table."""
+    db_path = tmp_path / "3300_MiniLM.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE chunks (chunk_id INTEGER PRIMARY KEY, text TEXT NOT NULL)")
+    conn.executemany("INSERT INTO chunks (chunk_id, text) VALUES (?, ?)", [(i, f"chunk {i}") for i in range(42)])
+    conn.commit()
+    conn.close()
+
+    assert _chunk_count(3300, tmp_path) == 42

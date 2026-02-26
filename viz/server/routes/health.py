@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from server.config import DB_PATH, EXTENSION_PATH
-from server.services.db import discover_edge_tables, discover_hnsw_indexes, get_connection
+from server.services.db import discover_edge_tables, discover_hnsw_indexes, get_active_db_id, get_connection
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ def health() -> dict[str, Any]:
         "db_path": DB_PATH,
         "db_exists": Path(DB_PATH).exists(),
         "extension_path": EXTENSION_PATH,
+        "active_database": get_active_db_id(),
     }
 
     try:

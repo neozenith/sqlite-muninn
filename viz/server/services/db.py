@@ -19,6 +19,9 @@ log = logging.getLogger(__name__)
 # Module-level connection singleton
 _connection: sqlite3.Connection | None = None
 
+# Tracks the currently active demo database id (e.g. "3300_MiniLM")
+_active_db_id: str | None = None
+
 # Lock to serialize database access across FastAPI's thread pool.
 # muninn TVFs (Leiden, centrality) create internal sub-queries that
 # cause re-entrancy issues when multiple requests use the same connection.
@@ -76,8 +79,53 @@ def close_connection() -> None:
 
 def reset_connection() -> None:
     """Reset singleton for testing."""
-    global _connection
+    global _connection, _active_db_id
     _connection = None
+    _active_db_id = None
+
+
+def reconnect(db_path: str, extension_path: str | None = None) -> sqlite3.Connection:
+    """Close existing connection and open a new one at db_path.
+
+    Must be called while holding _db_lock (i.e. from within a db_session context).
+    """
+    global _connection, _active_db_id
+
+    if _connection is not None:
+        _connection.close()
+        _connection = None
+
+    ext = extension_path or _config.EXTENSION_PATH
+
+    log.info("Reconnecting to database: %s", db_path)
+
+    if not Path(db_path).exists():
+        msg = f"Database not found: {db_path}"
+        raise FileNotFoundError(msg)
+
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+
+    try:
+        conn.enable_load_extension(True)
+        conn.load_extension(ext)
+        log.info("Loaded muninn extension from: %s", ext)
+    except sqlite3.OperationalError:
+        log.warning("Could not load muninn extension from: %s", ext)
+
+    _connection = conn
+    return conn
+
+
+def get_active_db_id() -> str | None:
+    """Return the currently active demo database id."""
+    return _active_db_id
+
+
+def set_active_db_id(db_id: str | None) -> None:
+    """Set the currently active demo database id."""
+    global _active_db_id
+    _active_db_id = db_id
 
 
 def db_session() -> Generator[sqlite3.Connection, None, None]:

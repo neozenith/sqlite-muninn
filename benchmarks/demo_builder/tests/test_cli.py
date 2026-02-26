@@ -24,6 +24,7 @@ def test_help_flag() -> None:
     assert "build" in result.stdout
     assert "list-books" in result.stdout
     assert "list-models" in result.stdout
+    assert "write-manifest" in result.stdout
 
 
 def test_list_models() -> None:
@@ -40,13 +41,13 @@ def test_list_books() -> None:
 
 
 def test_manifest() -> None:
-    result = _run("uv run -m benchmarks.demo_builder manifest --output-folder wasm/assets")
+    result = _run("uv run -m benchmarks.demo_builder manifest")
     assert result.returncode == 0
     assert "Demo DB Manifest" in result.stdout
 
 
 def test_manifest_missing_commands() -> None:
-    result = _run("uv run -m benchmarks.demo_builder manifest --output-folder wasm/assets --missing --commands")
+    result = _run("uv run -m benchmarks.demo_builder manifest --missing --commands")
     assert result.returncode == 0
     # Output is either commands or nothing (if all are built)
     if result.stdout.strip():
