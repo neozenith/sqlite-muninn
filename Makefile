@@ -154,8 +154,14 @@ demo-db: build/muninn$(EXT)                    ## Build the KG demo database for
 
 format: format-c format-python format-js       ## Format all code
 
+# C files for formatting/linting — excludes vendored SQLite headers not authored here.
+# .clang-format-ignore is only supported by clang-format ≥ 18; Ubuntu 22.04 ships 14.
+CLANG_FORMAT_SRCS = $(wildcard src/*.c) $(wildcard test/*.c)
+CLANG_FORMAT_HDRS = $(filter-out src/sqlite3.h src/sqlite3ext.h, $(wildcard src/*.h)) $(wildcard test/*.h)
+CLANG_FORMAT_FILES = $(CLANG_FORMAT_SRCS) $(CLANG_FORMAT_HDRS)
+
 format-c:                                      ## Format C code with clang-format
-	clang-format -i src/*.c src/*.h test/*.c test/*.h
+	clang-format -i $(CLANG_FORMAT_FILES)
 
 init-python: .venv/.init-python                       ## Set up Python virtual environment and install dependencies
 .venv/.init-python: pyproject.toml
@@ -174,7 +180,7 @@ lint: lint-c lint-python lint-js format               ## Lint all code
 
 lint-c:                                        ## Lint C code with clang-format (check mode)
 	@if command -v clang-format >/dev/null 2>&1; then \
-		clang-format --dry-run --Werror src/*.c src/*.h test/*.c test/*.h 2>/dev/null; \
+		clang-format --dry-run --Werror $(CLANG_FORMAT_FILES) 2>/dev/null; \
 		echo "C lint passed"; \
 	else \
 		echo "clang-format not installed — skipping C lint"; \
