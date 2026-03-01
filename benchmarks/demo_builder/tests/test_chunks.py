@@ -97,6 +97,4 @@ def test_chunk_chars_capped_by_ner_re_limit() -> None:
         effective = min(info["chunk_chars"], NER_RE_CHUNK_CHARS_MAX)
         chunks = _chunk_text(text, chunk_chars=effective)
         for chunk in chunks:
-            assert len(chunk) <= effective, (
-                f"{name}: chunk of {len(chunk)} chars exceeds effective limit {effective}"
-            )
+            assert len(chunk) <= effective, f"{name}: chunk of {len(chunk)} chars exceeds effective limit {effective}"

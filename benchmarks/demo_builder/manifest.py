@@ -166,7 +166,7 @@ def _read_meta(db_path: Path) -> dict[str, str]:
     conn = sqlite3.connect(str(db_path))
     try:
         rows = conn.execute("SELECT key, value FROM meta").fetchall()
-        return {key: value for key, value in rows}
+        return dict(rows)
     except sqlite3.OperationalError:
         return {}
     finally:
@@ -190,34 +190,51 @@ def write_manifest_json(output_folder: Path) -> Path:
             continue
 
         book_id_str = meta.get("book_id", "")
+        db_id_str = meta.get("db_id", "")
         model = meta.get("embedding_model", "")
         dim_str = meta.get("embedding_dim", "0")
 
-        if not book_id_str or not model:
-            log.warning("  Skipping %s (missing book_id or embedding_model in meta)", db_path.name)
+        if not model:
+            log.warning("  Skipping %s (missing embedding_model in meta)", db_path.name)
             continue
 
-        perm_id = f"{book_id_str}_{model}"
-        book_id = int(book_id_str)
         dim = int(dim_str)
 
-        # Build a human-readable label from the text_file or book_id
-        text_file = meta.get("text_file", f"book_{book_id}")
-        # Strip gutenberg_ prefix and .txt suffix for a cleaner label
-        book_label = text_file.replace("gutenberg_", "").replace(".txt", "")
-        label = f"Book {book_label} + {model} ({dim}d)"
-
-        databases.append(
-            {
-                "id": perm_id,
-                "book_id": book_id,
-                "model": model,
-                "dim": dim,
-                "file": db_path.name,
-                "size_bytes": db_path.stat().st_size,
-                "label": label,
-            }
-        )
+        if book_id_str:
+            # Standard book-based demo DB
+            book_id = int(book_id_str)
+            perm_id = f"{book_id_str}_{model}"
+            text_file = meta.get("text_file", f"book_{book_id}")
+            book_label = text_file.replace("gutenberg_", "").replace(".txt", "")
+            label = f"Book {book_label} + {model} ({dim}d)"
+            databases.append(
+                {
+                    "id": perm_id,
+                    "book_id": book_id,
+                    "model": model,
+                    "dim": dim,
+                    "file": db_path.name,
+                    "size_bytes": db_path.stat().st_size,
+                    "label": label,
+                }
+            )
+        elif db_id_str:
+            # Non-book DB (e.g. sessions_demo) — uses db_id as the manifest ID
+            source = meta.get("source", db_id_str)
+            label = f"{source.replace('_', ' ').title()} ({dim}d)"
+            databases.append(
+                {
+                    "id": db_id_str,
+                    "model": model,
+                    "dim": dim,
+                    "file": db_path.name,
+                    "size_bytes": db_path.stat().st_size,
+                    "label": label,
+                }
+            )
+        else:
+            log.warning("  Skipping %s (missing book_id and db_id in meta)", db_path.name)
+            continue
 
     manifest = {"databases": databases}
 

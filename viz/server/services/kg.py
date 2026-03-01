@@ -21,20 +21,70 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-# ── Embedding model cache ─────────────────────────────────────────────
+# ── Embedding model config ────────────────────────────────────────────
 
-_embedding_model: Any = None
+# NomicEmbed is an asymmetric model: documents use "search_document: " prefix
+# (applied at index-build time in demo_builder), queries use "search_query: ".
+# MiniLM is symmetric — no prefixes needed.
+_EMBEDDING_CONFIGS: dict[str, dict[str, Any]] = {
+    "MiniLM": {
+        "st_name": "all-MiniLM-L6-v2",
+        "query_prefix": "",
+    },
+    "NomicEmbed": {
+        "st_name": "nomic-ai/nomic-embed-text-v1.5",
+        "query_prefix": "search_query: ",
+        "trust_remote_code": True,
+    },
+}
+
+# Map raw model slugs (from manifest model field or meta table) to config keys.
+# The GGUF slug from sessions_demo maps to NomicEmbed because it uses the same
+# base model (nomic-embed-text-v1.5) — just quantized via llama.cpp instead of
+# full-precision via sentence-transformers.
+_SLUG_TO_CONFIG: dict[str, str] = {
+    "MiniLM": "MiniLM",
+    "all-MiniLM-L6-v2": "MiniLM",
+    "NomicEmbed": "NomicEmbed",
+    "nomic-ai/nomic-embed-text-v1.5": "NomicEmbed",
+    "nomic-embed-text-v1.5.Q8_0.gguf": "NomicEmbed",
+}
+
+# Per-slug model cache (lazy-loaded on first use of each slug)
+_embedding_model_cache: dict[str, Any] = {}
+_active_config_key: str = "MiniLM"
 
 
-def _get_embedding_model() -> Any:
-    """Lazy-load and cache the sentence-transformers model."""
-    global _embedding_model
-    if _embedding_model is None:
-        if not _HAS_SENTENCE_TRANSFORMERS:
-            raise RuntimeError("sentence-transformers not installed. pip install sentence-transformers")
-        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-        log.info("Loaded embedding model: all-MiniLM-L6-v2")
-    return _embedding_model
+def set_active_embedding_model(model_slug: str) -> None:
+    """Update the active embedding model when the database is switched."""
+    global _active_config_key
+    config_key = _SLUG_TO_CONFIG.get(model_slug, "MiniLM")
+    _active_config_key = config_key
+    log.info("Active embedding model: %s (from slug: %s)", config_key, model_slug)
+
+
+def _get_embedding_model() -> tuple[Any, str]:
+    """Lazy-load the correct sentence-transformers model for the active DB.
+
+    Returns (model, query_prefix). The query_prefix must be prepended to
+    query text before encoding for asymmetric models like NomicEmbed.
+    """
+    global _embedding_model_cache, _active_config_key
+    if not _HAS_SENTENCE_TRANSFORMERS:
+        raise RuntimeError("sentence-transformers not installed. pip install sentence-transformers")
+
+    key = _active_config_key
+    if key not in _embedding_model_cache:
+        cfg = _EMBEDDING_CONFIGS.get(key, _EMBEDDING_CONFIGS["MiniLM"])
+        kwargs: dict[str, Any] = {}
+        if cfg.get("trust_remote_code"):
+            kwargs["trust_remote_code"] = True
+        model = SentenceTransformer(cfg["st_name"], **kwargs)
+        _embedding_model_cache[key] = model
+        log.info("Loaded embedding model: %s", cfg["st_name"])
+
+    cfg = _EMBEDDING_CONFIGS.get(key, _EMBEDDING_CONFIGS["MiniLM"])
+    return _embedding_model_cache[key], cfg.get("query_prefix", "")
 
 
 def _pack_vector(v: np.ndarray) -> bytes:
@@ -648,11 +698,14 @@ def run_kg_search(
     """
     result: dict[str, Any] = {"query": query_text}
 
-    # Embed query if model available; VSS + graph need this
+    # Embed query if model available; VSS + graph need this.
+    # For asymmetric models (NomicEmbed), prepend the query prefix so it
+    # lands in the same embedding subspace as the indexed documents.
     query_blob: bytes | None = None
     try:
-        model = _get_embedding_model()
-        embedding = model.encode([query_text], normalize_embeddings=True)[0]
+        model, query_prefix = _get_embedding_model()
+        text_to_embed = query_prefix + query_text if query_prefix else query_text
+        embedding = model.encode([text_to_embed], normalize_embeddings=True)[0]
         query_blob = _pack_vector(embedding)
     except RuntimeError:
         log.warning("sentence-transformers not available; VSS and graph search disabled")
@@ -769,9 +822,7 @@ def run_kg_search(
         try:
             node_set = {n["name"] for n in graph_nodes}
             leiden_rows = conn.execute(
-                "SELECT node, community_id FROM graph_leiden("
-                "  'relations', 'src', 'dst', 'both', 1.0"
-                ")"
+                "SELECT node, community_id FROM graph_leiden(  'relations', 'src', 'dst', 'both', 1.0)"
             ).fetchall()
             for row in leiden_rows:
                 if row["node"] in node_set:

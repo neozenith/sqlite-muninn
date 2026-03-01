@@ -32,11 +32,13 @@ test.describe('VSS Explorer', () => {
     await checkpoint(page, 'vss-index-selected');
 
     // UMAP projection can take > 30s for large vectors.
-    // Verify we see either "Projecting..." or the stats card.
-    const projecting = page.locator('text=Projecting embeddings');
-    const stats = page.locator('text=Points:');
+    // Verify we see a definitive canvas state: loading spinner, stats card, or empty state.
+    // (Never a blank canvas with no indication of state.)
+    const loading = page.getByTestId('embedding-state-loading');
+    const stats = page.getByTestId('embedding-stats');
+    const empty = page.getByTestId('embedding-empty-state');
 
-    await expect(projecting.or(stats)).toBeVisible({ timeout: 5_000 });
+    await expect(loading.or(stats).or(empty)).toBeVisible({ timeout: 5_000 });
     await checkpoint(page, 'vss-umap-started');
   });
 });

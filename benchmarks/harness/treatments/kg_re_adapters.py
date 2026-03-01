@@ -18,6 +18,7 @@ import spacy
 from glirel import GLiREL
 from huggingface_hub import snapshot_download
 
+from benchmarks.demo_builder.common import offline_mode
 from benchmarks.harness.treatments.kg_types import EntityMention
 
 log = logging.getLogger(__name__)
@@ -95,17 +96,18 @@ class GLiRELAdapter(ReModelAdapter):
 
     def load(self):
         log.info("Loading GLiREL large-v0...")
-        glirel_dir = snapshot_download("jackboyla/glirel-large-v0")
-        self._re_model = GLiREL._from_pretrained(
-            model_id=glirel_dir,
-            revision=None,
-            cache_dir=None,
-            force_download=False,
-            proxies=None,
-            resume_download=False,
-            local_files_only=True,
-            token=None,
-        )
+        glirel_dir = snapshot_download("jackboyla/glirel-large-v0", local_files_only=True)
+        with offline_mode():
+            self._re_model = GLiREL._from_pretrained(
+                model_id=glirel_dir,
+                revision=None,
+                cache_dir=None,
+                force_download=False,
+                proxies=None,
+                resume_download=False,
+                local_files_only=True,
+                token=None,
+            )
         log.info("Loading spaCy en_core_web_lg for tokenization...")
         self._nlp = spacy.load("en_core_web_lg")
 

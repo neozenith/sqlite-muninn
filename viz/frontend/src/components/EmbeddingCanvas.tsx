@@ -99,14 +99,17 @@ export function EmbeddingCanvas({
 
   if (points.length === 0) {
     return (
-      <div className={`${className} flex items-center justify-center text-muted-foreground text-xs`}>
+      <div
+        data-testid="embedding-empty-state"
+        className={`${className} flex items-center justify-center text-muted-foreground text-xs`}
+      >
         No embedding data
       </div>
     )
   }
 
   return (
-    <div className={`${className} relative bg-muted/30 rounded-lg`}>
+    <div data-testid="embedding-canvas" className={`${className} relative bg-muted/30 rounded-lg`}>
       <DeckGL
         views={view}
         initialViewState={initialViewState}

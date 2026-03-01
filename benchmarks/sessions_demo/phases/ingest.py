@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from benchmarks.sessions_demo.cache import CacheManager
@@ -25,6 +26,31 @@ class PhaseIngest:
     @property
     def name(self) -> str:
         return "ingest"
+
+    def is_stale(self, conn: sqlite3.Connection) -> bool:
+        """Return True if any JSONL files are new or modified since last ingest."""
+        try:
+            # No source files recorded yet → definitely stale.
+            count = conn.execute("SELECT count(*) FROM source_files").fetchone()[0]
+            if count == 0:
+                return True
+            # CacheManager.get_files_needing_update() uses cached["mtime"] (dict-style
+            # column access), which requires row_factory=sqlite3.Row.
+            conn.row_factory = sqlite3.Row
+            # Compare disk mtimes against source_files records via CacheManager.
+            # PRAGMA database_list row: (seq, name, file) — seq=0 is the main DB.
+            db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+            cache = CacheManager(db_path)
+            cache._conn = conn  # share the open connection, skip auto-connect
+            all_files = cache.discover_files()
+            return len(cache.get_files_needing_update(all_files)) > 0
+        except Exception:
+            return True
+
+    def restore_ctx(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        """Nothing new was ingested; counts stay at zero (no new events this run)."""
+        ctx.events_ingested = 0
+        ctx.files_updated = 0
 
     def setup(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         pass

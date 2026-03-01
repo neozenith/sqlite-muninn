@@ -6,6 +6,7 @@ import logging
 import sqlite3
 from typing import TYPE_CHECKING
 
+from benchmarks.demo_builder.common import ProgressTracker
 from benchmarks.sessions_demo.constants import CHUNK_MAX_CHARS, CHUNK_MIN_CHARS
 
 if TYPE_CHECKING:
@@ -76,6 +77,28 @@ class PhaseChunks:
     def name(self) -> str:
         return "chunks"
 
+    def is_stale(self, conn: sqlite3.Connection) -> bool:
+        """Return True if any events with content have not been chunked yet."""
+        try:
+            pending = conn.execute("""
+                SELECT COUNT(*) FROM events e
+                WHERE e.message_content IS NOT NULL
+                  AND e.message_content != ''
+                  AND e.id NOT IN (SELECT DISTINCT event_id FROM event_message_chunks)
+            """).fetchone()[0]
+            return pending > 0
+        except sqlite3.OperationalError:
+            return True
+
+    def restore_ctx(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        """Restore chunk counts from DB when phase is skipped."""
+        try:
+            total = conn.execute("SELECT count(*) FROM event_message_chunks").fetchone()[0]
+            ctx.chunks_created = 0  # nothing created this run
+            ctx.num_chunks = total
+        except sqlite3.OperationalError:
+            pass
+
     def setup(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS event_message_chunks (
@@ -143,6 +166,7 @@ class PhaseChunks:
 
         total_chunks = 0
         events_processed = 0
+        tracker = ProgressTracker(total_events)
         for row in cursor:
             event_id = row[0]
             text = row[1]
@@ -156,15 +180,34 @@ class PhaseChunks:
                 total_chunks += 1
 
             events_processed += 1
-            if events_processed % 200 == 0:
-                log.info("  Chunked %d/%d events (%d chunks so far)", events_processed, total_events, total_chunks)
+            tracker.update()
+            if tracker.should_log():
+                log.info("  Chunked %s  (%d chunks so far)", tracker.report(), total_chunks)
 
         conn.commit()
         ctx.chunks_created = total_chunks
+        ctx.num_chunks = total_chunks  # alias for demo_builder KG phase compat
         log.info("Created %d chunks from %d events", total_chunks, events_processed)
 
     def teardown(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
-        pass
+        # ── viz-compatible chunks table ───────────────────────────────
+        # Demo_builder KG phases (NER, RE, entity_resolution) read from a
+        # table named `chunks` with (chunk_id, text). We create a real table
+        # (not a VIEW) because PhaseNER declares entities.chunk_id with
+        # FOREIGN KEY REFERENCES chunks(chunk_id), and SQLite's FK enforcement
+        # cannot resolve foreign keys against views — only real tables.
+        conn.execute("CREATE TABLE IF NOT EXISTS chunks (chunk_id INTEGER PRIMARY KEY, text TEXT NOT NULL)")
+        conn.execute("INSERT OR IGNORE INTO chunks SELECT chunk_id, text FROM event_message_chunks")
+
+        # chunks_fts is the viz-expected FTS companion for chunks_vec.
+        # Mirrors demo_builder: points at the `chunks` real table.
+        # Rebuilt once here rather than via triggers (build pipeline, not incremental KG).
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content=chunks, content_rowid=chunk_id)"
+        )
+        conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+        conn.commit()
+        log.info("Created chunks table and chunks_fts FTS5 (%d entries)", ctx.num_chunks)
 
     def __call__(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         self.setup(conn, ctx)

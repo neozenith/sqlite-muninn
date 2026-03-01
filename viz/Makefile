@@ -6,7 +6,7 @@ FRONTEND_PORT ?= 5280
 AGENTIC_BACKEND_PORT ?= 8201
 AGENTIC_FRONTEND_PORT ?= 5281
 
-.PHONY: help install dev dev-agentic test test-api test-frontend test-e2e videos clean \
+.PHONY: help install dev dev-agentic wasm test test-api test-frontend test-e2e e2e-videos test-e2e-full clean \
        format format-python format-frontend \
        lint lint-python lint-frontend \
        typecheck typecheck-python typecheck-frontend
@@ -23,14 +23,19 @@ install-python:                                    ## Install Python deps
 install-frontend:                                  ## Install frontend deps
 	npm --prefix frontend install
 
-dev: install                                       ## Start dev servers (human ports)
+wasm:                                              ## Build WASM artifacts → viz/frontend/public/wasm/
+	$(MAKE) -C ../wasm build
+	cp ../wasm/build/muninn_sqlite3.js frontend/public/wasm/
+	cp ../wasm/build/muninn_sqlite3.wasm frontend/public/wasm/
+
+dev: install wasm                                       ## Start dev servers (human ports)
 	@echo "http://localhost:$(FRONTEND_PORT)/kg/query/"
 	npx --prefix frontend concurrently --kill-others \
 		--names "backend,frontend" --prefix-colors "blue,green" \
 		"uv run --directory . python -m server --port $(BACKEND_PORT)" \
 		"VITE_API_PORT=$(BACKEND_PORT) npm --prefix frontend run dev -- --port $(FRONTEND_PORT)"
 
-dev-agentic: install                               ## Start dev servers (agentic ports)
+dev-agentic: install wasm                               ## Start dev servers (agentic ports)
 	npx --prefix frontend concurrently --kill-others \
 		--names "backend,frontend" --prefix-colors "blue,green" \
 		"uv run --directory . python -m server --port $(AGENTIC_BACKEND_PORT)" \
@@ -38,7 +43,7 @@ dev-agentic: install                               ## Start dev servers (agentic
 
 test: test-api test-frontend                       ## Run all tests
 
-ci: format lint typecheck test test-e2e e2e-videos                               ## Run all tests + E2E
+ci: format lint typecheck test test-e2e-full                               ## Run all tests + E2E
 
 test-api: install-python                           ## Python API tests (>90% coverage)
 	uv run --directory . pytest -v
@@ -48,7 +53,7 @@ test-frontend: install-frontend                    ## TypeScript tests (>90% cov
 
 test-e2e: install                                  ## Playwright E2E tests
 	npm --prefix frontend run test:e2e
-	make videos
+	
 
 # ── Code Quality ─────────────────────────────────────────────────────
 
@@ -91,6 +96,7 @@ E2E_DIR = frontend/test-results
 	ffmpeg -i $< -i $@.palette.png -filter_complex "setpts=0.5*PTS,fps=10,scale=1280:-1:flags=lanczos[x];[x][1:v]paletteuse" -y $@
 	rm -f $@.palette.png
 
+test-e2e-full: e2e-videos
 e2e-videos: test-e2e                                            ## Convert all E2E videos
 	$(MAKE) $(patsubst %.webm,%.mp4,$(wildcard $(E2E_DIR)/**/*.webm))
 	$(MAKE) $(patsubst %.webm,%.gif,$(wildcard $(E2E_DIR)/**/*.webm))

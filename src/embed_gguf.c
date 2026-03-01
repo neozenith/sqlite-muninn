@@ -155,7 +155,8 @@ static int load_gguf_model(const char *path, LoadedModel *out, char *errbuf, int
      * even for models trained with 32K+ context. */
     int n_ctx_train = (int)llama_model_n_ctx_train(model);
     int n_ctx = (n_ctx_train > 0) ? n_ctx_train : 512;
-    if (n_ctx > 8192) n_ctx = 8192;
+    if (n_ctx > 8192)
+        n_ctx = 8192;
 
     struct llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx = (uint32_t)n_ctx;

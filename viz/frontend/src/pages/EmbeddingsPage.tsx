@@ -24,7 +24,7 @@ export function EmbeddingsPage() {
   const indexName = dataset ? decodeURIComponent(dataset) : null
 
   const { data: indexes, isLoading: indexesLoading } = useIndexes()
-  const { data: embeddings, isLoading: embeddingsLoading } = useEmbeddings(indexName, dimensions)
+  const { data: embeddings, isLoading: embeddingsLoading, isError: embeddingsError } = useEmbeddings(indexName, dimensions)
   const { data: searchResults } = useVSSSearch(indexName, selectedPointId, k)
   const textSearch = useVSSTextSearch(indexName, searchText, k)
 
@@ -178,13 +178,13 @@ export function EmbeddingsPage() {
         </Card>
 
         {embeddings && (
-          <Card>
+          <Card data-testid="embedding-stats" data-count={embeddings.count}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Stats</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 text-xs">
               <div>
-                Points: <Badge variant="secondary">{embeddings.count}</Badge>
+                Points: <Badge data-testid="embedding-point-count" variant="secondary">{embeddings.count}</Badge>
               </div>
               <div>
                 Original dim: <Badge variant="secondary">{embeddings.original_dimensions}</Badge>
@@ -220,10 +220,20 @@ export function EmbeddingsPage() {
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 relative">
+      <div className="flex-1 relative" data-testid="embedding-canvas-area">
         {embeddingsLoading ? (
-          <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+          <div
+            data-testid="embedding-state-loading"
+            className="absolute inset-0 flex items-center justify-center text-muted-foreground"
+          >
             Projecting embeddings with UMAP...
+          </div>
+        ) : embeddingsError ? (
+          <div
+            data-testid="embedding-state-error"
+            className="absolute inset-0 flex items-center justify-center text-muted-foreground"
+          >
+            Index not found in current database
           </div>
         ) : embeddings ? (
           <EmbeddingCanvas
@@ -234,7 +244,10 @@ export function EmbeddingsPage() {
             dimensions={dimensions}
           />
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+          <div
+            data-testid="embedding-state-no-selection"
+            className="absolute inset-0 flex items-center justify-center text-muted-foreground"
+          >
             No index selected
           </div>
         )}

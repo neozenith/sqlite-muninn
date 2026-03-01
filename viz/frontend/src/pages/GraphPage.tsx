@@ -35,7 +35,7 @@ export function GraphPage() {
   const cyRef = useRef<cytoscape.Core | null>(null)
 
   const { data: graphs, isLoading: graphsLoading } = useGraphs()
-  const { data: subgraph, isLoading: subgraphLoading } = useSubgraph(edgeTable)
+  const { data: subgraph, isLoading: subgraphLoading, isError: subgraphError } = useSubgraph(edgeTable)
   const { data: bfsData } = useBFS(edgeTable, nodeParam, maxDepth)
   const { data: communities } = useCommunities(edgeTable, resolution)
   const { data: centrality } = useCentrality(edgeTable, measureParam)
@@ -198,16 +198,16 @@ export function GraphPage() {
         </Card>
 
         {subgraph && (
-          <Card>
+          <Card data-testid="graph-stats" data-node-count={subgraph.node_count}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Graph Stats</CardTitle>
             </CardHeader>
             <CardContent className="space-y-1 text-xs">
               <div>
-                Nodes: <Badge variant="secondary">{subgraph.node_count}</Badge>
+                Nodes: <Badge data-testid="graph-node-count" variant="secondary">{subgraph.node_count}</Badge>
               </div>
               <div>
-                Edges: <Badge variant="secondary">{subgraph.edge_count}</Badge>
+                Edges: <Badge data-testid="graph-edge-count" variant="secondary">{subgraph.edge_count}</Badge>
               </div>
               {communities && (
                 <div>
@@ -257,10 +257,20 @@ export function GraphPage() {
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 relative">
+      <div className="flex-1 relative" data-testid="graph-canvas-area">
         {subgraphLoading ? (
-          <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+          <div
+            data-testid="graph-state-loading"
+            className="absolute inset-0 flex items-center justify-center text-muted-foreground"
+          >
             Loading graph...
+          </div>
+        ) : subgraphError ? (
+          <div
+            data-testid="graph-state-error"
+            className="absolute inset-0 flex items-center justify-center text-muted-foreground"
+          >
+            Edge table not found in current database
           </div>
         ) : (
           <GraphCanvas elements={elements} layout={layoutParam} onNodeSelect={setSelectedNode} cyRef={cyRef} />

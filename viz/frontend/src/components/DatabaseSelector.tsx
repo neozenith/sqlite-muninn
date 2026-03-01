@@ -1,10 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { fetchDatabases, getStoredDatabaseId, selectDatabase } from '@/lib/services/db-service'
 
 export function DatabaseSelector() {
   const queryClient = useQueryClient()
+  const [switching, setSwitching] = useState(false)
 
   const { data } = useQuery({
     queryKey: ['databases'],
@@ -17,9 +18,10 @@ export function DatabaseSelector() {
     if (!data || data.databases.length === 0) return
     const stored = getStoredDatabaseId()
     if (stored && stored !== data.active && data.databases.some((db) => db.id === stored)) {
-      selectDatabase(stored).then(() => {
-        queryClient.invalidateQueries()
-      })
+      setSwitching(true)
+      selectDatabase(stored)
+        .then(() => queryClient.invalidateQueries())
+        .finally(() => setSwitching(false))
     }
   }, [data, queryClient])
 
@@ -30,16 +32,21 @@ export function DatabaseSelector() {
   const handleChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value
     if (!id) return
+    setSwitching(true)
     await selectDatabase(id)
-    queryClient.invalidateQueries()
+    await queryClient.invalidateQueries()
+    setSwitching(false)
   }
 
   return (
     <div className="flex items-center gap-2">
       <select
+        data-testid="db-selector"
         value={data.active ?? ''}
         onChange={handleChange}
-        className="h-7 rounded-md border bg-background px-2 text-xs"
+        disabled={switching}
+        className="h-7 rounded-md border bg-background px-2 text-xs disabled:opacity-50"
+        aria-label="Select database"
       >
         {!data.active && <option value="">Select database...</option>}
         {data.databases.map((db) => (
@@ -48,7 +55,12 @@ export function DatabaseSelector() {
           </option>
         ))}
       </select>
-      {activeDb && (
+      {switching && (
+        <span data-testid="db-switching" className="text-xs text-muted-foreground">
+          Switching...
+        </span>
+      )}
+      {!switching && activeDb && (
         <Badge variant="outline" className="text-[10px]">
           {activeDb.model} {activeDb.dim}d
         </Badge>

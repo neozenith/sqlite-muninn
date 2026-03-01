@@ -15,8 +15,10 @@ import re
 
 import spacy
 from gliner import GLiNER
+from huggingface_hub import snapshot_download
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
+from benchmarks.demo_builder.common import offline_mode
 from benchmarks.harness.treatments.kg_types import EntityMention, NerModelAdapter
 
 log = logging.getLogger(__name__)
@@ -54,7 +56,9 @@ class GLiNERAdapter(NerModelAdapter):
 
     def load(self):
         log.info("Loading GLiNER model: %s", self._model_id)
-        self._model = GLiNER.from_pretrained(self._model_id)
+        path = snapshot_download(self._model_id, local_files_only=True)
+        with offline_mode():
+            self._model = GLiNER.from_pretrained(path, local_files_only=True)
 
     def extract(self, text, labels):
         assert self._model is not None, "load() must be called before extract()"
@@ -94,7 +98,9 @@ class NuNerZeroAdapter(NerModelAdapter):
 
     def load(self):
         log.info("Loading NuNerZero model: %s", self._MODEL_ID)
-        self._model = GLiNER.from_pretrained(self._MODEL_ID)
+        path = snapshot_download(self._MODEL_ID, local_files_only=True)
+        with offline_mode():
+            self._model = GLiNER.from_pretrained(path, local_files_only=True)
 
     def extract(self, text, labels):
         assert self._model is not None, "load() must be called before extract()"
@@ -140,8 +146,9 @@ class GNERAdapter(NerModelAdapter):
 
     def load(self):
         log.info("Loading GNER model: %s", self._model_id)
-        self._tokenizer = AutoTokenizer.from_pretrained(self._model_id)
-        self._model = AutoModelForSeq2SeqLM.from_pretrained(self._model_id)
+        path = snapshot_download(self._model_id, local_files_only=True)
+        self._tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
+        self._model = AutoModelForSeq2SeqLM.from_pretrained(path, local_files_only=True)
 
     def extract(self, text, labels):
         assert self._tokenizer is not None, "load() must be called before extract()"

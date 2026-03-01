@@ -119,6 +119,7 @@ test: build/test_runner                        ## Run C unit tests + coverage
 	@GCOVR=$$(command -v gcovr 2>/dev/null || echo .venv/bin/gcovr); \
 	if [ -x "$$GCOVR" ]; then \
 		$$GCOVR --root . --filter 'src/' --exclude 'src/sqlite3' \
+			--gcov-ignore-errors=source_not_found \
 			--fail-under-line 50 --print-summary; \
 	else \
 		echo "gcovr not installed — skipping C coverage report"; \
@@ -164,8 +165,8 @@ init-python: .venv/.init-python                       ## Set up Python virtual e
 	@touch $@
 
 format-python: .venv/.init-python                       ## Format Python code with ruff
-	.venv/bin/ruff format .
 	.venv/bin/ruff check --fix-only .
+	.venv/bin/ruff format .
 
 format-js:                                     ## Format TypeScript code with biome
 	npm --prefix npm run format

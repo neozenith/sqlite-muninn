@@ -26,6 +26,26 @@ class PhaseEntityResolution(Phase):
     def name(self) -> str:
         return "entity_resolution"
 
+    def is_stale(self, conn: sqlite3.Connection) -> bool:
+        """Return True if entity_resolution output is missing or stale."""
+        try:
+            node_count = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
+            if node_count == 0:
+                return True
+            # Stale if there are entity names not covered by any cluster.
+            distinct_names = conn.execute("SELECT count(DISTINCT name) FROM entities").fetchone()[0]
+            cluster_count = conn.execute("SELECT count(*) FROM entity_clusters").fetchone()[0]
+            return cluster_count < distinct_names
+        except sqlite3.OperationalError:
+            return True
+
+    def restore_ctx(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        try:
+            ctx.num_nodes = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
+            ctx.num_edges = conn.execute("SELECT count(*) FROM edges").fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+
     def setup(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         entity_stats = conn.execute("""
             SELECT name, entity_type, count(*) as mention_count
@@ -113,6 +133,12 @@ class PhaseEntityResolution(Phase):
         log.info("  %d match pairs above threshold 0.5", len(match_edges))
 
         # ── Leiden clustering on match pairs ──────────────────────────
+        # Drop output tables before rebuilding — entity_resolution is a global
+        # clustering pass that cannot be incrementalised. Always runs from scratch.
+        conn.execute("DROP TABLE IF EXISTS _match_edges")
+        conn.execute("DROP TABLE IF EXISTS entity_clusters")
+        conn.execute("DROP TABLE IF EXISTS nodes")
+        conn.execute("DROP TABLE IF EXISTS edges")
         conn.execute("CREATE TABLE _match_edges (src TEXT NOT NULL, dst TEXT NOT NULL, weight REAL DEFAULT 1.0)")
         conn.executemany(
             "INSERT INTO _match_edges (src, dst, weight) VALUES (?, ?, ?)",
@@ -155,7 +181,7 @@ class PhaseEntityResolution(Phase):
             if ent_name not in entity_to_canonical:
                 entity_to_canonical[ent_name] = ent_name
 
-        # ── Populate entity_clusters table ────────────────────────────
+        # ── Populate entity_clusters table (fresh: was dropped above) ──
         conn.execute("CREATE TABLE entity_clusters (name TEXT PRIMARY KEY, canonical TEXT NOT NULL)")
         conn.executemany(
             "INSERT INTO entity_clusters (name, canonical) VALUES (?, ?)",

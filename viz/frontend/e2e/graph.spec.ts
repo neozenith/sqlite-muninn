@@ -28,9 +28,20 @@ test.describe('Graph Explorer', () => {
     await firstCard.click();
     await page.waitForURL(/\/graph\/.+/);
 
-    // Graph stats should show (indicates data loaded)
-    const nodesText = page.locator('text=Nodes:');
-    await expect(nodesText).toBeVisible({ timeout: 15_000 });
+    // Graph canvas must show a definitive state: data loaded, empty, or error.
+    // (Never a blank canvas with no indication of state.)
+    await expect(async () => {
+      const stats = page.getByTestId('graph-stats');
+      const empty = page.getByTestId('graph-empty-state');
+      const error = page.getByTestId('graph-state-error');
+      const isStats = await stats.isVisible();
+      const isEmpty = await empty.isVisible();
+      const isError = await error.isVisible();
+      expect(isStats || isEmpty || isError, 'Graph canvas must show definitive state').toBe(true);
+    }).toPass({ timeout: 15_000 });
+
+    // Stronger check: the graph should have loaded actual data for these demo databases
+    await expect(page.getByTestId('graph-stats')).toBeVisible({ timeout: 5_000 });
 
     await checkpoint(page, 'graph-network-rendered');
 

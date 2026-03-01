@@ -5,6 +5,12 @@ Each phase follows a setup/run/teardown lifecycle:
 - run(): Execute main phase logic (abstract — must implement)
 - teardown(): Clean up temporary tables/resources (default: no-op)
 
+DAG-aware incremental execution:
+- is_stale(conn): Return True if this phase has pending work (default: True).
+  Must be read-only DB queries — no model loading or side effects.
+- restore_ctx(conn, ctx): Repopulate ctx fields from existing DB data when the
+  phase is skipped (default: no-op). Downstream phases read ctx for their inputs.
+
 Phases are callable: phase(conn, ctx) invokes the full lifecycle.
 """
 
@@ -25,6 +31,13 @@ class Phase(ABC):
     @abstractmethod
     def name(self) -> str:
         """Human-readable phase name."""
+
+    def is_stale(self, conn: sqlite3.Connection) -> bool:  # noqa: B027
+        """Return True if this phase has pending work. Default: always stale."""
+        return True
+
+    def restore_ctx(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:  # noqa: B027
+        """Repopulate ctx fields from DB when phase is skipped. Default: no-op."""
 
     def setup(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:  # noqa: B027
         """Create tables, load models, prepare preconditions. Default: no-op."""

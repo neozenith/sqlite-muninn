@@ -1,5 +1,6 @@
 """Test fixtures for muninn-viz API tests."""
 
+import math
 import pathlib
 import struct
 
@@ -33,6 +34,22 @@ def _create_test_db(tmp_path: pathlib.Path) -> str:
     for i in range(10):
         vec = struct.pack("4f", float(i), float(i + 1), float(i + 2), float(i + 3))
         conn.execute("INSERT INTO test_vec (rowid, vector) VALUES (?, ?)", (i + 1, vec))
+    conn.commit()
+
+    # Pre-computed UMAP table (required by /vss/{name}/embeddings endpoint)
+    conn.execute("""
+        CREATE TABLE test_vec_umap (
+            id INTEGER PRIMARY KEY,
+            x2d REAL, y2d REAL, x3d REAL, y3d REAL, z3d REAL
+        )
+    """)
+    for i in range(10):
+        angle = i * 2 * math.pi / 10
+        conn.execute(
+            "INSERT INTO test_vec_umap VALUES (?, ?, ?, ?, ?, ?)",
+            (i + 1, round(math.cos(angle), 4), round(math.sin(angle), 4),
+             round(math.cos(angle) * 0.5, 4), round(math.sin(angle) * 0.5, 4), round(i * 0.1, 4)),
+        )
     conn.commit()
 
     # Create edge table

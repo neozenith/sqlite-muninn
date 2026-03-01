@@ -1,0 +1,3 @@
+# WASM binary artifacts — built by `make -C viz wasm`
+muninn_sqlite3.js
+muninn_sqlite3.wasm

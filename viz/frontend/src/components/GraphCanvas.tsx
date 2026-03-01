@@ -123,12 +123,17 @@ export function GraphCanvas({
 
   if (elements.length === 0) {
     return (
-      <div className={`${className} flex items-center justify-center text-muted-foreground text-xs`}>No graph data</div>
+      <div
+        data-testid="graph-empty-state"
+        className={`${className} flex items-center justify-center text-muted-foreground text-xs`}
+      >
+        No graph data
+      </div>
     )
   }
 
   return (
-    <div className={`${className} relative bg-muted/30 rounded-lg overflow-hidden`}>
+    <div data-testid="graph-canvas" className={`${className} relative bg-muted/30 rounded-lg overflow-hidden`}>
       <CytoscapeComponent
         elements={elements as any}
         stylesheet={stylesheet}

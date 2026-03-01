@@ -26,7 +26,25 @@ class PhaseNode2Vec(Phase):
     def name(self) -> str:
         return "node2vec"
 
+    def is_stale(self, conn: sqlite3.Connection) -> bool:
+        """Return True if node2vec output is missing or out-of-sync with nodes table."""
+        try:
+            n2v_count = conn.execute("SELECT count(*) FROM node2vec_emb_nodes").fetchone()[0]
+            node_count = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
+            return n2v_count != node_count
+        except sqlite3.OperationalError:
+            return True
+
+    def restore_ctx(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        try:
+            ctx.num_n2v = conn.execute("SELECT count(*) FROM node2vec_emb_nodes").fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+
     def setup(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        # Drop + recreate: node2vec must be retrained from scratch when the graph changes.
+        conn.execute("DROP TABLE IF EXISTS node2vec_emb")  # VT + all shadow tables via xDestroy
+        conn.execute("DROP TABLE IF EXISTS n2v_edges")
         conn.execute(
             f"CREATE VIRTUAL TABLE node2vec_emb USING hnsw_index("
             f"  dimensions={N2V_DIM}, metric='cosine', m=16, ef_construction=200"

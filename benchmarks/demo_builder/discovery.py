@@ -118,7 +118,8 @@ def print_models() -> None:
 
     for name, info in EMBEDDING_MODELS.items():
         print(
-            f"  {name:<14s}   {info['dim']:>5d}   {info['max_tokens']:>7d}   {info['chunk_chars']:>8d}   {info['st_name']}"
+            f"  {name:<14s}   {info['dim']:>5d}   {info['max_tokens']:>7d}"
+            f"   {info['chunk_chars']:>8d}   {info['st_name']}"
         )
 
     print()

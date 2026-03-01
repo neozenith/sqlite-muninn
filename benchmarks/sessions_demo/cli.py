@@ -2,6 +2,8 @@
 
 Usage:
     uv run -m benchmarks.sessions_demo build
+    uv run -m benchmarks.sessions_demo build --status
+    uv run -m benchmarks.sessions_demo build --output-folder viz/frontend/public/demos
     uv run -m benchmarks.sessions_demo cache init
     uv run -m benchmarks.sessions_demo cache update
     uv run -m benchmarks.sessions_demo cache rebuild
@@ -15,16 +17,100 @@ import argparse
 import logging
 import sys
 
-from benchmarks.sessions_demo.constants import DEFAULT_DB_NAME, DEFAULT_OUTPUT_DIR
+from benchmarks.sessions_demo.constants import DEFAULT_DB_NAME, DEFAULT_OUTPUT_FOLDER, PHASE_NAMES
 
 log = logging.getLogger(__name__)
+
+
+def _fmt_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(n) < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024  # type: ignore[assignment]
+    return f"{n:.1f} TB"
+
+
+def _cmd_build_status(args: argparse.Namespace) -> None:
+    """Print build status and pending-work delta without running anything."""
+    from benchmarks.sessions_demo.build import SessionsBuild
+
+    db_path = args.output_folder / args.db_name
+    if not db_path.exists():
+        print(f"Database not found: {db_path}")
+        print("Run 'build' to create it.")
+        return
+
+    build = SessionsBuild(db_path)
+    build.setup()
+    try:
+        s = build.get_build_status()
+    finally:
+        build.teardown()
+
+    completed = s["completed_phases"]  # {name: (phase_num, completed_at)}
+
+    print()
+    print("=== sessions_demo Build Status ===")
+    print(f"Database : {s['db_path']}")
+    print(f"Size     : {_fmt_bytes(s['db_size_bytes'])}")
+    print()
+
+    phase_stale = s.get("phase_stale", {})
+    phase_counts = s.get("phase_counts", {})
+    n_phases = len(PHASE_NAMES)
+
+    # ── Phase progress ────────────────────────────────────────────
+    print("Phase Progress:")
+    for i, name in enumerate(PHASE_NAMES, 1):
+        stale = phase_stale.get(name, True)
+        status_icon = "✓" if not stale else " "
+        ts_str = ""
+        if name in completed:
+            _phase_num, ts = completed[name]
+            ts_str = ts[11:19] if len(ts) >= 19 else ts
+        if ts_str:
+            state_str = f"last:{ts_str}" + (" [stale]" if stale else "")
+        else:
+            state_str = "[pending]" if stale else ""
+        counts = phase_counts.get(name)
+        if counts is not None:
+            done_val, pend_val = counts
+            counts_str = f"  done:{done_val:>8,}  pend:{pend_val:>8,}"
+        else:
+            counts_str = ""
+        print(f"  [{status_icon}] {i:>2}/{n_phases}  {name:<22}  {state_str:<24}{counts_str}")
+    print()
+
+    # ── Current data ──────────────────────────────────────────────
+    print("Current Data:")
+    print(f"  Events            : {s['events']:>10,}")
+    print(f"  Chunks            : {s['chunks']:>10,}  ({s['chunks_embedded']:,} embedded)")
+    print(f"  Entities          : {s['entities']:>10,}")
+    print(f"  Relations         : {s['relations']:>10,}")
+    print(f"  Nodes / Edges     : {s['nodes']:,} / {s['edges']:,}")
+    print(f"  N2V embeddings    : {s['n2v_embeddings']:>10,}")
+    print()
+
+    # ── Pending work ──────────────────────────────────────────────
+    print("Pending Work:")
+    if s["jsonl_files_changed"] >= 0:
+        print(f"  JSONL files changed   : {s['jsonl_files_changed']:>6}  (of {s['jsonl_files_total']} total)")
+    else:
+        print("  JSONL files changed   :      ? (could not check)")
+    print(f"  Chunks to embed       : {s['chunks_to_embed']:>6}")
+    if s["kg_rebuild_needed"]:
+        incomplete = ", ".join(s["kg_incomplete_phases"]) if s["kg_incomplete_phases"] else "new chunks detected"
+        print(f"  KG rebuild needed     :    YES  ({incomplete})")
+    else:
+        print("  KG rebuild needed     :     NO")
+    print()
 
 
 def _cmd_cache(args: argparse.Namespace) -> None:
     """Handle cache subcommands."""
     from benchmarks.sessions_demo.cache import CacheManager
 
-    db_path = args.output_dir / args.db_name
+    db_path = args.output_folder / args.db_name
     cache = CacheManager(db_path)
 
     try:
@@ -71,15 +157,26 @@ def _cmd_cache(args: argparse.Namespace) -> None:
 
 def _cmd_build(args: argparse.Namespace) -> None:
     """Handle build subcommand."""
+    from benchmarks.demo_builder.manifest import write_manifest_json
     from benchmarks.sessions_demo.build import SessionsBuild
 
-    db_path = args.output_dir / args.db_name
+    if args.run_from and args.run_from not in PHASE_NAMES:
+        print(f"Error: unknown phase {args.run_from!r}")
+        print(f"Valid phase names: {', '.join(PHASE_NAMES)}")
+        sys.exit(1)
+
+    db_path = args.output_folder / args.db_name
     build = SessionsBuild(db_path)
     build.setup()
     try:
-        build.run()
+        build.run(run_from=args.run_from)
     finally:
         build.teardown()
+
+    # Update shared manifest.json so the viz frontend discovers sessions_demo.db
+    # alongside any demo_builder DBs in the same output folder.
+    write_manifest_json(args.output_folder)
+    log.info("Updated manifest.json in %s", args.output_folder)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -95,10 +192,10 @@ def main(argv: list[str] | None = None) -> None:
         help="Enable verbose (DEBUG) logging",
     )
     parser.add_argument(
-        "--output-dir",
+        "--output-folder",
         type=lambda p: __import__("pathlib").Path(p),
-        default=DEFAULT_OUTPUT_DIR,
-        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
+        default=DEFAULT_OUTPUT_FOLDER,
+        help=f"Output directory for generated database (default: {DEFAULT_OUTPUT_FOLDER})",
     )
     parser.add_argument(
         "--db-name",
@@ -109,7 +206,26 @@ def main(argv: list[str] | None = None) -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # ── build subcommand ─────────────────────────────────────────
-    subparsers.add_parser("build", help="Run full build pipeline (ingest + embeddings + chunks)")
+    build_parser = subparsers.add_parser(
+        "build",
+        help="Run full build pipeline (ingest + chunks + embeddings + KG pipeline)",
+    )
+    build_parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Show build status and pending work delta without running anything",
+    )
+    build_parser.add_argument(
+        "--run-from",
+        metavar="PHASE",
+        default=None,
+        dest="run_from",
+        help=(
+            "Force-skip all phases before PHASE (restoring their ctx from the DB) "
+            "and start execution from PHASE. Useful for testing incremental behaviour "
+            f"of downstream phases. Valid names: {', '.join(PHASE_NAMES)}"
+        ),
+    )
 
     # ── cache subcommand ─────────────────────────────────────────
     cache_parser = subparsers.add_parser("cache", help="Cache management commands")
@@ -131,7 +247,10 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     if args.command == "build":
-        _cmd_build(args)
+        if args.status:
+            _cmd_build_status(args)
+        else:
+            _cmd_build(args)
     elif args.command == "cache":
         _cmd_cache(args)
     else:

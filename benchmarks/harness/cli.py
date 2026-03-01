@@ -21,7 +21,7 @@ def _cmd_prep(args):
     target = args.prep_target
 
     if target is None:
-        print("Usage: benchmarks.harness prep {vectors,texts,kg-chunks,kg,gguf,all}")
+        print("Usage: benchmarks.harness prep {vectors,texts,kg-chunks,kg,gguf,kg-models,all}")
         print("Run 'benchmarks.harness prep --help' for details.")
         sys.exit(1)
 
@@ -75,6 +75,14 @@ def _cmd_prep(args):
             model_name=getattr(args, "model", None),
             status_only=status_only,
             force=force,
+        )
+
+    if target in ("kg-models", "all"):
+        from benchmarks.harness.prep.kg_models import prep_kg_models
+
+        prep_kg_models(
+            model_name=getattr(args, "model", None),
+            status_only=status_only,
         )
 
 
@@ -268,8 +276,26 @@ def main():
     prep_gguf_p.add_argument("--force", action="store_true", help="Re-download models even if they exist")
     prep_gguf_p.add_argument("--model", choices=gguf_model_names, help="Specific model to download")
 
+    # prep kg-models
+    prep_kg_models_p = prep_subs.add_parser(
+        "kg-models",
+        help="Download HuggingFace ML models for KG benchmarks (NER, RE, ER)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  prep kg-models                                    # Download all KG models\n"
+            "  prep kg-models --model gliner_medium-v2.1         # One NER model\n"
+            "  prep kg-models --model glirel                     # GLiREL RE model\n"
+            "  prep kg-models --status                           # Check cache status\n"
+        ),
+    )
+    prep_kg_models_p.add_argument("--status", action="store_true", help="Show model cache status without downloading")
+    prep_kg_models_p.add_argument("--model", help="Specific model slug to download (e.g., gliner_medium-v2.1)")
+
     # prep all
-    prep_all_p = prep_subs.add_parser("all", help="Prep everything (vectors + texts + kg-chunks + kg + gguf)")
+    prep_all_p = prep_subs.add_parser(
+        "all", help="Prep everything (vectors + texts + kg-chunks + kg + gguf + kg-models)"
+    )
     prep_all_p.add_argument("--status", action="store_true", help="Show status of all prep targets")
     prep_all_p.add_argument("--force", action="store_true", help="Force re-creation of all prep targets")
 

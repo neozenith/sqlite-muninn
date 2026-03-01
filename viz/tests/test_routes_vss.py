@@ -100,6 +100,13 @@ def test_get_embeddings_empty_index(tmp_path: pathlib.Path) -> None:
             dimensions=4, metric='cosine', m=8, ef_construction=50
         )
     """)
+    # Pre-computed UMAP table (empty — no vectors inserted)
+    conn.execute("""
+        CREATE TABLE empty_vec_umap (
+            id INTEGER PRIMARY KEY,
+            x2d REAL, y2d REAL, x3d REAL, y3d REAL, z3d REAL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -156,6 +163,17 @@ def test_get_metadata_entities_vec(tmp_path: pathlib.Path) -> None:
             (4, "Dave"),
             (5, "Eve"),
         ],
+    )
+    # Pre-computed UMAP table required by /vss/entities_vec/embeddings
+    conn.execute("""
+        CREATE TABLE entities_vec_umap (
+            id INTEGER PRIMARY KEY,
+            x2d REAL, y2d REAL, x3d REAL, y3d REAL, z3d REAL
+        )
+    """)
+    conn.executemany(
+        "INSERT INTO entities_vec_umap VALUES (?, ?, ?, ?, ?, ?)",
+        [(i, i * 0.1, i * 0.2, i * 0.05, i * 0.1, i * 0.15) for i in range(1, 6)],
     )
     conn.commit()
     conn.close()
@@ -216,6 +234,17 @@ def test_get_metadata_node2vec_emb(tmp_path: pathlib.Path) -> None:
     for i in range(1, 7):
         vec = struct.pack("4f", float(i * 0.1), float(i * 0.2), float(i * 0.3), float(i * 0.4))
         conn.execute("INSERT INTO node2vec_emb (rowid, vector) VALUES (?, ?)", (i, vec))
+    # Pre-computed UMAP table required by /vss/node2vec_emb/embeddings
+    conn.execute("""
+        CREATE TABLE node2vec_emb_umap (
+            id INTEGER PRIMARY KEY,
+            x2d REAL, y2d REAL, x3d REAL, y3d REAL, z3d REAL
+        )
+    """)
+    conn.executemany(
+        "INSERT INTO node2vec_emb_umap VALUES (?, ?, ?, ?, ?, ?)",
+        [(i, i * 0.1, i * 0.2, i * 0.05, i * 0.1, i * 0.15) for i in range(1, 7)],
+    )
     conn.commit()
     conn.close()
 
@@ -395,6 +424,17 @@ def test_get_metadata_chunks_vec(tmp_path: pathlib.Path) -> None:
             (4, "Fourth chunk of text"),
             (5, "Fifth chunk of text"),
         ],
+    )
+    # Pre-computed UMAP table required by /vss/chunks_vec/embeddings
+    conn.execute("""
+        CREATE TABLE chunks_vec_umap (
+            id INTEGER PRIMARY KEY,
+            x2d REAL, y2d REAL, x3d REAL, y3d REAL, z3d REAL
+        )
+    """)
+    conn.executemany(
+        "INSERT INTO chunks_vec_umap VALUES (?, ?, ?, ?, ?, ?)",
+        [(i, i * 0.1, i * 0.2, i * 0.05, i * 0.1, i * 0.15) for i in range(1, 6)],
     )
     conn.commit()
     conn.close()

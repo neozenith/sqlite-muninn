@@ -113,9 +113,7 @@ def _run_er_pipeline(
 
     # ── Create HNSW index and insert embeddings ──────────────────
     conn.execute(
-        f"CREATE VIRTUAL TABLE _er_vec USING hnsw_index("
-        f"  dimensions={dim}, metric='cosine', m=16, ef_construction=200"
-        f")"
+        f"CREATE VIRTUAL TABLE _er_vec USING hnsw_index(  dimensions={dim}, metric='cosine', m=16, ef_construction=200)"
     )
 
     for i, (_name, vec) in enumerate(zip(entity_names, entity_vectors, strict=True)):
@@ -291,9 +289,7 @@ class KGEntityResolutionTreatment(Treatment):
         # Load unique entity names from the chunks DB
         src_conn = _sqlite3.connect(str(entities_db))
         try:
-            rows = src_conn.execute(
-                "SELECT DISTINCT name FROM entities ORDER BY name"
-            ).fetchall()
+            rows = src_conn.execute("SELECT DISTINCT name FROM entities ORDER BY name").fetchall()
         except _sqlite3.OperationalError:
             log.warning("No 'entities' table in %s — run NER extraction first", entities_db)
             src_conn.close()

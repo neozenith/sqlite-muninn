@@ -23,7 +23,7 @@ import json
 import logging
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -97,7 +97,10 @@ NPM_PLATFORMS = {
 # ── Version stamp targets ───────────────────────────────────────────
 # Each: (file relative to project root, regex pattern)
 VERSION_STAMP_TARGETS = [
-    ("skills/muninn/SKILL.md", r'(  version:\s*")[\d]+\.[\d]+\.[\d]+[^"]*(")',),
+    (
+        "skills/muninn/SKILL.md",
+        r'(  version:\s*")[\d]+\.[\d]+\.[\d]+[^"]*(")',
+    ),
     ("npm/package.json", r'("version":\s*")[\d]+\.[\d]+\.[\d]+[^"]*(")'),
     ("npm/package.json", r'("@sqlite-muninn/[^"]+": ")[\d]+\.[\d]+\.[\d]+[^"]*(")'),
 ]
@@ -117,9 +120,7 @@ _HEADERS_EXCLUDE = {"sqlite3.h", "sqlite3ext.h"}
 def _discover(directory: str, pattern: str, exclude: set[str]) -> list[str]:
     """Discover files matching pattern in directory, minus exclusions."""
     return sorted(
-        str(p.relative_to(PROJECT_ROOT))
-        for p in (PROJECT_ROOT / directory).glob(pattern)
-        if p.name not in exclude
+        str(p.relative_to(PROJECT_ROOT)) for p in (PROJECT_ROOT / directory).glob(pattern) if p.name not in exclude
     )
 
 
@@ -200,9 +201,7 @@ TEST_SOURCES = _discover("test", "test_*.c", set())
 
 # WASM lite: exclude embed_gguf.c (needs llama.cpp)
 _SOURCES_EXCLUDE_WASM_LITE = _SOURCES_EXCLUDE | {"embed_gguf.c"}
-SOURCES_WASM_LITE = _sort_sources_by_header_order(
-    _discover("src", "*.c", _SOURCES_EXCLUDE_WASM_LITE), HEADERS
-)
+SOURCES_WASM_LITE = _sort_sources_by_header_order(_discover("src", "*.c", _SOURCES_EXCLUDE_WASM_LITE), HEADERS)
 
 # ── Validation ───────────────────────────────────────────────────────
 assert set(TEST_LINK_SOURCES) <= set(SOURCES), (
@@ -213,6 +212,7 @@ assert set(TEST_LINK_SOURCES) <= set(SOURCES), (
 # ======================================================================
 # UTILITIES
 # ======================================================================
+
 
 def _read_version() -> str:
     return VERSION_FILE.read_text().strip()
@@ -259,21 +259,21 @@ def _llama_lib_paths() -> list[str]:
 # Makefile evaluates these via: VAR := $(shell python3 scripts/generate_build.py query VAR)
 QUERY_VARS: dict[str, callable] = {
     # File lists
-    "SRC":                    lambda: " ".join(SOURCES),
-    "HEADERS":                lambda: " ".join(HEADERS),
-    "TEST_SRC":               lambda: " ".join(TEST_SOURCES),
-    "TEST_LINK_SRC":          lambda: " ".join(TEST_LINK_SOURCES),
+    "SRC": lambda: " ".join(SOURCES),
+    "HEADERS": lambda: " ".join(HEADERS),
+    "TEST_SRC": lambda: " ".join(TEST_SOURCES),
+    "TEST_LINK_SRC": lambda: " ".join(TEST_LINK_SOURCES),
     # WASM file lists (prefixed with ../ for wasm/ subdirectory)
-    "MUNINN_SRC_WASM":        lambda: " ".join(f"../{s}" for s in SOURCES),
-    "MUNINN_SRC_WASM_LITE":   lambda: " ".join(f"../{s}" for s in SOURCES_WASM_LITE),
-    "SOURCES_WASM_EXTRA":     lambda: " ".join(f"../{s}" for s in SOURCES_WASM_EXTRA),
+    "MUNINN_SRC_WASM": lambda: " ".join(f"../{s}" for s in SOURCES),
+    "MUNINN_SRC_WASM_LITE": lambda: " ".join(f"../{s}" for s in SOURCES_WASM_LITE),
+    "SOURCES_WASM_EXTRA": lambda: " ".join(f"../{s}" for s in SOURCES_WASM_EXTRA),
     # CMake flags
-    "LLAMA_CMAKE_FLAGS":      lambda: _cmake_flags_str(CMAKE_FLAGS_BASE),
+    "LLAMA_CMAKE_FLAGS": lambda: _cmake_flags_str(CMAKE_FLAGS_BASE),
     "LLAMA_CMAKE_FLAGS_WASM": lambda: _cmake_flags_str(CMAKE_FLAGS_WASM),
     # llama.cpp paths
-    "LLAMA_INCLUDE":          lambda: " ".join(f"-I{d}" for d in LLAMA_INCLUDE_DIRS),
-    "LLAMA_INCLUDE_WASM":     lambda: " ".join(f"-I../{d}" for d in LLAMA_INCLUDE_DIRS),
-    "LLAMA_LIBS_CORE":        lambda: " ".join(_llama_lib_paths()),
+    "LLAMA_INCLUDE": lambda: " ".join(f"-I{d}" for d in LLAMA_INCLUDE_DIRS),
+    "LLAMA_INCLUDE_WASM": lambda: " ".join(f"-I../{d}" for d in LLAMA_INCLUDE_DIRS),
+    "LLAMA_LIBS_CORE": lambda: " ".join(_llama_lib_paths()),
 }
 
 
@@ -383,6 +383,7 @@ def cmd_windows(args: argparse.Namespace) -> int:
 # SUBCOMMAND: amalgamate
 # ======================================================================
 
+
 def _amalgamation_header(version: str, date: str) -> str:
     """Build the amalgamation file header from the data model."""
     include_flags = " ".join(f"-I{d}" for d in LLAMA_INCLUDE_DIRS)
@@ -464,7 +465,7 @@ def cmd_amalgamate(args: argparse.Namespace) -> int:
         return 0
 
     version = _read_version()
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
 
     lines: list[str] = []
     lines.append(_amalgamation_header(version, date_str))
@@ -511,6 +512,7 @@ def cmd_amalgamate(args: argparse.Namespace) -> int:
 # ======================================================================
 # SUBCOMMAND: npm
 # ======================================================================
+
 
 def _read_npm_package() -> dict:
     return json.loads((PROJECT_ROOT / "npm" / "package.json").read_text())
@@ -609,6 +611,7 @@ def cmd_npm(args: argparse.Namespace) -> int:
 # SUBCOMMAND: version
 # ======================================================================
 
+
 def cmd_version(args: argparse.Namespace) -> int:
     version = _read_version()
     check_only = args.check
@@ -650,18 +653,14 @@ def cmd_version(args: argparse.Namespace) -> int:
 # CLI
 # ======================================================================
 
+
 def _add_file_gen_args(parser: argparse.ArgumentParser) -> None:
     """Add common flags for file-generating subcommands."""
-    parser.add_argument("--status", action="store_true",
-                        help="Exit 0 if outputs up-to-date, 1 if dirty")
-    parser.add_argument("--list-inputs", action="store_true",
-                        help="Print input file paths (one per line)")
-    parser.add_argument("--list-outputs", action="store_true",
-                        help="Print output file paths (one per line)")
-    parser.add_argument("--force", action="store_true",
-                        help="Regenerate even if up-to-date")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Show what would be generated without writing")
+    parser.add_argument("--status", action="store_true", help="Exit 0 if outputs up-to-date, 1 if dirty")
+    parser.add_argument("--list-inputs", action="store_true", help="Print input file paths (one per line)")
+    parser.add_argument("--list-outputs", action="store_true", help="Print output file paths (one per line)")
+    parser.add_argument("--force", action="store_true", help="Regenerate even if up-to-date")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be generated without writing")
 
 
 def main() -> int:
@@ -692,8 +691,7 @@ def main() -> int:
 
     # version
     p_ver = sub.add_parser("version", help="Stamp VERSION into target files")
-    p_ver.add_argument("--check", action="store_true",
-                       help="Exit 1 if any file is out of date (don't modify)")
+    p_ver.add_argument("--check", action="store_true", help="Exit 1 if any file is out of date (don't modify)")
 
     args = parser.parse_args()
 

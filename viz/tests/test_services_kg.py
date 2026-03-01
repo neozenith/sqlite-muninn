@@ -531,7 +531,7 @@ def test_kg_search_returns_community_data(tmp_path: pathlib.Path) -> None:
     mock_model = MagicMock()
     mock_model.encode.return_value = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
 
-    with patch("server.services.kg._get_embedding_model", return_value=mock_model):
+    with patch("server.services.kg._get_embedding_model", return_value=(mock_model, "")):
         result = run_kg_search(conn, "Adam Smith")
 
     assert "node_community" in result

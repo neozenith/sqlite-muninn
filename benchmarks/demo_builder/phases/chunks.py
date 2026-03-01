@@ -11,6 +11,7 @@ import logging
 import sqlite3
 from typing import TYPE_CHECKING
 
+from huggingface_hub import snapshot_download
 from sentence_transformers import SentenceTransformer
 
 from benchmarks.demo_builder.common import load_chunk_vectors, pack_vector
@@ -83,7 +84,8 @@ class PhaseChunks(Phase):
         st_kwargs: dict[str, bool] = {}
         if model_info.get("trust_remote_code"):
             st_kwargs["trust_remote_code"] = True
-        self._st_model = SentenceTransformer(model_info["st_name"], **st_kwargs)
+        path = snapshot_download(model_info["st_name"], local_files_only=True)
+        self._st_model = SentenceTransformer(path, **st_kwargs)
 
     def run(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         assert self._st_model is not None, "setup() must be called before run()"

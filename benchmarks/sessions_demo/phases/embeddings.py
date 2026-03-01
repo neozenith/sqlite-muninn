@@ -11,8 +11,8 @@ import logging
 import sqlite3
 from typing import TYPE_CHECKING
 
-from benchmarks.demo_builder.common import load_muninn
-from benchmarks.sessions_demo.constants import GGUF_EMBEDDING_DIM, GGUF_MODEL_NAME, GGUF_MODEL_PATH
+from benchmarks.demo_builder.common import ProgressTracker, load_muninn
+from benchmarks.sessions_demo.constants import EMBED_MAX_CHARS, GGUF_EMBEDDING_DIM, GGUF_MODEL_NAME, GGUF_MODEL_PATH
 
 if TYPE_CHECKING:
     from benchmarks.sessions_demo.build import PhaseContext
@@ -32,6 +32,24 @@ class PhaseEmbeddings:
     @property
     def name(self) -> str:
         return "embeddings"
+
+    def is_stale(self, conn: sqlite3.Connection) -> bool:
+        """Return True if any chunks lack a vector in chunks_vec_nodes."""
+        try:
+            pending = conn.execute("""
+                SELECT COUNT(*) FROM event_message_chunks c
+                WHERE c.chunk_id NOT IN (SELECT id FROM chunks_vec_nodes)
+            """).fetchone()[0]
+            return pending > 0
+        except sqlite3.OperationalError:
+            return True
+
+    def restore_ctx(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        """Restore embedding count from DB when phase is skipped."""
+        try:
+            ctx.chunks_embedded = 0  # nothing embedded this run
+        except Exception:
+            pass
 
     def setup(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         load_muninn(conn)
@@ -53,10 +71,14 @@ class PhaseEmbeddings:
         log.info("Created chunks_vec (dim=%d, metric=cosine)", GGUF_EMBEDDING_DIM)
 
     def run(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
-        # Count chunks needing embedding for progress estimate
+        # Count chunks needing embedding for progress estimate.
+        # Use chunks_vec_nodes (shadow table, regular SQLite) not chunks_vec
+        # (HNSW virtual table): HNSW VTs don't support full table scans —
+        # an unconstrained SELECT returns an empty set, causing every chunk
+        # to appear "not yet embedded" and triggering duplicate-rowid errors.
         total_to_embed = conn.execute("""
             SELECT COUNT(*) FROM event_message_chunks c
-            WHERE c.chunk_id NOT IN (SELECT rowid FROM chunks_vec)
+            WHERE c.chunk_id NOT IN (SELECT id FROM chunks_vec_nodes)
         """).fetchone()[0]
         log.info("Embedding %d chunks (dim=%d)", total_to_embed, GGUF_EMBEDDING_DIM)
 
@@ -67,16 +89,24 @@ class PhaseEmbeddings:
         cursor = conn.execute("""
             SELECT c.chunk_id, c.text
             FROM event_message_chunks c
-            WHERE c.chunk_id NOT IN (SELECT rowid FROM chunks_vec)
+            WHERE c.chunk_id NOT IN (SELECT id FROM chunks_vec_nodes)
         """)
 
         total_embedded = 0
+        tracker = ProgressTracker(total_to_embed)
         for row in cursor:
             chunk_id, text = row[0], row[1]
             try:
+                # Truncate to EMBED_MAX_CHARS before embedding. Stored chunk text
+                # is unchanged (NER/RE/FTS use the full text); only the vector is
+                # generated from a prefix. nomic-embed's subword tokenizer encodes
+                # code at ~1.3 tokens/char — full chunks can exceed the 2048-token
+                # context window. Beginning-of-chunk truncation preserves the
+                # highest-signal content.
+                embed_text = text[:EMBED_MAX_CHARS]
                 result = conn.execute(
                     "SELECT muninn_embed(?, ?)",
-                    (GGUF_MODEL_NAME, text),
+                    (GGUF_MODEL_NAME, embed_text),
                 ).fetchone()
                 if result and result[0]:
                     conn.execute(
@@ -87,8 +117,9 @@ class PhaseEmbeddings:
             except sqlite3.OperationalError as e:
                 log.warning("Failed to embed chunk %d: %s", chunk_id, e)
 
-            if total_embedded % 200 == 0 and total_embedded > 0:
-                log.info("  Embedded %d/%d chunks", total_embedded, total_to_embed)
+            tracker.update()
+            if tracker.should_log():
+                log.info("  Embedded %s", tracker.report())
 
         conn.commit()
         ctx.chunks_embedded = total_embedded
