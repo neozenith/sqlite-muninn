@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+from typing import Any
 
 import spacy
 from huggingface_hub import snapshot_download
@@ -36,7 +37,7 @@ log = logging.getLogger(__name__)
 # ships only custom weights and the tokenizer/encoder backbone is a separate
 # repo that must be downloaded via _read_backbone() + snapshot_download().
 
-KG_MODEL_REGISTRY: list[dict] = [
+KG_MODEL_REGISTRY: list[dict[str, Any]] = [
     {
         "slug": "gliner_small-v2.1",
         "repo_id": "urchade/gliner_small-v2.1",
@@ -104,7 +105,7 @@ def _check_cached(repo_id: str) -> bool:
     try:
         snapshot_download(repo_id, local_files_only=True)
         return True
-    except EnvironmentError:
+    except OSError:
         return False
 
 
@@ -146,7 +147,7 @@ def print_status() -> None:
 # ── Download logic ────────────────────────────────────────────────
 
 
-def _download_entry(entry: dict) -> None:
+def _download_entry(entry: dict[str, Any]) -> None:
     """Download a single model entry (snapshot + backbone if applicable)."""
     slug = entry["slug"]
     repo_id = entry["repo_id"]

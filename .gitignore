@@ -81,3 +81,5 @@ docs/benchmarks/refactored_output/
 
 .hf_cache/
 wasm/assets/
+
+a.out.*

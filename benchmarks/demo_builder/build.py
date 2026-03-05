@@ -22,9 +22,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
-
-from benchmarks.demo_builder.common import load_muninn
+from benchmarks.demo_builder.common import _fmt_elapsed, load_muninn
 from benchmarks.demo_builder.phases import Phase, default_phases
 
 
@@ -36,12 +34,11 @@ class PhaseContext:
     Each phase writes its outputs here; later phases read what they need.
     """
 
+    db_path: Path = field(default_factory=Path)
     num_chunks: int = 0
-    chunk_vectors: np.ndarray | None = field(default=None, repr=False)
     num_entity_mentions: int = 0
     num_relations: int = 0
     num_unique_entities: int = 0
-    entity_vectors: np.ndarray | None = field(default=None, repr=False)
     num_nodes: int = 0
     num_edges: int = 0
     num_n2v: int = 0
@@ -61,10 +58,12 @@ class DemoBuild:
         book_id: int,
         model_name: str,
         output_folder: Path,
+        legacy_models: bool = False,
     ) -> None:
         self._book_id = book_id
         self._model_name = model_name
         self._output_folder = output_folder
+        self._legacy_models = legacy_models
         self._ctx = PhaseContext()
         self._conn: sqlite3.Connection | None = None
         # Attach file handlers to the package-level logger so that all
@@ -107,7 +106,7 @@ class DemoBuild:
     def run(self, phases: list[Phase] | None = None) -> None:
         """Execute phases sequentially. Default: default_phases()."""
         if phases is None:
-            phases = default_phases(self._book_id, self._model_name)
+            phases = default_phases(self._book_id, self._model_name, legacy_models=self._legacy_models)
 
         t_total = time.monotonic()
 
@@ -124,10 +123,10 @@ class DemoBuild:
             self._db.commit()
             self._record_phase(i, phase.name)
             self._db.commit()
-            self._log.info("Phase %d complete (%.1fs)", i, time.monotonic() - t0)
+            self._log.info("Phase %d complete (%s)", i, _fmt_elapsed(time.monotonic() - t0))
 
         elapsed = time.monotonic() - t_total
-        self._log.info("All phases complete (%.1fs total)", elapsed)
+        self._log.info("All phases complete (%s total)", _fmt_elapsed(elapsed))
         self._build_succeeded = True
 
     def teardown(self) -> None:
@@ -201,7 +200,9 @@ class DemoBuild:
         self._conn = sqlite3.connect(str(self.staging_db_path))
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA busy_timeout = 120000")
         load_muninn(self._conn)
+        self._ctx.db_path = self.staging_db_path
         self._init_build_progress()
 
     def _init_build_progress(self) -> None:
@@ -236,9 +237,14 @@ class DemoBuild:
         self._conn = None
 
     def _atomic_move(self) -> None:
-        """Move the built DB from staging to final output path."""
+        """Move the built DB and any joblib model files from staging to final output."""
         self._output_folder.mkdir(parents=True, exist_ok=True)
         shutil.move(str(self.staging_db_path), str(self.final_path))
+
+        # Move any UMAP joblib model files produced alongside the DB.
+        for joblib_file in self.staging_dir.glob("*.joblib"):
+            dest = self._output_folder / joblib_file.name
+            shutil.move(str(joblib_file), str(dest))
 
         db_size = self.final_path.stat().st_size
         self._log.info("Done! %s (%.1f MB)", self.final_path.name, db_size / 1e6)

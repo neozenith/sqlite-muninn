@@ -7,10 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Bug Fixes
+- Address CI memory leak not unloading models. Address CI build issues needing to propagate from main build to windows build script.- Demo db builder fully functional- Remove FTS5Adapter from kg benchmarks- Removed FTS5Adapater from KG benchmarks
+
+### CI
+- Set concurrency groups to cancel in flight builds when a newer commit is available and set timeouts to cap jobs that are hanging in CMake.- Refactor sources and build targets into one centralised spot- Refactor wasm build pipeline and rebuild the kg-demo database for wasm/ and viz/
+
+### Documentation
+- Update docs with benchmark results for VSS for 50k and 100K embeddings- Update planning documents- Huge refactor of benchmarking pipeline to consolidate duplicated code across benchmarking and analysis tasks- Update the text embedding example README- Start the embedding benchmark docs pages- Ran all the ag-news benchmarks for embed category- Update graph benchmakrs- Update feature list in README and mkdocs index- Update feature list again to include dbt-syntax graph selection- Refactor mermaid diagrams to hires pngs. clean out old specs- Finalised the kg-demo.db builder script- Update demo builder plan- Update plan for wasm+viz merger and demo_builder- Add documentation about the logo tooling to remove the background
+
+### Features
+- Full refactor of benchmarking prep tasks- Adding llama.cpp integration- Refactored the vss benchmark pipeline to use GGUF models for embeddings to be consistent with the impending embed category of benchmarks- Updated demo_builder and session_demo for narrowest context window for kg pipelines- Benchmarks.sessions_demo to build incremental knowledge graph from claude code sessions files. Lots of speed tuning splitting tasks into fine grained steps to find bottlenecks, making models work offline without needing constant internet checks or unnecessary redownloads of models.
+
+### Other
+- Update dev tooling script for logo image processing to spit out full sequential step explanation.- Huge refactor of demo builder- Add Claude Code GitHub Workflow (#1)
+
+* "Claude PR Assistant workflow"
+
+* "Claude Code Review workflow"- Updated plan docs
+
+### Refactor
+- Refactor benchmarks cli usage docs, add updated plannign docs for next phases.
+
+## [0.2.0] - 2026-02-18
+
+### Bug Fixes
+- Update amalgamation script with new files- Address windows amalgamation script and name collision in amalgamation source code
+
+### Documentation
+- Updated refinement of upcoming plan documents
+
+### Features
+- Feat (graph): Graph adjacency virtual table with lazy incremental rebuild- Implemented dbt graph selector syntax tvf
+
+## [0.1.0] - 2026-02-18
+
+### Bug Fixes
 - Improved visualisation hover text on embedding vis- Sanitise fts query strings in demo visualisations
 
 ### Documentation
 - Hardcode absolute URL instead of relative URL to example to bypass mkdocs link resolver
+
+### Other
+- V0.1.0 release
 
 ## [0.1.0-alpha.10] - 2026-02-17
 

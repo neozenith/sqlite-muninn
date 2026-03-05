@@ -177,6 +177,7 @@ def prep_kg_chunks(book_id=None, status_only=False, force=False):
         print_status()
         return
 
+    tasks: list[PrepTask]
     if book_id:
         tasks = [KGChunksPrepTask(book_id)]
     else:

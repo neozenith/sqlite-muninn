@@ -241,6 +241,7 @@ class KGGraphRAGTreatment(Treatment):
 
     def _vss_entry(self, kg_conn, query_text: str, k: int = 10) -> list[int]:
         """VSS entry point: embed query and search chunks_vec."""
+        assert self._st_model is not None
         query_vec = self._st_model.encode([query_text], normalize_embeddings=True)[0].astype(np.float32)
         results = kg_conn.execute(
             "SELECT rowid, distance FROM chunks_vec WHERE vector MATCH ? AND k = ?",
@@ -258,7 +259,7 @@ class KGGraphRAGTreatment(Treatment):
         ).fetchall()
         return [row[0] for row in results]
 
-    def _build_chunk_entity_map(self, kg_conn, tables: set) -> dict[int, set[str]]:
+    def _build_chunk_entity_map(self, kg_conn, tables: set[str]) -> dict[int, set[str]]:
         """Build mapping of chunk_id -> set of entity names."""
         chunk_entities: dict[int, set[str]] = {}
 

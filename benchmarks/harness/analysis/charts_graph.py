@@ -5,10 +5,12 @@ centrality (degree, betweenness, closeness), community (Leiden),
 and graph setup time.
 """
 
+from typing import Any
+
 from benchmarks.harness.analysis.aggregator import ChartSpec
 
 # Common field sets for graph traversal charts
-_TRAV_COMMON = {
+_TRAV_COMMON: dict[str, Any] = {
     "sources": ["graph_*.jsonl"],
     "x_field": "n_nodes",
     "y_field": "query_time_ms",
@@ -21,7 +23,7 @@ _TRAV_COMMON = {
 }
 
 # Common field sets for centrality charts
-_CENT_COMMON = {
+_CENT_COMMON: dict[str, Any] = {
     "sources": ["centrality_*.jsonl"],
     "x_field": "n_nodes",
     "y_field": "query_time_ms",

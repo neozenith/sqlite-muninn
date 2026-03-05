@@ -29,8 +29,8 @@ class PhaseNode2Vec(Phase):
     def is_stale(self, conn: sqlite3.Connection) -> bool:
         """Return True if node2vec output is missing or out-of-sync with nodes table."""
         try:
-            n2v_count = conn.execute("SELECT count(*) FROM node2vec_emb_nodes").fetchone()[0]
-            node_count = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
+            n2v_count: int = conn.execute("SELECT count(*) FROM node2vec_emb_nodes").fetchone()[0]
+            node_count: int = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
             return n2v_count != node_count
         except sqlite3.OperationalError:
             return True

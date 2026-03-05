@@ -10,6 +10,7 @@ import json
 import logging
 import random
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -86,9 +87,9 @@ def search_gutendex(query, topic=None):
         return cached["results"]
 
     # Build API URL
-    params = f"search={urllib.request.quote(query)}"
+    params = f"search={urllib.parse.quote(query)}"
     if topic:
-        params += f"&topic={urllib.request.quote(topic)}"
+        params += f"&topic={urllib.parse.quote(topic)}"
     url = f"{GUTENDEX_BASE_URL}?{params}"
 
     log.info("Searching Gutendex: %s", url)
@@ -306,6 +307,7 @@ def prep_texts(
         download_gutenberg_text(book["id"], force=force)
         return
 
+    tasks: list[PrepTask]
     if book_id:
         tasks = [GutenbergTextPrepTask(book_id)]
     else:

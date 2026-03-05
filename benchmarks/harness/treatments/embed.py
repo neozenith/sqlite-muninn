@@ -113,7 +113,7 @@ def _load_doc_texts(dataset_key: str, max_n: int) -> list[str]:
     dt_path = VECTORS_DIR / f"{dataset_key}_docs.json"
     if dt_path.exists():
         data = json.loads(dt_path.read_text(encoding="utf-8"))
-        docs = data["docs"]
+        docs: list[str] = list(data["docs"])
         if len(docs) >= max_n:
             return docs[:max_n]
         log.warning("  %s: cached docs (%d) < requested (%d), falling back to live load", dataset_key, len(docs), max_n)
@@ -147,7 +147,7 @@ def _load_query_texts(dataset_key: str, doc_texts: list[str] | None = None) -> l
     qt_path = VECTORS_DIR / f"{dataset_key}_queries.json"
     if qt_path.exists():
         data = json.loads(qt_path.read_text(encoding="utf-8"))
-        return data["queries"]
+        return list(data["queries"])
 
     from datasets import load_dataset as hf_load_dataset
 
@@ -739,6 +739,8 @@ class EmbedTreatment(Treatment):
 
     def _compute_recall_if_possible(self, search_results: list[set[int]]) -> float | None:
         """Try to compute recall using pre-cached vector pools from VSS prep."""
+        if self._doc_indices is None or self._query_indices is None:
+            return None
         ground_truth = _compute_ground_truth_from_pool(
             self._model_name, self._dataset, self._doc_indices, self._query_indices, K
         )

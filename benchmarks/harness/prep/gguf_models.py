@@ -160,7 +160,7 @@ def prep_gguf(model_name: str | None = None, status_only: bool = False, force: b
         return
 
     if model_name:
-        matched = [t for t in GGUF_PREP_TASKS if t._model["name"] == model_name]
+        matched = [t for t in GGUF_PREP_TASKS if t._model["name"] == model_name]  # type: ignore[attr-defined]
         if not matched:
             valid = [m["name"] for m in GGUF_MODELS]
             log.error("Unknown GGUF model: %s. Available: %s", model_name, ", ".join(valid))

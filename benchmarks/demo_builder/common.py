@@ -12,7 +12,6 @@ import logging
 import sqlite3
 import struct
 import time
-from collections import deque
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -188,10 +187,14 @@ def _fmt_elapsed(secs: float) -> str:
 class ProgressTracker:
     """Rolling-window speed, elapsed time, and ETA tracker.
 
-    Call update(n) after each item or batch. Call should_log() to check
-    whether a new window of `window` items has been crossed — it returns
-    True and captures a speed sample when the threshold is hit. Call
-    report() to get a formatted progress string for a log.info() call.
+    Call update(n) for every INPUT item or batch processed — this drives
+    the speed, ETA, and done/total counters. Optionally call record_output(n)
+    to track produced OUTPUT units (e.g., entities, relations, chunks); these
+    are shown in report() but never influence speed or ETA calculations.
+
+    Call should_log() to check whether a new window of `window` INPUT items
+    has been crossed — it returns True and captures a speed sample when the
+    threshold is hit. Call report() to get a formatted progress string.
 
     Speed is computed over the last completed window interval (not
     cumulative), giving a responsive view of current throughput.
@@ -204,31 +207,45 @@ class ProgressTracker:
         self._start = time.monotonic()
         self._last_log_at = 0
         self._last_log_time = self._start
-        self._speed: float = 0.0  # items/sec from last window interval
+        self._speed: float = 0.0  # input items/sec from last window interval
+        self._output_total: int = 0  # cumulative output units produced
+        self._output_last_log: int = 0  # output total at last window boundary
+        self._output_window: int = 0  # output units in the last completed window
 
     def update(self, n: int = 1) -> None:
+        """Advance the INPUT counter by n. Drives speed, ETA, and done/total."""
         self._done += n
 
+    def record_output(self, n: int) -> None:
+        """Record n OUTPUT units produced since the last record_output call.
+
+        Output counts are shown in report() for informational purposes only —
+        they never affect speed or ETA, which are always input-based.
+        """
+        self._output_total += n
+
     def should_log(self) -> bool:
-        """Return True (and capture a speed sample) every `window` items."""
+        """Return True (and capture speed + output window samples) every `window` INPUT items."""
         if self._done - self._last_log_at >= self._window:
             now = time.monotonic()
             items_in_window = self._done - self._last_log_at
             time_in_window = now - self._last_log_time
             if time_in_window > 0:
                 self._speed = items_in_window / time_in_window
+            self._output_window = self._output_total - self._output_last_log
+            self._output_last_log = self._output_total
             self._last_log_at = self._done
             self._last_log_time = now
             return True
         return False
 
     def report(self) -> str:
-        """Return a formatted progress string: done/total | speed | elapsed | ETA."""
+        """Return a formatted progress string: in:done/total | speed | elapsed | ETA | out:total (+window)."""
         now = time.monotonic()
         elapsed = now - self._start
         done = self._done
         remaining = max(0, self._total - done)
-        # Use window speed if available, else fall back to cumulative average
+        # Speed and ETA are always based on INPUT units — output rate is irrelevant.
         speed = self._speed if self._speed > 0 else (done / elapsed if elapsed > 0 else 0.0)
         if remaining == 0:
             eta_str = "done"
@@ -236,12 +253,9 @@ class ProgressTracker:
             eta_str = _fmt_elapsed(remaining / speed)
         else:
             eta_str = "?"
-        return "%s/%s  |  %.1f/s  |  elapsed:%s  |  ETA:%s" % (
-            f"{done:,}",
-            f"{self._total:,}",
-            speed,
-            _fmt_elapsed(elapsed),
-            eta_str,
+        return (
+            f"{done:,}/{self._total:,}  |  {speed:.1f} in/s  |  elapsed:{_fmt_elapsed(elapsed)}"
+            f"  |  ETA:{eta_str}  |  out:{self._output_total:,} (+{self._output_window:,})"
         )
 
 
@@ -276,7 +290,7 @@ def _read_backbone(snapshot_path: str) -> str:
         if config_file.exists():
             config = json.loads(config_file.read_text(encoding="utf-8"))
             if backbone := config.get("model_name"):
-                return backbone
+                return str(backbone)
     raise ValueError(f"Could not find model_name in any config at {snapshot_path}")
 
 

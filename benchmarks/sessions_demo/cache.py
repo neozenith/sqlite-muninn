@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS events (
     agent_id TEXT,
     agent_slug TEXT,
     message_role TEXT,
+    is_meta INTEGER NOT NULL DEFAULT 0,  -- raw_json.isMeta: system-injected wrappers
+    first_content_block_type TEXT,       -- 'string' | 'text' | 'tool_use' | 'tool_result' | 'thinking' | NULL
     message_content TEXT,  -- Plain text for FTS
     message_content_json TEXT,  -- Original JSON structure
     model_id TEXT,
@@ -112,6 +114,7 @@ CREATE INDEX IF NOT EXISTS idx_events_source_file ON events(source_file_id);
 CREATE INDEX IF NOT EXISTS idx_events_project_session ON events(project_id, session_id);
 CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(session_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_events_session_uuid ON events(session_id, uuid);
+CREATE INDEX IF NOT EXISTS idx_events_human ON events(event_type, is_meta, first_content_block_type);
 CREATE INDEX IF NOT EXISTS idx_events_fqn_id ON events(fqn_id);
 
 -- FTS5 virtual table for full-text search on message content
@@ -445,11 +448,12 @@ class CacheManager:
                 """INSERT INTO events
                    (uuid, parent_uuid, fqn_id, event_type, timestamp, timestamp_local,
                     session_id, project_id, is_sidechain, agent_id, agent_slug,
-                    message_role, message_content, message_content_json, model_id,
+                    message_role, is_meta, first_content_block_type,
+                    message_content, message_content_json, model_id,
                     input_tokens, output_tokens, cache_read_tokens,
                     cache_creation_tokens, cache_5m_tokens,
                     source_file_id, line_number, raw_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     event["uuid"],
                     event["parent_uuid"],
@@ -463,6 +467,8 @@ class CacheManager:
                     event["agent_id"],
                     event["agent_slug"],
                     event["message_role"],
+                    event["is_meta"],
+                    event["first_content_block_type"],
                     event["message_content"],
                     event["message_content_json"],
                     event["model_id"],
@@ -621,6 +627,27 @@ class CacheManager:
 # ── Event parsing helpers (module-level functions) ────────────────
 
 
+def _first_content_block_type(content: Any) -> str | None:
+    """Derive the content shape for a message's content field.
+
+    Returns:
+        'string'      — raw string content (typically human-typed prompts)
+        'text'        — list whose first block has type='text'
+        'tool_use'    — list whose first block has type='tool_use'
+        'tool_result' — list whose first block has type='tool_result'
+        'thinking'    — list whose first block has type='thinking'
+        other str     — first block's type value (catch-all)
+        None          — content is None or empty list
+    """
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return "string"
+    if isinstance(content, list) and content and isinstance(content[0], dict):
+        return content[0].get("type")
+    return None
+
+
 def _extract_text_content(content: Any) -> str:
     """Extract plain text from message content for FTS."""
     if content is None:
@@ -671,11 +698,14 @@ def _parse_event_for_cache(
     agent_id = raw.get("agentId")
     agent_slug = raw.get("slug")
 
+    is_meta = 1 if raw.get("isMeta") else 0
+
     message = raw.get("message", {}) or {}
     message_role = message.get("role") if isinstance(message, dict) else None
     message_content_raw = message.get("content") if isinstance(message, dict) else None
     model_id = message.get("model") if isinstance(message, dict) else None
 
+    first_block_type = _first_content_block_type(message_content_raw)
     message_content_text = _extract_text_content(message_content_raw)
 
     usage = message.get("usage", {}) if isinstance(message, dict) else {}
@@ -705,6 +735,8 @@ def _parse_event_for_cache(
         "agent_id": agent_id,
         "agent_slug": agent_slug,
         "message_role": message_role,
+        "is_meta": is_meta,
+        "first_content_block_type": first_block_type,
         "message_content": message_content_text,
         "message_content_json": json.dumps(message_content_raw) if message_content_raw else None,
         "model_id": model_id,

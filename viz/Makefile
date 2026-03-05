@@ -6,6 +6,14 @@ FRONTEND_PORT ?= 5280
 AGENTIC_BACKEND_PORT ?= 8201
 AGENTIC_FRONTEND_PORT ?= 5281
 
+WASM_DIR_SRC = ../build/wasm
+WASM_JS_SRC  = $(WASM_DIR_SRC)/muninn_sqlite3.js
+WASM_BIN_SRC = $(WASM_DIR_SRC)/muninn_sqlite3.wasm
+
+WASM_DIR = frontend/public/wasm
+WASM_JS  = $(WASM_DIR)/muninn_sqlite3.js
+WASM_BIN = $(WASM_DIR)/muninn_sqlite3.wasm
+
 .PHONY: help install dev dev-agentic wasm test test-api test-frontend test-e2e e2e-videos test-e2e-full clean \
        format format-python format-frontend \
        lint lint-python lint-frontend \
@@ -23,10 +31,11 @@ install-python:                                    ## Install Python deps
 install-frontend:                                  ## Install frontend deps
 	npm --prefix frontend install
 
-wasm:                                              ## Build WASM artifacts → viz/frontend/public/wasm/
-	$(MAKE) -C ../wasm build
-	cp ../wasm/build/muninn_sqlite3.js frontend/public/wasm/
-	cp ../wasm/build/muninn_sqlite3.wasm frontend/public/wasm/
+wasm:                                                ## Build WASM artifacts → viz/frontend/public/wasm/
+	$(MAKE) -C .. build-wasm
+	@mkdir -p $(WASM_DIR)
+	cp $(WASM_JS_SRC) $(WASM_JS)
+	cp $(WASM_BIN_SRC) $(WASM_BIN)
 
 dev: install wasm                                       ## Start dev servers (human ports)
 	@echo "http://localhost:$(FRONTEND_PORT)/kg/query/"
@@ -109,3 +118,4 @@ clean:                                             ## Remove build artifacts
 	rm -rf .pytest_cache __pycache__ server/__pycache__ tests/__pycache__
 	rm -rf .coverage
 	rm -rf .venv
+	rm -f $(WASM_DIR)/muninn_sqlite3.*

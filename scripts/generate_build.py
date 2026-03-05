@@ -267,6 +267,9 @@ QUERY_VARS: dict[str, callable] = {
     "MUNINN_SRC_WASM": lambda: " ".join(f"../{s}" for s in SOURCES),
     "MUNINN_SRC_WASM_LITE": lambda: " ".join(f"../{s}" for s in SOURCES_WASM_LITE),
     "SOURCES_WASM_EXTRA": lambda: " ".join(f"../{s}" for s in SOURCES_WASM_EXTRA),
+    # WASM file lists (root-relative, for root Makefile integration)
+    "MUNINN_SRC_WASM_LITE_ROOT": lambda: " ".join(SOURCES_WASM_LITE),
+    "SOURCES_WASM_EXTRA_ROOT": lambda: " ".join(SOURCES_WASM_EXTRA),
     # CMake flags
     "LLAMA_CMAKE_FLAGS": lambda: _cmake_flags_str(CMAKE_FLAGS_BASE),
     "LLAMA_CMAKE_FLAGS_WASM": lambda: _cmake_flags_str(CMAKE_FLAGS_WASM),

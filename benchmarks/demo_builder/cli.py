@@ -1,16 +1,19 @@
 """CLI for the demo_builder package.
 
 Subcommands:
-    manifest     Show permutation status and generate commands
-    build        Build a single demo database
+    manifest        Show permutation status and generate commands
+    build           Build a single demo database (sequential, all phases)
+    run-phase       Run a single named phase against an existing staging DB
     write-manifest  Generate manifest.json from existing built DBs
-    list-books   List discovered books with metadata
-    list-models  List available embedding models
+    list-books      List discovered books with metadata
+    list-models     List available embedding models
 
 Usage:
     uv run -m benchmarks.demo_builder manifest
     uv run -m benchmarks.demo_builder manifest --missing --commands
+    uv run -m benchmarks.demo_builder manifest --makefile --limit 3 > Makefile
     uv run -m benchmarks.demo_builder build --book-id 3300 --embedding-model MiniLM
+    uv run -m benchmarks.demo_builder run-phase --book-id 3300 --embedding-model MiniLM chunks
     uv run -m benchmarks.demo_builder write-manifest
     uv run -m benchmarks.demo_builder list-books
     uv run -m benchmarks.demo_builder list-models
@@ -19,14 +22,27 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import shutil
+import sqlite3
 import sys
 from pathlib import Path
 
-from benchmarks.demo_builder.constants import DEFAULT_OUTPUT_FOLDER, EMBEDDING_MODELS, MUNINN_PATH, PROJECT_ROOT
+from benchmarks.demo_builder.constants import (
+    DEFAULT_OUTPUT_FOLDER,
+    EMBEDDING_MODELS,
+    MUNINN_PATH,
+    PHASE_NAMES,
+    PROJECT_ROOT,
+)
 from benchmarks.demo_builder.discovery import discover_book_ids, print_books, print_models
-from benchmarks.demo_builder.manifest import permutation_manifest, print_manifest, write_manifest_json
+from benchmarks.demo_builder.manifest import (
+    generate_makefile,
+    permutation_manifest,
+    print_manifest,
+    write_manifest_json,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,16 +59,170 @@ def _cmd_manifest(args: argparse.Namespace) -> None:
     """Handle the 'manifest' subcommand."""
     output_folder = _resolve_output_folder(args)
     entries = permutation_manifest(output_folder)
+
+    # Apply the same filtering + sorting + limiting as the table/commands modes.
+    if args.book_id is not None:
+        entries = [e for e in entries if e["book_id"] == args.book_id]
+    if args.embedding_model is not None:
+        entries = [e for e in entries if e["model_name"] == args.embedding_model]
+    if args.missing:
+        entries = [e for e in entries if not e["done"]]
+    if args.done:
+        entries = [e for e in entries if e["done"]]
+    if args.sort == "name":
+        entries = sorted(entries, key=lambda e: e["permutation_id"])
+    else:
+        entries = sorted(entries, key=lambda e: e["sort_key"])
+    if args.limit is not None:
+        entries = entries[: args.limit]
+
+    if args.makefile:
+        print(generate_makefile(entries, output_folder))
+        return
+
     print_manifest(
         entries,
         output_folder,
-        missing=args.missing,
-        done=args.done,
-        sort=args.sort,
-        limit=args.limit,
+        missing=False,  # filtering already applied above
+        done=False,
+        sort="name",  # already sorted
+        limit=None,  # already limited
         commands=args.commands,
         force=args.force,
     )
+
+
+def _cmd_run_phase(args: argparse.Namespace) -> None:
+    """Handle the 'run-phase' subcommand.
+
+    Runs a single named phase against the staging DB for the given permutation.
+    The Makefile calls this for each phase and manages the sentinel files.
+
+    Lifecycle:
+    - For the first phase (chunks): creates staging dir + DB if missing.
+    - For all other phases: staging DB must already exist (fails loudly if not).
+    - For all phases before the target: restore_ctx() is called to hydrate ctx.
+    - For the last phase (metadata): finalizes (VACUUM + atomic move + joblib).
+    """
+    from benchmarks.demo_builder.build import DemoBuild, PhaseContext  # deferred for ML deps
+    from benchmarks.demo_builder.common import load_muninn  # noqa: E402 — deferred (common.py imports numpy/spacy)
+    from benchmarks.demo_builder.phases import (  # noqa: E402 — deferred for ML deps
+        PhaseChunks,
+        PhaseChunksEmbeddings,
+        PhaseChunksUMAP,
+        PhaseEntitiesUMAP,
+        PhaseEntityEmbeddings,
+        PhaseEntityResolution,
+        PhaseMetadata,
+        PhaseNER,
+        PhaseNode2Vec,
+        PhaseRE,
+    )
+
+    phase_slug = args.phase
+    if phase_slug not in PHASE_NAMES:
+        log.error("Unknown phase %r. Valid phases: %s", phase_slug, PHASE_NAMES)
+        sys.exit(1)
+
+    output_folder = _resolve_output_folder(args)
+    book_id = args.book_id
+    model_name = args.embedding_model
+
+    assert Path(MUNINN_PATH).with_suffix(".dylib").exists() or Path(MUNINN_PATH).with_suffix(".so").exists(), (
+        f"Muninn extension not found at {MUNINN_PATH}. Run: make all"
+    )
+
+    # Build a DemoBuild instance just for its path properties.
+    build = DemoBuild(book_id, model_name, output_folder)
+    perm_id = build.perm_id
+    staging_db_path = build.staging_db_path
+    phase_idx = PHASE_NAMES.index(phase_slug)
+    is_first = phase_idx == 0
+    is_last = phase_idx == len(PHASE_NAMES) - 1
+
+    # ── Open / create staging DB ──────────────────────────────────────
+    if is_first:
+        build.staging_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        assert staging_db_path.exists(), (
+            f"Staging DB not found: {staging_db_path}\nRun the 'chunks' phase first to create it."
+        )
+
+    conn = sqlite3.connect(str(staging_db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    # Allow up to 2 minutes of retries when another run-phase process holds the
+    # write lock. Required for parallel builds where ner || chunks_embeddings
+    # both write to the same staging DB concurrently.
+    conn.execute("PRAGMA busy_timeout = 120000")
+    load_muninn(conn)
+
+    if is_first:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS _build_progress (
+                phase INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                completed_at TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
+    # ── Build ctx ────────────────────────────────────────────────────
+    ctx = PhaseContext()
+    ctx.db_path = staging_db_path
+
+    # Instantiate all phases so we can call restore_ctx on preceding ones.
+    ner_backend = "gliner" if args.legacy_models else "gliner2"
+    re_backend = "glirel" if args.legacy_models else "gliner2"
+    all_phases = [
+        PhaseChunks(book_id, model_name),
+        PhaseChunksEmbeddings(book_id, model_name),
+        PhaseChunksUMAP(),
+        PhaseNER(backend=ner_backend),
+        PhaseRE(backend=re_backend),
+        PhaseEntityEmbeddings(model_name),
+        PhaseEntitiesUMAP(),
+        PhaseEntityResolution(),
+        PhaseNode2Vec(),
+        PhaseMetadata(book_id, model_name),
+    ]
+
+    # Restore ctx from all phases that precede the target.
+    for preceding_phase in all_phases[:phase_idx]:
+        preceding_phase.restore_ctx(conn, ctx)
+
+    # ── Run target phase ──────────────────────────────────────────────
+    target_phase = all_phases[phase_idx]
+    log.info("run-phase [%d/%d] %s — %s", phase_idx + 1, len(PHASE_NAMES), phase_slug, perm_id)
+    target_phase(conn, ctx)
+    conn.execute(
+        "INSERT OR REPLACE INTO _build_progress (phase, name, completed_at) VALUES (?, ?, ?)",
+        (phase_idx + 1, phase_slug, datetime.datetime.now(datetime.UTC).isoformat()),
+    )
+    conn.commit()
+
+    # ── Finalize on last phase ────────────────────────────────────────
+    if is_last:
+        log.info("  Finalizing: VACUUM + atomic move")
+        conn.execute("DROP TABLE IF EXISTS _build_progress")
+        conn.commit()
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("VACUUM")
+        conn.close()
+
+        output_folder.mkdir(parents=True, exist_ok=True)
+        final_path = build.final_path
+        shutil.move(str(staging_db_path), str(final_path))
+        for joblib_file in build.staging_dir.glob("*.joblib"):
+            shutil.move(str(joblib_file), str(output_folder / joblib_file.name))
+
+        db_size = final_path.stat().st_size
+        log.info("Done! %s (%.1f MB)", final_path.name, db_size / 1e6)
+        write_manifest_json(output_folder)
+        return
+
+    if conn is not None:
+        conn.close()
 
 
 def _cmd_build(args: argparse.Namespace) -> None:
@@ -101,7 +271,7 @@ def _cmd_build(args: argparse.Namespace) -> None:
 
     # ── Build ─────────────────────────────────────────────────────
     log.info("Building %s_%s", args.book_id, args.embedding_model)
-    build = DemoBuild(args.book_id, args.embedding_model, output_folder)
+    build = DemoBuild(args.book_id, args.embedding_model, output_folder, legacy_models=args.legacy_models)
     build.setup()
     try:
         build.run()
@@ -138,6 +308,21 @@ def main() -> None:
     manifest_p.add_argument("--missing", action="store_true", help="Only show missing permutations")
     manifest_p.add_argument("--done", action="store_true", help="Only show completed permutations")
     manifest_p.add_argument(
+        "--book-id",
+        type=int,
+        default=None,
+        dest="book_id",
+        help="Filter to a specific Gutenberg book ID",
+    )
+    manifest_p.add_argument(
+        "--embedding-model",
+        type=str,
+        default=None,
+        dest="embedding_model",
+        choices=list(EMBEDDING_MODELS.keys()),
+        help="Filter to a specific embedding model",
+    )
+    manifest_p.add_argument(
         "--sort",
         choices=["size", "name"],
         default="size",
@@ -149,6 +334,15 @@ def main() -> None:
         "--force",
         action="store_true",
         help="With --commands: append --force to each generated command",
+    )
+    manifest_p.add_argument(
+        "--makefile",
+        action="store_true",
+        help=(
+            "Print a Make-managed parallel build Makefile to stdout. "
+            "Pipe directly to make with: "
+            "manifest [--book-id N] [--embedding-model M] --makefile | make -f - all -j8"
+        ),
     )
 
     # ── build ─────────────────────────────────────────────────────
@@ -173,6 +367,13 @@ def main() -> None:
         help="Embedding model to use",
     )
     build_p.add_argument("--force", action="store_true", help="Overwrite existing output files")
+    build_p.add_argument(
+        "--legacy-models",
+        action="store_true",
+        dest="legacy_models",
+        default=False,
+        help="Use legacy GLiNER + GLiREL + spaCy stack instead of GLiNER2 for NER and RE phases",
+    )
 
     # ── write-manifest ────────────────────────────────────────────
     wm_p = subparsers.add_parser("write-manifest", help="Generate manifest.json from existing built DBs")
@@ -181,6 +382,38 @@ def main() -> None:
         type=str,
         default=DEFAULT_OUTPUT_FOLDER,
         help=f"Output folder containing built databases (default: {DEFAULT_OUTPUT_FOLDER})",
+    )
+
+    # ── run-phase ─────────────────────────────────────────────────
+    rp = subparsers.add_parser(
+        "run-phase",
+        help="Run a single named phase against the staging DB (called by generated Makefiles)",
+    )
+    rp.add_argument(
+        "--output-folder",
+        type=str,
+        default=DEFAULT_OUTPUT_FOLDER,
+        help=f"Output folder for generated databases (default: {DEFAULT_OUTPUT_FOLDER})",
+    )
+    rp.add_argument("--book-id", type=int, required=True, help="Gutenberg book ID")
+    rp.add_argument(
+        "--embedding-model",
+        type=str,
+        required=True,
+        choices=list(EMBEDDING_MODELS.keys()),
+        help="Embedding model to use",
+    )
+    rp.add_argument(
+        "phase",
+        choices=PHASE_NAMES,
+        help=f"Phase to run. One of: {', '.join(PHASE_NAMES)}",
+    )
+    rp.add_argument(
+        "--legacy-models",
+        action="store_true",
+        dest="legacy_models",
+        default=False,
+        help="Use legacy GLiNER + GLiREL + spaCy stack instead of GLiNER2 for NER and RE phases",
     )
 
     # ── list-books ────────────────────────────────────────────────
@@ -205,6 +438,8 @@ def main() -> None:
         _cmd_manifest(args)
     elif args.command == "build":
         _cmd_build(args)
+    elif args.command == "run-phase":
+        _cmd_run_phase(args)
     elif args.command == "write-manifest":
         _cmd_write_manifest(args)
     elif args.command == "list-books":

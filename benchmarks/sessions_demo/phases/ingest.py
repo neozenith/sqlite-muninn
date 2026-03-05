@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from benchmarks.sessions_demo.cache import CacheManager
+from benchmarks.sessions_demo.phases.base import Phase
 
 if TYPE_CHECKING:
     from benchmarks.sessions_demo.build import PhaseContext
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class PhaseIngest:
+class PhaseIngest(Phase):
     """Ingest JSONL session logs into the events table.
 
     Uses CacheManager for incremental discovery and parsing of

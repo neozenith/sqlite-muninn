@@ -5,6 +5,8 @@ all permutation_ids are unique across all categories, and each treatment
 subclass can be instantiated with params_dict() returning a non-empty dict.
 """
 
+from typing import Any
+
 from benchmarks.harness.registry import all_permutations
 
 
@@ -38,7 +40,7 @@ class TestAllTreatments:
     def test_params_dict_nonempty_for_each_category(self):
         """At least one treatment per category should return non-empty params_dict."""
         perms = all_permutations()
-        by_category = {}
+        by_category: dict[str, list[Any]] = {}
         for p in perms:
             by_category.setdefault(p.category, []).append(p)
 
@@ -56,7 +58,7 @@ class TestAllTreatments:
     def test_category_counts(self):
         """Report permutation counts per category."""
         perms = all_permutations()
-        by_category = {}
+        by_category: dict[str, list[Any]] = {}
         for p in perms:
             by_category.setdefault(p.category, []).append(p)
 

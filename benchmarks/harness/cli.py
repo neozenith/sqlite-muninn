@@ -10,6 +10,7 @@ Four subcommands:
 import argparse
 import logging
 import sys
+from typing import Any
 
 from benchmarks.harness.prep.kg_datasets import KG_PREP_TASKS
 
@@ -144,7 +145,7 @@ def _cmd_manifest(args):
     sort_mode = getattr(args, "sort", "size")
 
     # Group by category, then sort within each group
-    by_category = {}
+    by_category: dict[str, list[Any]] = {}
     for s in status:
         by_category.setdefault(s["category"], []).append(s)
     for category in by_category:

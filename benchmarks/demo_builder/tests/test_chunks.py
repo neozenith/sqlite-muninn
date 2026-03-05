@@ -71,7 +71,7 @@ def test_whitespace_only_returns_empty() -> None:
     assert _chunk_text("   \n\n  ", chunk_chars=100) == []
 
 
-@pytest.mark.parametrize("chunk_chars", [100, 500, 1000, 4096])
+@pytest.mark.parametrize("chunk_chars", [100, 500, 1000, 4096])  # type: ignore[untyped-decorator]
 def test_various_chunk_sizes(chunk_chars: int) -> None:
     """Chunking works correctly at different size parameters."""
     text = ("The quick brown fox jumps over the lazy dog. " * 20 + "\n") * 10

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 
 def fmt_size(size_bytes: int) -> str:
@@ -13,7 +14,7 @@ def fmt_size(size_bytes: int) -> str:
     return f"{size_bytes / (1024 * 1024):.1f} MB"
 
 
-def write_jsonl(path: Path, records: list[dict]) -> None:
+def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
     """Write a list of dicts as newline-delimited JSON."""
     path.write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n",
@@ -29,7 +30,7 @@ def count_jsonl_lines(path: Path) -> int:
 # ── Span conversion utilities ────────────────────────────────────
 
 
-def bio_to_spans(tokens: list[str], tags: list[str]) -> list[dict]:
+def bio_to_spans(tokens: list[str], tags: list[str]) -> list[dict[str, Any]]:
     """Convert BIO-tagged tokens to character-offset entity spans.
 
     Args:
@@ -111,7 +112,7 @@ def bio_to_spans(tokens: list[str], tags: list[str]) -> list[dict]:
     return spans
 
 
-def io_to_spans(tokens: list[str], tags: list[str]) -> list[dict]:
+def io_to_spans(tokens: list[str], tags: list[str]) -> list[dict[str, Any]]:
     """Convert IO-tagged tokens (no B/I distinction) to character-offset entity spans.
 
     Few-NERD uses this scheme: each token is either "O" or a fine-grained type

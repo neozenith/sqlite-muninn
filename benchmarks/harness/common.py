@@ -525,7 +525,7 @@ def pack_vector(v: np.ndarray | list[float]) -> bytes:
     Accepts numpy arrays (fast path via tobytes) or plain Python iterables.
     """
     if isinstance(v, np.ndarray):
-        return v.astype(np.float32).tobytes()
+        return bytes(v.astype(np.float32).tobytes())
     return struct.pack(f"{len(v)}f", *v)
 
 

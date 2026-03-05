@@ -12,9 +12,9 @@ Public API follows a setup/run/teardown lifecycle:
 
 ## Incremental KG pipeline
 
-Pre-KG phases (ingest, chunks, embeddings) are always executed — they are
+Pre-KG phases (ingest, chunks, chunks_vec) are always executed — they are
 already individually incremental: ingest picks up new JSONL files, chunks
-splits new events only, embeddings skips already-embedded chunks.
+splits new events only, chunks_vec skips already-embedded chunks.
 
 KG phases (ner → metadata) are NOT individually incremental. They are skipped
 when all of the following are true:
@@ -41,11 +41,12 @@ from typing import Any
 
 import numpy as np
 
+from benchmarks.demo_builder.common import _fmt_elapsed
 from benchmarks.sessions_demo.phases import Phase, default_phases
 
 log = logging.getLogger(__name__)
 
-# Names of KG pipeline phases (everything after embeddings).
+# Names of KG pipeline phases (everything after chunks_vec).
 # Used to split the phase list into "always run" vs "conditional" groups.
 _KG_PHASE_NAMES: frozenset[str] = frozenset(
     [
@@ -99,7 +100,7 @@ class PhaseContext:
     # Phase 2: chunks
     chunks_created: int = 0
 
-    # Phase 3: embeddings
+    # Phase 3: chunks_vec
     chunks_embedded: int = 0
 
     # KG pipeline fields (match demo_builder.PhaseContext names so imported
@@ -146,28 +147,29 @@ class SessionsBuild:
         self._init_build_progress()
         self._log.info("Database opened: %s", self._db_path)
 
-    def run(self, phases: list[Phase] | None = None, run_from: str | None = None) -> None:
-        """Execute phases using DAG-aware per-phase staleness checks.
+    def run(
+        self,
+        phases: list[Phase] | None = None,
+        run_from: str | None = None,
+        message_types: list[str] | None = None,
+        legacy_models: bool = False,
+    ) -> None:
+        """Execute phases using per-phase staleness checks.
 
         Each phase decides independently whether it has pending work via
         is_stale(conn). Stale phases run; up-to-date phases restore ctx fields
-        from the DB and are skipped. This replaces the old binary "rebuild all
-        KG or skip all KG" decision with fine-grained per-phase incrementality.
+        from the DB and are skipped.
 
-        run_from: if given, all phases whose name precedes run_from in the list
-        are force-skipped (restore_ctx only, no execution). Normal DAG-aware
-        staleness logic applies from run_from onward. This enables testing
-        incremental behaviour of downstream phases without re-running the full
-        ingest/embedding pipeline on every cycle.
+        run_from: force-skip all phases before PHASE, restoring their ctx
+        from the DB. Normal staleness logic applies from PHASE onward.
 
-        muninn is loaded once upfront so entity_embeddings, entity_resolution,
-        and node2vec can create/query HNSW VTs even when the embeddings phase
-        is skipped (all chunks already embedded).
+        muninn is loaded once upfront so HNSW phases can create/query virtual
+        tables even when chunks_vec is skipped (all chunks already embedded).
         """
         if phases is None:
-            phases = default_phases()
+            phases = default_phases(message_types=message_types, legacy_models=legacy_models)
 
-        # Determine the index of the run_from phase (0 = run everything).
+        # Force-skip phases before run_from: restore ctx, do not execute.
         start_idx = 0
         if run_from is not None:
             names = [p.name for p in phases]
@@ -175,30 +177,35 @@ class SessionsBuild:
                 raise ValueError(f"Unknown phase {run_from!r}. Valid phase names: {', '.join(names)}")
             start_idx = names.index(run_from)
             self._log.info("--run-from %s: force-skipping phases 1-%d", run_from, start_idx)
+            skipped = phases[:start_idx]
+            phases = phases[start_idx:]
+            for phase in skipped:
+                phase.restore_ctx(self._db, self._ctx)
 
+        self._run_sequential(phases)
+
+        # Ensure num_chunks reflects total in DB — metadata reads it from ctx.
+        try:
+            self._ctx.num_chunks = self._db.execute("SELECT count(*) FROM chunks").fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+
+    def _run_sequential(self, phases: list[Phase]) -> None:
+        """Sequential phase execution on the shared DB connection."""
         total = len(phases)
         t_total = time.monotonic()
 
         self._log.info("=" * 60)
-        self._log.info("Building sessions demo: %s", self._db_path.name)
+        self._log.info("Sequential build: %s", self._db_path.name)
         self._log.info("=" * 60)
 
-        # Load muninn once before any phase. entity_embeddings, entity_resolution,
-        # and node2vec all create/query HNSW VTs; they need the module registered
-        # even when the embeddings phase is skipped.
+        # Load muninn once for the shared connection.
         from benchmarks.demo_builder.common import load_muninn
 
         load_muninn(self._db)
 
         for i, phase in enumerate(phases, 1):
             t0 = time.monotonic()
-
-            # Phases before run_from are force-skipped: restore ctx but never execute.
-            if i - 1 < start_idx:
-                self._log.info("Phase %d/%d: %s  (force-skipped by --run-from, restoring ctx)", i, total, phase.name)
-                phase.restore_ctx(self._db, self._ctx)
-                continue
-
             stale = phase.is_stale(self._db)
 
             if not stale:
@@ -211,16 +218,61 @@ class SessionsBuild:
             self._db.commit()
             self._record_phase(i, phase.name)
             self._db.commit()
-            self._log.info("Phase %d complete (%.1fs)", i, time.monotonic() - t0)
+            self._log.info("Phase %d complete (%s)", i, _fmt_elapsed(time.monotonic() - t0))
 
-        # Ensure num_chunks reflects total in DB — metadata uses it for counts.
+        self._log.info("Sequential build complete (%s total)", _fmt_elapsed(time.monotonic() - t_total))
+
+    def run_single_phase(
+        self,
+        phase_name: str,
+        message_types: list[str] | None = None,
+        legacy_models: bool = False,
+    ) -> None:
+        """Run a single named phase, restoring ctx from DB for all preceding phases.
+
+        Equivalent to --run-from PHASE followed by stopping after that one phase.
+        Useful for targeted re-runs, debugging, and standalone phase testing:
+
+            uv run -m benchmarks.sessions_demo run-phase ner
+            uv run -m benchmarks.sessions_demo run-phase entity_resolution
+
+        All phases before PHASE have their restore_ctx() called so that ctx fields
+        (num_chunks, num_entity_mentions, etc.) are correct for the target phase.
+
+        muninn is loaded upfront since any HNSW phase needs it registered.
+        """
+        phases = default_phases(message_types=message_types, legacy_models=legacy_models)
+        names = [p.name for p in phases]
+        if phase_name not in names:
+            raise ValueError(f"Unknown phase {phase_name!r}. Valid phase names: {', '.join(names)}")
+
+        target_idx = names.index(phase_name)
+        target = phases[target_idx]
+
+        # muninn must be registered before any HNSW phase creates or queries a VT.
+        from benchmarks.demo_builder.common import load_muninn
+
+        load_muninn(self._db)
+
+        # Restore ctx from DB for every phase that precedes the target.
+        for phase in phases[:target_idx]:
+            phase.restore_ctx(self._db, self._ctx)
+            self._log.debug("  Restored ctx from phase: %s", phase.name)
+
+        # Ensure num_chunks reflects the total in `chunks` — metadata reads it
+        # directly from ctx and this fixup brings it in line with the DB count.
         try:
             self._ctx.num_chunks = self._db.execute("SELECT count(*) FROM chunks").fetchone()[0]
-        except sqlite3.OperationalError:
+        except Exception:
             pass
 
-        elapsed = time.monotonic() - t_total
-        self._log.info("Build complete (%.1fs total)", elapsed)
+        t0 = time.monotonic()
+        self._log.info("run-phase: %s", phase_name)
+        target(self._db, self._ctx)
+        self._db.commit()
+        self._record_phase(target_idx + 1, phase_name)
+        self._db.commit()
+        self._log.info("Phase %s complete (%s)", phase_name, _fmt_elapsed(time.monotonic() - t0))
 
     def teardown(self) -> None:
         """Close database connection."""
@@ -258,7 +310,7 @@ class SessionsBuild:
         # ── Current data counts ───────────────────────────────────
         def _count(table: str, fallback: int = 0) -> int:
             try:
-                return db.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
+                return int(db.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0])
             except sqlite3.OperationalError:
                 return fallback
 
@@ -309,7 +361,7 @@ class SessionsBuild:
         # pending = upstream items not yet consumed by this phase
         def _count_q(sql: str) -> int:
             try:
-                return db.execute(sql).fetchone()[0]
+                return int(db.execute(sql).fetchone()[0])
             except sqlite3.OperationalError:
                 return 0
 
@@ -334,17 +386,17 @@ class SessionsBuild:
         """)
 
         status["phase_counts"] = {
-            "ingest":            (ev,       max(0, status.get("jsonl_files_changed", 0))),
-            "chunks":            (ev_chunked, ev_pending_chunks),
-            "embeddings":        (emb,      max(0, ch - emb)),
-            "chunks_vec_umap":   (umap_ch,  max(0, emb - umap_ch)),
-            "ner":               (ner_log,  max(0, ch - ner_log)),
-            "relations":         (re_log,   max(0, ch - re_log)),
-            "entity_embeddings": (ev_vec,   max(0, ent - ev_vec)),
+            "ingest": (ev, max(0, status.get("jsonl_files_changed", 0))),
+            "chunks": (ev_chunked, ev_pending_chunks),
+            "chunks_vec": (emb, max(0, ch - emb)),
+            "chunks_vec_umap": (umap_ch, max(0, emb - umap_ch)),
+            "ner": (ner_log, max(0, ch - ner_log)),
+            "relations": (re_log, max(0, ch - re_log)),
+            "entity_embeddings": (ev_vec, max(0, ent - ev_vec)),
             "entities_vec_umap": (umap_ent, max(0, ev_vec - umap_ent)),
-            "entity_resolution": (ec,       max(0, ent - ec)),
-            "node2vec":          (n2v,      max(0, nodes - n2v)),
-            "metadata":          (_count_q("SELECT COUNT(*) FROM meta"), 0 if not phase_stale.get("metadata", True) else 1),
+            "entity_resolution": (ec, max(0, ent - ec)),
+            "node2vec": (n2v, max(0, nodes - n2v)),
+            "metadata": (_count_q("SELECT COUNT(*) FROM meta"), 0 if not phase_stale.get("metadata", True) else 1),
         }
 
         return status

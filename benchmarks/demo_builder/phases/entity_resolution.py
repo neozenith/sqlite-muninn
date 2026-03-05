@@ -29,12 +29,12 @@ class PhaseEntityResolution(Phase):
     def is_stale(self, conn: sqlite3.Connection) -> bool:
         """Return True if entity_resolution output is missing or stale."""
         try:
-            node_count = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
+            node_count: int = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
             if node_count == 0:
                 return True
             # Stale if there are entity names not covered by any cluster.
-            distinct_names = conn.execute("SELECT count(DISTINCT name) FROM entities").fetchone()[0]
-            cluster_count = conn.execute("SELECT count(*) FROM entity_clusters").fetchone()[0]
+            distinct_names: int = conn.execute("SELECT count(DISTINCT name) FROM entities").fetchone()[0]
+            cluster_count: int = conn.execute("SELECT count(*) FROM entity_clusters").fetchone()[0]
             return cluster_count < distinct_names
         except sqlite3.OperationalError:
             return True

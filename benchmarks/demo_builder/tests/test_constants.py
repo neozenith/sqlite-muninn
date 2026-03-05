@@ -38,7 +38,7 @@ def test_embedding_models_have_required_keys() -> None:
 
 
 def test_phase_names_count() -> None:
-    assert len(PHASE_NAMES) == 8
+    assert len(PHASE_NAMES) == 10
 
 
 def test_gliner_labels_nonempty() -> None:

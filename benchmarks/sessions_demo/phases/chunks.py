@@ -7,7 +7,8 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 from benchmarks.demo_builder.common import ProgressTracker
-from benchmarks.sessions_demo.constants import CHUNK_MAX_CHARS, CHUNK_MIN_CHARS
+from benchmarks.sessions_demo.constants import CHUNK_MAX_CHARS, CHUNK_MIN_CHARS, DEFAULT_MESSAGE_TYPES
+from benchmarks.sessions_demo.phases.base import Phase
 
 if TYPE_CHECKING:
     from benchmarks.sessions_demo.build import PhaseContext
@@ -66,26 +67,54 @@ def _split_into_chunks(text: str, max_chars: int, min_chars: int) -> list[tuple[
     return chunks
 
 
-class PhaseChunks:
+class PhaseChunks(Phase):
     """Split event message_content into chunks with FTS5 index.
 
     Creates event_message_chunks table with chunk_id, event_id, text,
     and chunk_offset. Creates FTS5 index on chunk text.
+
+    message_types controls which event_type values are chunked and fed into
+    the KG pipeline. Defaults to DEFAULT_MESSAGE_TYPES (["user"]).
     """
+
+    def __init__(self, message_types: list[str] | None = None) -> None:
+        self._message_types = message_types if message_types is not None else list(DEFAULT_MESSAGE_TYPES)
 
     @property
     def name(self) -> str:
         return "chunks"
 
+    def _type_filter(self) -> tuple[str, list[str]]:
+        """Return (SQL fragment, params) for the message-type filter.
+
+        The special alias 'human' expands to a compound condition targeting
+        only genuine human-typed prompts: user-role events with string content
+        that are not system-injected meta wrappers (isMeta=False).
+
+        Any other value is treated as a literal event_type matched via IN ().
+        """
+        if self._message_types == ["human"]:
+            return (
+                "AND e.event_type = 'user' AND e.is_meta = 0 AND e.first_content_block_type = 'string'",
+                [],
+            )
+        placeholders = ",".join("?" * len(self._message_types))
+        return f"AND e.event_type IN ({placeholders})", list(self._message_types)
+
     def is_stale(self, conn: sqlite3.Connection) -> bool:
-        """Return True if any events with content have not been chunked yet."""
+        """Return True if any matching events with content have not been chunked yet."""
         try:
-            pending = conn.execute("""
+            type_sql, type_params = self._type_filter()
+            pending: int = conn.execute(
+                f"""
                 SELECT COUNT(*) FROM events e
                 WHERE e.message_content IS NOT NULL
                   AND e.message_content != ''
+                  {type_sql}
                   AND e.id NOT IN (SELECT DISTINCT event_id FROM event_message_chunks)
-            """).fetchone()[0]
+            """,
+                type_params,
+            ).fetchone()[0]
             return pending > 0
         except sqlite3.OperationalError:
             return True
@@ -143,26 +172,41 @@ class PhaseChunks:
         log.info("Created event_message_chunks + FTS5 tables")
 
     def run(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        type_sql, type_params = self._type_filter()
+
         # Count events needing chunking for progress estimate
-        total_events = conn.execute("""
+        total_events = conn.execute(
+            f"""
             SELECT COUNT(*) FROM events e
             WHERE e.message_content IS NOT NULL
               AND e.message_content != ''
+              {type_sql}
               AND e.id NOT IN (SELECT DISTINCT event_id FROM event_message_chunks)
-        """).fetchone()[0]
-        log.info("Chunking %d events (max_chars=%d)", total_events, CHUNK_MAX_CHARS)
+        """,
+            type_params,
+        ).fetchone()[0]
+        log.info(
+            "Chunking %d events (max_chars=%d, types=%s)",
+            total_events,
+            CHUNK_MAX_CHARS,
+            ",".join(self._message_types),
+        )
 
         if total_events == 0:
             ctx.chunks_created = 0
             return
 
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            f"""
             SELECT e.id, e.message_content
             FROM events e
             WHERE e.message_content IS NOT NULL
               AND e.message_content != ''
+              {type_sql}
               AND e.id NOT IN (SELECT DISTINCT event_id FROM event_message_chunks)
-        """)
+        """,
+            type_params,
+        )
 
         total_chunks = 0
         events_processed = 0
@@ -181,8 +225,9 @@ class PhaseChunks:
 
             events_processed += 1
             tracker.update()
+            tracker.record_output(len(chunks))
             if tracker.should_log():
-                log.info("  Chunked %s  (%d chunks so far)", tracker.report(), total_chunks)
+                log.info("  Chunked %s", tracker.report())
 
         conn.commit()
         ctx.chunks_created = total_chunks
@@ -196,17 +241,28 @@ class PhaseChunks:
         # (not a VIEW) because PhaseNER declares entities.chunk_id with
         # FOREIGN KEY REFERENCES chunks(chunk_id), and SQLite's FK enforcement
         # cannot resolve foreign keys against views — only real tables.
-        conn.execute("CREATE TABLE IF NOT EXISTS chunks (chunk_id INTEGER PRIMARY KEY, text TEXT NOT NULL)")
-        conn.execute("INSERT OR IGNORE INTO chunks SELECT chunk_id, text FROM event_message_chunks")
+        #
+        # DROP + RECREATE (not INSERT OR IGNORE) so that filter changes never
+        # leave stale rows from a previous build in chunks/chunks_fts.
+        # chunks is a derived copy of event_message_chunks — cheap to rebuild.
+        #
+        # Disable FK enforcement for the drop: entities (from a prior KG build)
+        # may reference chunks.chunk_id. The KG phases will rebuild entities from
+        # the fresh chunks table, so the transient violation is safe to bypass.
+        # PRAGMA foreign_keys cannot be changed inside a transaction; run() commits
+        # before returning so we are outside a transaction here.
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("DROP TABLE IF EXISTS chunks_fts")
+        conn.execute("DROP TABLE IF EXISTS chunks")
+        conn.execute("CREATE TABLE chunks (chunk_id INTEGER PRIMARY KEY, text TEXT NOT NULL)")
+        conn.execute("INSERT INTO chunks SELECT chunk_id, text FROM event_message_chunks")
 
         # chunks_fts is the viz-expected FTS companion for chunks_vec.
         # Mirrors demo_builder: points at the `chunks` real table.
-        # Rebuilt once here rather than via triggers (build pipeline, not incremental KG).
-        conn.execute(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content=chunks, content_rowid=chunk_id)"
-        )
+        conn.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(text, content=chunks, content_rowid=chunk_id)")
         conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
         conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
         log.info("Created chunks table and chunks_fts FTS5 (%d entries)", ctx.num_chunks)
 
     def __call__(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:

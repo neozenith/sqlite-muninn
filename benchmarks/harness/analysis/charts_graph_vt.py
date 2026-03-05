@@ -7,10 +7,12 @@ Uses wide-format JSONL where each algorithm timing is a separate column
 (degree_ms, betweenness_ms, etc.) rather than a row per operation.
 """
 
+from typing import Any
+
 from benchmarks.harness.analysis.aggregator import ChartSpec
 
 # Common fields for per-algorithm query time charts
-_ALGO_COMMON = {
+_ALGO_COMMON: dict[str, Any] = {
     "sources": ["graph_vt_*.jsonl"],
     "filters": {},
     "x_field": "n_nodes",

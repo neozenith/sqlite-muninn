@@ -181,7 +181,7 @@ class TestKgChunksPrepTask:
     def test_chunks_prep_tasks_includes_default(self, tmp_path):
         with patch("benchmarks.harness.prep.kg_chunks.TEXTS_DIR", tmp_path):
             tasks = chunks_prep_tasks()
-        assert any(t._book_id == 3300 for t in tasks)
+        assert any(t._book_id == 3300 for t in tasks)  # type: ignore[attr-defined]
 
     def test_chunks_prep_tasks_discovers_extra(self, tmp_path):
         texts_dir = tmp_path / "texts"
@@ -191,7 +191,7 @@ class TestKgChunksPrepTask:
 
         with patch("benchmarks.harness.prep.kg_chunks.TEXTS_DIR", texts_dir):
             tasks = chunks_prep_tasks()
-        book_ids = {t._book_id for t in tasks}
+        book_ids = {t._book_id for t in tasks}  # type: ignore[attr-defined]
         assert 3300 in book_ids
         assert 1234 in book_ids
 

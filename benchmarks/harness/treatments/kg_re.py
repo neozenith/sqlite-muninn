@@ -10,17 +10,19 @@ Source: docs/plans/kg/02_relation_extraction.md
 import json
 import logging
 import time
+from typing import Any
 
 from benchmarks.harness.common import KG_DIR
 from benchmarks.harness.treatments.base import Treatment
 from benchmarks.harness.treatments.kg_extract import NER_ADAPTERS
 from benchmarks.harness.treatments.kg_metrics import triple_f1
-from benchmarks.harness.treatments.kg_re_adapters import RE_ADAPTERS
+from benchmarks.harness.treatments.kg_re_adapters import RE_ADAPTERS, ReModelAdapter
+from benchmarks.harness.treatments.kg_types import NerModelAdapter
 
 log = logging.getLogger(__name__)
 
 
-def _load_re_dataset(dataset_name: str) -> tuple[list[dict], list[dict]]:
+def _load_re_dataset(dataset_name: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Load a prepped RE benchmark dataset.
 
     Returns:
@@ -64,8 +66,8 @@ class KGRelationExtractionTreatment(Treatment):
     def __init__(self, model_slug: str, dataset: str):
         self._model_slug = model_slug
         self._dataset = dataset
-        self._ner_adapter = None
-        self._re_adapter = None
+        self._ner_adapter: NerModelAdapter | None = None
+        self._re_adapter: ReModelAdapter | None = None
 
     @property
     def requires_muninn(self) -> bool:
@@ -166,11 +168,13 @@ class KGRelationExtractionTreatment(Treatment):
 
             # Phase 1: NER extraction
             t0 = time.perf_counter()
+            assert self._ner_adapter is not None
             entities = self._ner_adapter.extract(text, labels)
             ner_ms = (time.perf_counter() - t0) * 1000
 
             # Phase 2: Relation extraction
             t1 = time.perf_counter()
+            assert self._re_adapter is not None
             relations = self._re_adapter.extract_relations(text, entities)
             re_ms = (time.perf_counter() - t1) * 1000
 

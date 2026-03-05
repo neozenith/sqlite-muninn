@@ -1,5 +1,7 @@
 """Embed chart definitions — 12 charts for live GGUF embedding benchmarks."""
 
+from typing import Any
+
 from benchmarks.harness.analysis.aggregator import ChartSpec
 
 # Common field sets for Embed charts
@@ -9,7 +11,7 @@ _EMBED_REPEAT = ["embed_fn", "search_backend", "model", "dataset", "dim", "n", "
 
 # ── Query+Search Latency charts (4): per model x dataset ──
 
-_QL_COMMON = {
+_QL_COMMON: dict[str, Any] = {
     "sources": _EMBED_SOURCES,
     "x_field": "n",
     "y_field": "query_embed_search_latency_ms",
@@ -24,7 +26,7 @@ _QL_COMMON = {
 
 # ── Cross-Model Comparison charts (2): all models on one chart, per dataset ──
 
-_XMODEL_COMMON = {
+_XMODEL_COMMON: dict[str, Any] = {
     "sources": _EMBED_SOURCES,
     "x_field": "n",
     "y_field": "query_embed_search_latency_ms",
@@ -39,7 +41,7 @@ _XMODEL_COMMON = {
 
 # ── Embedding-Only Latency charts (2): per dataset ──
 
-_EMBED_ONLY_COMMON = {
+_EMBED_ONLY_COMMON: dict[str, Any] = {
     "sources": _EMBED_SOURCES,
     "x_field": "n",
     "y_field": "query_embed_only_ms",
@@ -54,7 +56,7 @@ _EMBED_ONLY_COMMON = {
 
 # ── Insert Throughput charts (2): per dataset ──
 
-_INSERT_COMMON = {
+_INSERT_COMMON: dict[str, Any] = {
     "sources": _EMBED_SOURCES,
     "x_field": "n",
     "y_field": "bulk_embed_insert_rate_vps",
@@ -68,7 +70,7 @@ _INSERT_COMMON = {
 
 # ── Recall charts (2): per dataset ──
 
-_RECALL_COMMON = {
+_RECALL_COMMON: dict[str, Any] = {
     "sources": _EMBED_SOURCES,
     "x_field": "n",
     "y_field": "recall_at_k",

@@ -266,7 +266,7 @@ def _get_span_text(token: spacy.tokens.Token) -> str:
         # Sort by position and include the head token
         all_tokens = sorted(compounds + [token], key=lambda t: t.i)
         return " ".join(t.text for t in all_tokens)
-    return token.text
+    return str(token.text)
 
 
 # RE model slug -> adapter factory callable

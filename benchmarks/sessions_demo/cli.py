@@ -1,9 +1,12 @@
-"""CLI interface for sessions_demo — build and cache subcommands.
+"""CLI interface for sessions_demo — build, run-phase, and cache subcommands.
 
 Usage:
     uv run -m benchmarks.sessions_demo build
     uv run -m benchmarks.sessions_demo build --status
     uv run -m benchmarks.sessions_demo build --output-folder viz/frontend/public/demos
+    uv run -m benchmarks.sessions_demo run-phase ner
+    uv run -m benchmarks.sessions_demo run-phase entity_resolution
+    uv run -m benchmarks.sessions_demo run-phase metadata
     uv run -m benchmarks.sessions_demo cache init
     uv run -m benchmarks.sessions_demo cache update
     uv run -m benchmarks.sessions_demo cache rebuild
@@ -17,7 +20,13 @@ import argparse
 import logging
 import sys
 
-from benchmarks.sessions_demo.constants import DEFAULT_DB_NAME, DEFAULT_OUTPUT_FOLDER, PHASE_NAMES
+from benchmarks.sessions_demo.constants import (
+    ALL_MESSAGE_TYPES,
+    DEFAULT_DB_NAME,
+    DEFAULT_MESSAGE_TYPES,
+    DEFAULT_OUTPUT_FOLDER,
+    PHASE_NAMES,
+)
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +164,42 @@ def _cmd_cache(args: argparse.Namespace) -> None:
         cache.close()
 
 
+def _parse_message_types(raw: str) -> list[str]:
+    """Parse and validate a comma-separated message types string."""
+    types = [t.strip() for t in raw.split(",") if t.strip()]
+    unknown = [t for t in types if t not in ALL_MESSAGE_TYPES]
+    if unknown:
+        print(f"Error: unknown message type(s): {', '.join(unknown)}")
+        print(f"Valid types: {', '.join(ALL_MESSAGE_TYPES)}")
+        sys.exit(1)
+    return types
+
+
+def _cmd_run_phase(args: argparse.Namespace) -> None:
+    """Handle run-phase subcommand — run a single phase standalone."""
+    from benchmarks.demo_builder.manifest import write_manifest_json
+    from benchmarks.sessions_demo.build import SessionsBuild
+
+    message_types = _parse_message_types(args.message_types)
+    db_path = args.output_folder / args.db_name
+    if not db_path.exists():
+        print(f"Error: database not found: {db_path}")
+        print("Run 'build' first to create it.")
+        sys.exit(1)
+
+    build = SessionsBuild(db_path)
+    build.setup()
+    try:
+        build.run_single_phase(args.phase, message_types=message_types, legacy_models=args.legacy_models)
+    finally:
+        build.teardown()
+
+    # Update manifest if metadata was (re-)written so viz frontend sees fresh counts.
+    if args.phase == "metadata":
+        write_manifest_json(args.output_folder)
+        log.info("Updated manifest.json in %s", args.output_folder)
+
+
 def _cmd_build(args: argparse.Namespace) -> None:
     """Handle build subcommand."""
     from benchmarks.demo_builder.manifest import write_manifest_json
@@ -165,11 +210,17 @@ def _cmd_build(args: argparse.Namespace) -> None:
         print(f"Valid phase names: {', '.join(PHASE_NAMES)}")
         sys.exit(1)
 
+    message_types = _parse_message_types(args.message_types)
+
     db_path = args.output_folder / args.db_name
     build = SessionsBuild(db_path)
     build.setup()
     try:
-        build.run(run_from=args.run_from)
+        build.run(
+            run_from=args.run_from,
+            message_types=message_types,
+            legacy_models=args.legacy_models,
+        )
     finally:
         build.teardown()
 
@@ -226,6 +277,53 @@ def main(argv: list[str] | None = None) -> None:
             f"of downstream phases. Valid names: {', '.join(PHASE_NAMES)}"
         ),
     )
+    build_parser.add_argument(
+        "--message-types",
+        default=",".join(DEFAULT_MESSAGE_TYPES),
+        metavar="TYPES",
+        help=(
+            "Comma-separated filter for which events to chunk and feed into the KG. "
+            f"Default: {','.join(DEFAULT_MESSAGE_TYPES)}. "
+            "Use 'human' for genuine human-typed prompts only (user events with string "
+            "content and isMeta=False — excludes tool results, skill injections, wrappers). "
+            f"Other values: {', '.join(t for t in ALL_MESSAGE_TYPES if t != 'human')}. "
+            "To switch filters on an existing DB, re-run with --run-from chunks."
+        ),
+    )
+    build_parser.add_argument(
+        "--legacy-models",
+        action="store_true",
+        dest="legacy_models",
+        default=False,
+        help="Use legacy GLiNER + GLiREL + spaCy stack instead of GLiNER2 for NER and RE phases",
+    )
+    # ── run-phase subcommand ──────────────────────────────────────
+    run_phase_parser = subparsers.add_parser(
+        "run-phase",
+        help="Run a single build phase by name (restores ctx from DB for preceding phases)",
+    )
+    run_phase_parser.add_argument(
+        "phase",
+        metavar="PHASE",
+        choices=PHASE_NAMES,
+        help=f"Phase to run. Valid names: {', '.join(PHASE_NAMES)}",
+    )
+    run_phase_parser.add_argument(
+        "--message-types",
+        default=",".join(DEFAULT_MESSAGE_TYPES),
+        metavar="TYPES",
+        help=(
+            "Comma-separated message types. Only relevant when running the 'chunks' phase. "
+            f"Default: {','.join(DEFAULT_MESSAGE_TYPES)}."
+        ),
+    )
+    run_phase_parser.add_argument(
+        "--legacy-models",
+        action="store_true",
+        dest="legacy_models",
+        default=False,
+        help="Use legacy GLiNER + GLiREL + spaCy stack instead of GLiNER2 (only affects ner/relations phases)",
+    )
 
     # ── cache subcommand ─────────────────────────────────────────
     cache_parser = subparsers.add_parser("cache", help="Cache management commands")
@@ -251,6 +349,8 @@ def main(argv: list[str] | None = None) -> None:
             _cmd_build_status(args)
         else:
             _cmd_build(args)
+    elif args.command == "run-phase":
+        _cmd_run_phase(args)
     elif args.command == "cache":
         _cmd_cache(args)
     else:

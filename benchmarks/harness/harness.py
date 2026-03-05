@@ -16,6 +16,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from benchmarks.harness.common import (
     RESULTS_DIR,
@@ -69,7 +70,7 @@ def _handle_existing_db(db_path: Path, force: bool = False) -> None:
     db_path.unlink()
 
 
-def run_treatment(treatment: Treatment, results_dir: Path | None = None, force: bool = False) -> dict:
+def run_treatment(treatment: Treatment, results_dir: Path | None = None, force: bool = False) -> dict[str, Any]:
     """Execute a single benchmark treatment and write results.
 
     Args:

@@ -9,7 +9,7 @@ class TestPrepTaskABC:
     def test_cannot_instantiate_directly(self):
         """PrepTask is abstract — instantiating it directly must raise TypeError."""
         with pytest.raises(TypeError):
-            PrepTask()
+            PrepTask()  # type: ignore[abstract]
 
     def test_concrete_subclass_works(self):
         """A properly implemented subclass can be instantiated."""
@@ -45,7 +45,7 @@ class TestPrepTaskABC:
             # Missing label, outputs, fetch
 
         with pytest.raises(TypeError):
-            IncompletePrepTask()
+            IncompletePrepTask()  # type: ignore[abstract]
 
     def test_status_ready_when_all_outputs_exist(self, tmp_path):
         """status() returns 'READY' when all output files exist."""
@@ -209,4 +209,4 @@ class TestPrepTaskABC:
                 pass
 
         t = NoopPrepTask()
-        assert t.transform() is None
+        assert t.transform() is None  # type: ignore[func-returns-value]

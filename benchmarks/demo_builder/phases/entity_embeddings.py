@@ -1,8 +1,6 @@
-"""Phase 4: Entity Embeddings.
+"""Phase 6: Entity Embeddings.
 
 Incremental: only embeds entity names not yet present in entity_vec_map.
-After embedding new names, reloads ALL entity vectors from the DB into ctx
-so downstream phases (UMAP, entity_resolution) have the full set.
 """
 
 from __future__ import annotations
@@ -39,7 +37,7 @@ class PhaseEntityEmbeddings(Phase):
     def is_stale(self, conn: sqlite3.Connection) -> bool:
         """Return True if any entity names lack a vector in entity_vec_map."""
         try:
-            new_names = conn.execute("""
+            new_names: int = conn.execute("""
                 SELECT count(*) FROM (
                     SELECT DISTINCT name FROM entities
                     EXCEPT
@@ -51,12 +49,8 @@ class PhaseEntityEmbeddings(Phase):
             return True
 
     def restore_ctx(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
-        """Load all entity vectors from the DB into ctx for UMAP/entity_resolution."""
         try:
-            rows = conn.execute("SELECT id, vector FROM entities_vec_nodes ORDER BY id").fetchall()
-            ctx.num_unique_entities = len(rows)
-            if rows:
-                ctx.entity_vectors = np.stack([np.frombuffer(bytes(r[1]), dtype=np.float32) for r in rows])
+            ctx.num_unique_entities = conn.execute("SELECT count(*) FROM entity_vec_map").fetchone()[0]
         except sqlite3.OperationalError:
             pass
 
@@ -113,10 +107,5 @@ class PhaseEntityEmbeddings(Phase):
                 )
             log.info("  Inserted %d new entity embeddings", len(new_names_list))
 
-        # ── Reload ALL entity vectors (old + new) into ctx ───────────
-        # UMAP and entity_resolution need the full set, not just incremental.
-        all_rows = conn.execute("SELECT id, vector FROM entities_vec_nodes ORDER BY id").fetchall()
-        ctx.num_unique_entities = len(all_rows)
-        if all_rows:
-            ctx.entity_vectors = np.stack([np.frombuffer(bytes(r[1]), dtype=np.float32) for r in all_rows])
+        ctx.num_unique_entities = conn.execute("SELECT count(*) FROM entity_vec_map").fetchone()[0]
         log.info("  Total entity embeddings: %d", ctx.num_unique_entities)

@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from typing import Any
 
 from benchmarks.harness.common import KG_DIR
 from benchmarks.harness.treatments.base import Treatment
@@ -60,7 +61,7 @@ def _data_source_slug(data_source: str) -> str:
     return data_source.replace(":", "-")
 
 
-def _load_ner_dataset(dataset_name: str) -> tuple[list[dict], list[dict]]:
+def _load_ner_dataset(dataset_name: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Load a prepped NER benchmark dataset.
 
     Returns:
@@ -97,7 +98,7 @@ class KGNerExtractionTreatment(Treatment):
     def __init__(self, model_slug: str, data_source: str):
         self._model_slug = model_slug
         self._data_source = data_source
-        self._adapter = None
+        self._adapter: NerModelAdapter | None = None
 
     @property
     def requires_muninn(self) -> bool:
@@ -164,7 +165,7 @@ class KGNerExtractionTreatment(Treatment):
         else:
             return self._run_ner_dataset(conn, source_id)
 
-    def _run_gutenberg(self, conn, book_id: int) -> dict:
+    def _run_gutenberg(self, conn, book_id: int) -> dict[str, Any]:
         """Run NER extraction on Gutenberg book chunks (no gold labels)."""
         import sqlite3 as _sqlite3
 
@@ -183,6 +184,7 @@ class KGNerExtractionTreatment(Treatment):
 
         for chunk_id, text in chunks:
             t0 = time.perf_counter()
+            assert self._adapter is not None
             mentions = self._adapter.extract(text, labels)
             elapsed_ms = (time.perf_counter() - t0) * 1000
             chunk_times.append(elapsed_ms)
@@ -205,7 +207,7 @@ class KGNerExtractionTreatment(Treatment):
             "n_entities": total_entities,
         }
 
-    def _run_ner_dataset(self, conn, dataset_name: str) -> dict:
+    def _run_ner_dataset(self, conn, dataset_name: str) -> dict[str, Any]:
         """Run NER extraction on a benchmark dataset with gold labels and compute F1."""
         texts, gold_entities = _load_ner_dataset(dataset_name)
 
@@ -241,6 +243,7 @@ class KGNerExtractionTreatment(Treatment):
             text = text_entry["text"]
 
             t0 = time.perf_counter()
+            assert self._adapter is not None
             mentions = self._adapter.extract(text, labels)
             elapsed_ms = (time.perf_counter() - t0) * 1000
             chunk_times.append(elapsed_ms)

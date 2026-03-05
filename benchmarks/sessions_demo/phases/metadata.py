@@ -45,16 +45,51 @@ class PhaseSessionMetadata(Phase):
         conn.execute("DROP TABLE IF EXISTS meta")
         conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
 
+        # Read num_chunks directly from the DB rather than ctx.num_chunks.
+        # ctx.num_chunks tracks newly-created chunks per run (delta), not the
+        # total. build.py applies a post-run fixup, but run_single_phase()
+        # can call metadata in isolation — reading from DB is always correct.
+        try:
+            num_chunks_db = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
+        except Exception:
+            num_chunks_db = ctx.num_chunks
+
+        # Detect which NER/RE backend was actually used from the source column.
+        # entities.source is "gliner2" (default) or "gliner" (legacy).
+        # relations.source is "gliner2" (default) or "glirel" (legacy).
+        try:
+            ner_sources = {r[0] for r in conn.execute("SELECT DISTINCT source FROM entities").fetchall()}
+        except Exception:
+            ner_sources = set()
+        try:
+            re_sources = {r[0] for r in conn.execute("SELECT DISTINCT source FROM relations").fetchall()}
+        except Exception:
+            re_sources = set()
+
+        if "gliner2" in ner_sources:
+            ner_model_name = "fastino/gliner2-base-v1"
+        else:
+            ner_model_name = "urchade/gliner_medium-v2.1"
+
+        if "gliner2" in re_sources:
+            re_model_name = "fastino/gliner2-base-v1"
+        elif "glirel" in re_sources:
+            re_model_name = "jackboyla/glirel-large-v0"
+        else:
+            re_model_name = ner_model_name  # fallback: same as NER
+
+        strategies = "+".join(sorted(ner_sources | re_sources)) or "unknown"
+
         meta_rows = [
             ("db_id", SESSION_DB_ID),
             ("source", "claude_code_sessions"),
             # embedding_model and embedding_dim are read by write_manifest_json()
             ("embedding_model", Path(GGUF_MODEL_PATH).name),
             ("embedding_dim", str(GGUF_EMBEDDING_DIM)),
-            ("ner_model", "urchade/gliner_medium-v2.1"),
-            ("re_model", "jackboyla/glirel-large-v0"),
-            ("strategies", "gliner+glirel"),
-            ("num_chunks", str(ctx.num_chunks)),
+            ("ner_model", ner_model_name),
+            ("re_model", re_model_name),
+            ("strategies", strategies),
+            ("num_chunks", str(num_chunks_db)),
             ("total_entities", str(ctx.num_entity_mentions)),
             ("total_relations", str(ctx.num_relations)),
             ("num_nodes", str(ctx.num_nodes)),

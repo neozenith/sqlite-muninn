@@ -5,6 +5,7 @@ Used by the manifest and benchmark subcommands to list, filter, and execute perm
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from benchmarks.harness.common import (
     DATASETS,
@@ -272,7 +273,7 @@ def filter_permutations(
     return perms
 
 
-def permutation_status(results_dir: Path | None = None) -> list[dict]:
+def permutation_status(results_dir: Path | None = None) -> list[dict[str, Any]]:
     """Check which permutations have db.sqlite (done vs missing).
 
     Returns list of dicts with keys: permutation_id, category, label, done, sort_key.

@@ -17,6 +17,7 @@ import logging
 import re
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from datasets import load_dataset as hf_load_dataset
@@ -35,7 +36,7 @@ log = logging.getLogger(__name__)
 class VectorPrepTask(PrepTask):
     """PrepTask for generating doc + query .npy embedding caches."""
 
-    def __init__(self, model_label: str, model_info: dict, dataset_key: str):
+    def __init__(self, model_label: str, model_info: dict[str, Any], dataset_key: str):
         self._model_label = model_label
         self._model_info = model_info
         self._dataset_key = dataset_key

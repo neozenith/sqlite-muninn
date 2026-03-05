@@ -25,7 +25,7 @@ class PhaseMetadata(Phase):
 
     @property
     def name(self) -> str:
-        return "metadata+validation"
+        return "metadata"
 
     def run(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         # ── Write meta table ──────────────────────────────────────────

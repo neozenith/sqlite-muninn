@@ -1,11 +1,10 @@
-# Muninn WASM Demo — Build, serve, and test targets
+# Muninn WASM  — Build
 # All commands run from wasm/ directory (invoked via make -C wasm)
 
 SQLITE_VERSION ?= 3510000
 SQLITE_YEAR    ?= 2025
-PORT           ?= 8300
 
-.PHONY: help build build-lite build-full dev dist test e2e-videos format clean
+.PHONY: help build build-lite build-full dist
 
 help:                                              ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -18,8 +17,7 @@ help:                                              ## Show this help
 SQLITE_SRC   = build/sqlite3.c
 WASM_JS      = build/muninn_sqlite3.js
 WASM_BIN     = build/muninn_sqlite3.wasm
-DEMO_DB	  	 = assets/3300.db
-DEMO_DB_BUILD = assets/3300.db
+
 
 # llama.cpp WASM static libraries (build-full only)
 LLAMA_DIR        = ../vendor/llama.cpp
@@ -69,7 +67,7 @@ $(LLAMA_WASM_LIBS): | $(LLAMA_DIR)/CMakeLists.txt  ## Build llama.cpp as WASM st
 	emmake $(MAKE) -C $(LLAMA_WASM_BUILD) llama ggml -j$$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 # ── build-lite: no llama.cpp, no embed_gguf ──
-build-lite: $(SQLITE_SRC)                          ## Build lite WASM (no llama.cpp/embeddings)
+build-wasm-lite: $(SQLITE_SRC)                          ## Build lite WASM (no llama.cpp/embeddings)
 	@command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found — install Emscripten SDK"; exit 1; }
 	emcc $(EMCC_FLAGS) \
 		-DMUNINN_NO_LLAMA \
@@ -82,7 +80,7 @@ build-lite: $(SQLITE_SRC)                          ## Build lite WASM (no llama.
 	@ls -lh $(WASM_JS) $(WASM_BIN)
 
 # ── build-full: includes llama.cpp + embed_gguf ──
-build-full: $(SQLITE_SRC) $(LLAMA_WASM_LIBS)       ## Build full WASM (with llama.cpp/embeddings)
+build-wasm-full: $(SQLITE_SRC) $(LLAMA_WASM_LIBS)       ## Build full WASM (with llama.cpp/embeddings)
 	@command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found — install Emscripten SDK"; exit 1; }
 	emcc $(EMCC_FLAGS) \
 		$(LLAMA_INCLUDE_WASM) \
@@ -95,23 +93,10 @@ build-full: $(SQLITE_SRC) $(LLAMA_WASM_LIBS)       ## Build full WASM (with llam
 	@echo "WASM full build complete:"
 	@ls -lh $(WASM_JS) $(WASM_BIN)
 
-build: build-full                                  ## Build WASM module (full by default)
+build: build-wasm-full                                  ## Build WASM module (full by default)
 
 $(WASM_JS): build
 $(WASM_BIN): build
-######################################################################
-# DEV
-######################################################################
-	
-
-$(DEMO_DB): ## Download demo DB if missing
-	@mkdir -p $(dir $@)
-	make -C .. demo-db
-	@echo "Demo DB ready at $@"
-
-dev: build $(DEMO_DB)                                         ## Start dev server on port 8300
-	@echo "Starting dev server at http://localhost:$(PORT)"
-	python3 -m http.server $(PORT) --directory .
 
 ######################################################################
 # DIST
@@ -124,46 +109,9 @@ dist: $(WASM_JS) $(WASM_BIN)                                   ## Copy WASM arti
 	@echo "WASM artifacts copied to dist/"
 	@ls -lh ../dist/nodejs/platforms/wasm/muninn_sqlite3.*
 
-######################################################################
-# TEST
-######################################################################
 
-test: build                                        ## Run Playwright E2E tests
-	npm install
-	npx playwright install chromium
-	npx playwright test
-
-######################################################################
-# VIDEO CONVERSION
-######################################################################
-
-E2E_DIR = test-results
-
-%.mp4: %.webm                                      ## Convert .webm to .mp4 (2x speed, 10fps)
-	ffmpeg -i $< -vf "setpts=0.5*PTS,fps=10" -s 1280x720 -c:v libx264 -crf 20 -an -y $@
-
-%.gif: %.webm                                      ## Convert .webm to .gif (2x speed, 10fps)
-	ffmpeg -i $< -vf "setpts=0.5*PTS,fps=10,scale=1280:-1:flags=lanczos,palettegen" -y $@.palette.png
-	ffmpeg -i $< -i $@.palette.png -filter_complex "setpts=0.5*PTS,fps=10,scale=1280:-1:flags=lanczos[x];[x][1:v]paletteuse" -y $@
-	rm -f $@.palette.png
-
-e2e-videos: test                                   ## Convert all E2E videos
-	$(MAKE) $(patsubst %.webm,%.mp4,$(wildcard $(E2E_DIR)/**/*.webm))
-	$(MAKE) $(patsubst %.webm,%.gif,$(wildcard $(E2E_DIR)/**/*.webm))
-
-ci: format test e2e-videos                               ## Run tests + convert E2E videos
-######################################################################
-# FORMAT
-######################################################################
-
-format:                                            ## Format JS/HTML/CSS with prettier
-	npx prettier --write '*.{html,js,css}'
-
-######################################################################
-# CLEAN
-######################################################################
 
 clean:                                             ## Remove build artifacts
-	rm -rf build/ test-results/ screenshots/ node_modules/
+	rm -rf build/
 	rm -rf $(LLAMA_WASM_BUILD)
 	rm -f a.out.*

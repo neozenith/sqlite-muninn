@@ -58,6 +58,40 @@ endif
 
 LDFLAGS_TEST = $(SQLITE_LIBS) $(LDFLAGS)
 
+# ── WASM build configuration ──────────────────────────────────────────
+SQLITE_VERSION  ?= 3510000
+SQLITE_YEAR     ?= 2025
+WASM_BUILD       = build/wasm
+WASM_SQLITE_SRC  = $(WASM_BUILD)/sqlite3.c
+WASM_JS          = $(WASM_BUILD)/muninn_sqlite3.js
+WASM_BIN         = $(WASM_BUILD)/muninn_sqlite3.wasm
+
+LLAMA_WASM_BUILD = $(LLAMA_DIR)/build-wasm
+LLAMA_WASM_LIBS  = $(LLAMA_WASM_BUILD)/src/libllama.a \
+                   $(LLAMA_WASM_BUILD)/ggml/src/libggml.a \
+                   $(LLAMA_WASM_BUILD)/ggml/src/libggml-base.a \
+                   $(LLAMA_WASM_BUILD)/ggml/src/libggml-cpu.a
+
+WASM_SRC_LITE        := $(shell $(_Q) MUNINN_SRC_WASM_LITE_ROOT)
+WASM_SRC_EXTRA       := $(shell $(_Q) SOURCES_WASM_EXTRA_ROOT)
+LLAMA_CMAKE_FLAGS_WASM := $(shell $(_Q) LLAMA_CMAKE_FLAGS_WASM)
+
+EMCC_FLAGS = -O2 -msimd128 \
+	-s WASM=1 \
+	-s EXPORTED_FUNCTIONS='["_sqlite3_open","_sqlite3_close","_sqlite3_exec","_sqlite3_errmsg","_sqlite3_prepare_v2","_sqlite3_step","_sqlite3_finalize","_sqlite3_column_text","_sqlite3_column_int","_sqlite3_column_double","_sqlite3_column_blob","_sqlite3_column_bytes","_sqlite3_column_count","_sqlite3_column_name","_sqlite3_bind_text","_sqlite3_bind_int","_sqlite3_bind_double","_sqlite3_bind_blob","_sqlite3_bind_null","_sqlite3_reset","_sqlite3_free","_malloc","_free","_sqlite3_wasm_extra_init"]' \
+	-s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","UTF8ToString","stringToUTF8","getValue","setValue","FS","HEAPF32"]' \
+	-s FORCE_FILESYSTEM=1 \
+	-s ALLOW_MEMORY_GROWTH=1 \
+	-s INITIAL_MEMORY=134217728 \
+	-s MODULARIZE=1 \
+	-s EXPORT_NAME="createMuninnSQLite" \
+	-DSQLITE_ENABLE_FTS5 \
+	-DSQLITE_ENABLE_JSON1 \
+	-DSQLITE_ENABLE_RTREE \
+	-DSQLITE_THREADSAFE=0 \
+	-DSQLITE_OMIT_LOAD_EXTENSION \
+	-I$(WASM_BUILD) -Isrc
+
 # Source files — from generate_build.py
 SRC          := $(shell $(_Q) SRC)
 HEADERS      := $(shell $(_Q) HEADERS)
@@ -67,11 +101,13 @@ TEST_LINK_SRC := $(shell $(_Q) TEST_LINK_SRC)
 .PHONY: all debug build test test-python test-js test-install test-all clean help \
         amalgamation install uninstall version version-stamp generate-windows \
         dist dist-extension dist-python dist-npm dist-wasm changelog release \
-        docs-serve docs-build docs-wasm docs-clean \
+        docs-serve docs-build docs-clean \
         format format-c format-python format-js \
         lint lint-c lint-python lint-js \
         typecheck typecheck-python typecheck-js \
-        ci ci-all llama-clean llamacpp demo-db
+        ci ci-all llama-clean llamacpp \
+        build-wasm build-wasm-lite build-wasm-full \
+		llama-status llama-update
 
 help:                                          ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -83,6 +119,26 @@ version:                                       ## Print version
 ######################################################################
 # LLAMA.CPP PRE-BUILD
 ######################################################################
+llama-status:
+	# See what tag/commit your submodule currently points to                                                                                                                                                      
+	git submodule status vendor/llama.cpp                                                                                                                                                                         
+
+	# Fetch upstream without changing anything
+	git -C vendor/llama.cpp fetch --tags
+
+	# Compare current HEAD to latest upstream
+	git -C vendor/llama.cpp log HEAD..origin/master --graph --format="%C(yellow)%h%C(reset) %C(cyan)%ad%C(reset) %C(auto)%d%C(reset) %s" --date=short
+
+llama-update: llama-status
+	# Update to latest commit on the tracked branch
+	git submodule update --remote vendor/llama.cpp
+	# OR
+	# git -C vendor/llama.cpp checkout b8200   # or a full SHA, or a tag like v0.0.3
+
+	# Then commit the pointer change in your repo
+	git add vendor/llama.cpp
+	git commit -m "chore: update llama.cpp submodule to latest"
+
 llamacpp: $(LLAMA_LIBS_CORE)
 $(LLAMA_LIBS_CORE): | $(LLAMA_DIR)/CMakeLists.txt
 	@echo "######### Building llama.cpp static libraries (this may take a minute)..."
@@ -93,6 +149,7 @@ $(LLAMA_LIBS_CORE): | $(LLAMA_DIR)/CMakeLists.txt
 
 llama-clean:                                   ## Clean llama.cpp build artifacts
 	rm -rf $(LLAMA_BUILD)
+	rm -rf $(LLAMA_WASM_BUILD)
 
 ######################################################################
 # BUILD
@@ -109,6 +166,49 @@ build/muninn$(EXT): $(SRC) $(LLAMA_LIBS)
 debug: CFLAGS_BASE += -g -fsanitize=address,undefined -DDEBUG -O0
 debug: LDFLAGS += -fsanitize=address,undefined
 debug: build/muninn$(EXT)                      ## Build with ASan + UBSan
+
+######################################################################
+# WASM BUILD
+######################################################################
+
+$(WASM_SQLITE_SRC):                                ## Download SQLite amalgamation for WASM
+	@mkdir -p $(WASM_BUILD)
+	curl -sL "https://www.sqlite.org/$(SQLITE_YEAR)/sqlite-amalgamation-$(SQLITE_VERSION).zip" -o /tmp/sqlite_wasm.zip
+	unzip -o /tmp/sqlite_wasm.zip -d /tmp/sqlite_wasm_amal
+	cp /tmp/sqlite_wasm_amal/sqlite-amalgamation-*/sqlite3.c $(WASM_BUILD)/sqlite3.c
+	cp /tmp/sqlite_wasm_amal/sqlite-amalgamation-*/sqlite3.h $(WASM_BUILD)/sqlite3.h
+	cp /tmp/sqlite_wasm_amal/sqlite-amalgamation-*/sqlite3ext.h $(WASM_BUILD)/sqlite3ext.h
+	rm -rf /tmp/sqlite_wasm.zip /tmp/sqlite_wasm_amal
+
+$(LLAMA_WASM_LIBS): | $(LLAMA_DIR)/CMakeLists.txt ## Build llama.cpp as WASM static libs
+	@command -v emcmake >/dev/null 2>&1 || { echo "error: emcmake not found — install Emscripten SDK"; exit 1; }
+	emcmake cmake -B $(LLAMA_WASM_BUILD) -S $(LLAMA_DIR) $(LLAMA_CMAKE_FLAGS_WASM)
+	emmake $(MAKE) -C $(LLAMA_WASM_BUILD) llama ggml -j$$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+
+build-wasm: build-wasm-full                        ## Build WASM module (lite by default)
+
+build-wasm-lite: $(WASM_SQLITE_SRC)                ## Build lite WASM (no llama.cpp/embeddings)
+	@command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found — install Emscripten SDK"; exit 1; }
+	emcc $(EMCC_FLAGS) \
+		-DMUNINN_NO_LLAMA \
+		$(WASM_SQLITE_SRC) \
+		$(WASM_SRC_LITE) \
+		$(WASM_SRC_EXTRA) \
+		-lm \
+		-o $(WASM_JS)
+	@echo "WASM lite build complete:"; ls -lh $(WASM_JS) $(WASM_BIN)
+
+build-wasm-full: $(WASM_SQLITE_SRC) $(LLAMA_WASM_LIBS) ## Build full WASM (with llama.cpp/embeddings)
+	@command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found — install Emscripten SDK"; exit 1; }
+	emcc $(EMCC_FLAGS) \
+		$(LLAMA_INCLUDE) \
+		$(WASM_SQLITE_SRC) \
+		$(SRC) \
+		$(WASM_SRC_EXTRA) \
+		$(LLAMA_WASM_LIBS) \
+		-lm \
+		-o $(WASM_JS)
+	@echo "WASM full build complete:"; ls -lh $(WASM_JS) $(WASM_BIN)
 
 ######################################################################
 # TEST
@@ -137,17 +237,6 @@ test-js:                                       ## Run TypeScript tests + coverag
 	npm --prefix npm test
 
 test-all: test test-python test-js docs-build  ## Run all tests
-
-######################################################################
-# DEMO DATABASE
-######################################################################
-
-demo-db: build/muninn$(EXT)                    ## Build the KG demo database for wasm/viz
-	uv run -m benchmarks.demo_builder build \
-		--output-folder wasm/assets \
-		--book-id 3300 \
-		--embedding-model MiniLM \
-		--force
 
 ######################################################################
 # CODE QUALITY
@@ -230,8 +319,12 @@ dist-nodejs: version-stamp                       ## Pack npm tarball into dist/n
 	@mkdir -p dist/nodejs/
 	npm pack --pack-destination dist/nodejs npm/
 
-dist-wasm: amalgamation                       ## Build WASM module into dist/ (requires emcc)
-	$(MAKE) -C wasm dist
+dist-wasm: build-wasm-full                         ## Build WASM module into dist/ (requires emcc)
+	@mkdir -p dist/nodejs/platforms/wasm/
+	cp $(WASM_JS) dist/nodejs/platforms/wasm/
+	cp $(WASM_BIN) dist/nodejs/platforms/wasm/
+	@echo "WASM artifacts copied to dist/nodejs/platforms/wasm/"
+	@ls -lh dist/nodejs/platforms/wasm/muninn_sqlite3.*
 
 changelog: version-stamp                                     ## Generate CHANGELOG.md from git history
 	.venv/bin/git-cliff -o CHANGELOG.md
@@ -269,22 +362,6 @@ docs-build: version-stamp                      ## Build documentation site
 	make -C docs/diagrams
 	make -C benchmarks analyse-docs
 	uv run mkdocs build --strict
-	$(MAKE) docs-wasm
-
-docs-wasm:                                     ## Copy WASM demo into built docs site
-	@if [ -f wasm/build/muninn_sqlite3.js ] && [ -f wasm/assets/3300.db ]; then \
-		echo "Copying WASM demo to site/examples/wasm/"; \
-		mkdir -p site/examples/wasm/build site/examples/wasm/assets; \
-		cp wasm/index.html site/examples/wasm/; \
-		cp wasm/script.js site/examples/wasm/; \
-		cp wasm/styles.css site/examples/wasm/; \
-		cp wasm/build/muninn_sqlite3.js site/examples/wasm/build/; \
-		cp wasm/build/muninn_sqlite3.wasm site/examples/wasm/build/; \
-		cp wasm/assets/3300.db site/examples/wasm/assets/; \
-		echo "WASM demo ready at site/examples/wasm/"; \
-	else \
-		echo "WASM demo artifacts not found — skipping (run 'make -C wasm build' first)"; \
-	fi
 
 docs-clean:                                    ## Clean documentation build
 	rm -rf site/
@@ -295,21 +372,33 @@ docs-clean:                                    ## Clean documentation build
 
 ci: lint typecheck test test-python test-js docs-build    ## Full CI pipeline
 
-ci-all: ci
-#	# Excluding wasm and viz examples until restoring the kg-demo database build.
-# 	make -C viz ci
-# 	make -C wasm ci
+ci-benchmarks-harness:                         ## CI for benchmarks/harness
+	$(MAKE) -C benchmarks/harness ci
+
+ci-benchmarks-demo-builder:                    ## CI for benchmarks/demo_builder
+	$(MAKE) -C benchmarks/demo_builder ci
+
+ci-benchmarks-sessions-demo:                   ## CI for benchmarks/sessions_demo
+	$(MAKE) -C benchmarks/sessions_demo ci
+
+# ci-viz:                                      ## CI for viz (disabled until kg-demo db restored)
+# 	$(MAKE) -C viz ci
+
+ci-all: ci ci-benchmarks-harness ci-benchmarks-demo-builder ci-benchmarks-sessions-demo  ## Full CI including subprojects
 
 ######################################################################
 # CLEAN
 ######################################################################
 
-clean: docs-clean llama-clean                  ## Clean build artifacts
+viz-clean:
+	$(MAKE) -C viz clean
+
+clean: docs-clean llama-clean viz-clean          ## Clean build artifacts
 	rm -rf dist/
 	rm -rf build/
 	rm -rf *.egg-info
 	rm -rf .coverage
 	rm -f *.gcda *.gcno src/*.gcda src/*.gcno test/*.gcda test/*.gcno
 	rm -rf .venv
-	make -C wasm clean
-	make -C viz clean
+	rm -rf a.out.*
+	

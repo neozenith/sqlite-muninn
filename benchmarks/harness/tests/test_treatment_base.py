@@ -11,7 +11,7 @@ class TestTreatmentABC:
     def test_cannot_instantiate_directly(self):
         """Treatment is abstract — instantiating it directly must raise TypeError."""
         with pytest.raises(TypeError):
-            Treatment()
+            Treatment()  # type: ignore[abstract]
 
     def test_concrete_subclass_works(self):
         """A properly implemented subclass can be instantiated."""
@@ -55,7 +55,7 @@ class TestTreatmentABC:
             # Missing permutation_id, label, setup, run, teardown
 
         with pytest.raises(TypeError):
-            IncompleteTreatment()
+            IncompleteTreatment()  # type: ignore[abstract]
 
     def test_params_dict_overridable(self):
         """Subclasses can override params_dict to include custom parameters."""

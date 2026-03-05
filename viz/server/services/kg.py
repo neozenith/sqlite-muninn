@@ -1,23 +1,13 @@
 """Knowledge Graph pipeline stage queries and GraphRAG execution."""
 
 import logging
+import sqlite3
 from typing import Any
 
 import numpy as np
+from sentence_transformers import SentenceTransformer
 
 from server.services.db import sanitize_fts_query
-
-try:
-    import pysqlite3 as sqlite3  # type: ignore[import-not-found]
-except ImportError:
-    import sqlite3
-
-try:
-    from sentence_transformers import SentenceTransformer
-
-    _HAS_SENTENCE_TRANSFORMERS = True
-except ImportError:
-    _HAS_SENTENCE_TRANSFORMERS = False
 
 log = logging.getLogger(__name__)
 
@@ -70,8 +60,6 @@ def _get_embedding_model() -> tuple[Any, str]:
     query text before encoding for asymmetric models like NomicEmbed.
     """
     global _embedding_model_cache, _active_config_key
-    if not _HAS_SENTENCE_TRANSFORMERS:
-        raise RuntimeError("sentence-transformers not installed. pip install sentence-transformers")
 
     key = _active_config_key
     if key not in _embedding_model_cache:

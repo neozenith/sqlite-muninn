@@ -172,7 +172,7 @@ class GraphTraversalTreatment(Treatment):
         assert self._start_nodes is not None
         assert self._end_nodes is not None
         g = Graph(":memory:")
-        nodes_batch = [(str(i), {}, "Node") for i in range(self._n_nodes)]
+        nodes_batch: list[tuple[str, dict[str, Any], str]] = [(str(i), {}, "Node") for i in range(self._n_nodes)]
         edges_batch = [(str(src), str(dst), {"weight": w}, "EDGE") for src, dst, w in self._edges if src < dst]
         g.upsert_nodes_batch(nodes_batch)
         g.upsert_edges_batch(edges_batch)

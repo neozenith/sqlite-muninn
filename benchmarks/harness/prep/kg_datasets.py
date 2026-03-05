@@ -14,8 +14,10 @@ BIO-tagged text files directly from the CrossNER GitHub repository.
 
 import json
 import logging
+import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 from benchmarks.harness.common import KG_DIR
 from benchmarks.harness.prep.base import PrepTask
@@ -70,8 +72,8 @@ class CrossNERPrepTask(PrepTask):
         raw_dir = KG_DIR / "ner" / f"crossner_{self._domain}" / "raw"
         out_dir = KG_DIR / "ner" / f"crossner_{self._domain}"
 
-        all_texts: list[dict] = []
-        all_entities: list[dict] = []
+        all_texts: list[dict[str, Any]] = []
+        all_entities: list[dict[str, Any]] = []
         sent_id = 0
 
         for split in self.SPLITS:
@@ -152,7 +154,7 @@ class HFDatasetPrepTask(PrepTask):
             return f"HF {name} ({self._hf_config})"
         return f"HF {name}"
 
-    def outputs(self) -> list:
+    def outputs(self) -> list[Path]:
         # HF cache is opaque — we probe it via status() instead
         return []
 
@@ -189,7 +191,7 @@ class FebrlPrepTask(PrepTask):
     def label(self) -> str:
         return f"Febrl {self._name}"
 
-    def outputs(self) -> list:
+    def outputs(self) -> list[Path]:
         out_dir = KG_DIR / "er" / self._name
         if self._name == "febrl4":
             return [out_dir / "febrl4_a.parquet", out_dir / "febrl4_b.parquet"]

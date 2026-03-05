@@ -7,10 +7,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
-try:
-    import pysqlite3 as sqlite3  # type: ignore[import-not-found]
-except ImportError:
-    import sqlite3
+import sqlite3
 
 from server import config as _config
 

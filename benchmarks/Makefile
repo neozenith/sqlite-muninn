@@ -28,7 +28,8 @@ EXTENSION = $(PROJECT_ROOT)/build/muninn$(EXT)
         manifest manifest-missing manifest-commands \
         benchmark-vss benchmark-graph benchmark-adjacency \
         benchmark-kg benchmark-er benchmark-graphrag benchmark-node2vec benchmark-all \
-        analyse analyse-docs clean clean-all extension
+        analyse analyse-docs clean clean-all extension \
+        demo demo-manifest demo-missing demo-parallel demo-clean-staging demo-clean
 
 help:                    ## Show help
 	@$(BENCH) --help
@@ -105,6 +106,36 @@ analyse:                 ## Generate charts + tables from results
 
 analyse-docs:            ## Generate charts + render doc templates
 	$(BENCH) analyse --render-docs
+
+# ── Demo DB builder ───────────────────────────────────────────────
+
+DEMO = $(PYTHON) -m benchmarks.demo_builder
+DEMO_OUTPUT ?= viz/frontend/public/demos
+DEMO_JOBS   ?= 8
+
+demo: demo-manifest      ## Alias: show demo DB build status
+
+demo-manifest:           ## Show demo DB permutation status
+	$(DEMO) manifest --output-folder $(DEMO_OUTPUT)
+
+demo-missing:            ## List missing demo DB permutations
+	$(DEMO) manifest --output-folder $(DEMO_OUTPUT) --missing
+
+demo-parallel:           ## Build all missing demo DBs in parallel (-j$(DEMO_JOBS))
+	@echo "Generating Makefile for missing permutations..."
+	$(DEMO) manifest --output-folder $(DEMO_OUTPUT) --missing --makefile > /tmp/_demo_build.mk
+	$(MAKE) -f /tmp/_demo_build.mk all -j$(DEMO_JOBS)
+	@rm -f /tmp/_demo_build.mk
+
+demo-clean-staging:      ## Remove stale _build/ staging dirs (keeps built .db files)
+	@echo "Cleaning staging dirs: $(DEMO_OUTPUT)/_build/"
+	rm -rf $(PROJECT_ROOT)/$(DEMO_OUTPUT)/_build/
+
+demo-clean:              ## Remove all demo DBs + staging (full reset)
+	@echo "Removing all demo DBs and staging from $(DEMO_OUTPUT)/"
+	rm -rf $(PROJECT_ROOT)/$(DEMO_OUTPUT)/_build/
+	rm -f  $(PROJECT_ROOT)/$(DEMO_OUTPUT)/*.db
+	rm -f  $(PROJECT_ROOT)/$(DEMO_OUTPUT)/*.joblib
 
 # ── Cleanup ───────────────────────────────────────────────────────
 clean:                   ## Remove charts (keeps results)

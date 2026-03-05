@@ -60,6 +60,7 @@ benchmark = [
     "textacy",
     "recordlinkage",
     "llama-cpp-python>=0.3.16",
+    "gliner2>=1.2.4",
 ]
 docs = [
     "mkdocs>=1.6.0",
@@ -71,6 +72,7 @@ docs = [
     "sqlite-rembed"
 ]
 dev = [
+    "diagrams>=0.25.1",
     "gcovr>=8.6",
     "git-cliff>=2.12.0",
     "mypy>=1.19.1",
@@ -99,3 +101,11 @@ select = ["E", "W", "F", "I", "B", "C4", "UP"]
 [tool.mypy]
 strict = true
 python_version = "3.12"
+
+[[tool.mypy.overrides]]
+# Benchmark harness and demo_builder are scripts, not library code.
+# Relax annotation requirements while keeping real type checks.
+module = ["benchmarks.harness", "benchmarks.harness.*", "benchmarks.demo_builder", "benchmarks.demo_builder.*"]
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_incomplete_defs = false

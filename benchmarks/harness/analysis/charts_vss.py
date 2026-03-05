@@ -1,5 +1,7 @@
 """VSS chart definitions — 17 charts matching legacy parity."""
 
+from typing import Any
+
 from benchmarks.harness.analysis.aggregator import ChartSpec
 
 # Common field sets for VSS charts
@@ -9,7 +11,7 @@ _VSS_REPEAT = ["engine", "search_method", "model_name", "dataset", "dim", "n", "
 
 # ── Tipping Point charts (6): search latency vs dataset size, per model × dataset ──
 
-_TP_COMMON = {
+_TP_COMMON: dict[str, Any] = {
     "sources": _VSS_SOURCES,
     "x_field": "n",
     "y_field": "search_latency_ms",
@@ -24,7 +26,7 @@ _TP_COMMON = {
 
 # ── Cross-Model Comparison charts (2): all models on one chart, per dataset ──
 
-_XMODEL_COMMON = {
+_XMODEL_COMMON: dict[str, Any] = {
     "sources": _VSS_SOURCES,
     "x_field": "n",
     "y_field": "search_latency_ms",
@@ -39,7 +41,7 @@ _XMODEL_COMMON = {
 
 # ── Dataset Comparison charts (3): overlay datasets, per model ──
 
-_DS_COMMON = {
+_DS_COMMON: dict[str, Any] = {
     "sources": _VSS_SOURCES,
     "x_field": "n",
     "y_field": "search_latency_ms",
@@ -54,7 +56,7 @@ _DS_COMMON = {
 
 # ── Recall charts (2): all models, per dataset ──
 
-_RECALL_COMMON = {
+_RECALL_COMMON: dict[str, Any] = {
     "sources": _VSS_SOURCES,
     "x_field": "n",
     "y_field": "recall_at_k",
@@ -68,7 +70,7 @@ _RECALL_COMMON = {
 
 # ── Insert Throughput charts (2): all models, per dataset ──
 
-_INSERT_COMMON = {
+_INSERT_COMMON: dict[str, Any] = {
     "sources": _VSS_SOURCES,
     "x_field": "n",
     "y_field": "insert_rate_vps",
@@ -82,7 +84,7 @@ _INSERT_COMMON = {
 
 # ── Storage charts (2): all models, per dataset ──
 
-_STORAGE_COMMON = {
+_STORAGE_COMMON: dict[str, Any] = {
     "sources": _VSS_SOURCES,
     "x_field": "n",
     "y_field": "db_size_bytes",

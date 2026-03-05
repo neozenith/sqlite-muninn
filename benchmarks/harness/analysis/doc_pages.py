@@ -616,7 +616,7 @@ def doc_page_context(page_slug: str) -> dict[str, Any]:
     from benchmarks.harness.analysis.charts_kg import KG_CHARTS
     from benchmarks.harness.analysis.charts_vss import VSS_CHARTS
 
-    chart_map: dict[str, list] = {
+    chart_map: dict[str, list[Any]] = {
         "vss": VSS_CHARTS,
         "embed": EMBED_CHARTS,
         "graph": GRAPH_CHARTS,

@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import joblib
 import numpy as np
@@ -74,8 +74,8 @@ class PhaseChunksUMAP(Phase):
     def is_stale(self, conn: sqlite3.Connection) -> bool:
         """Return True if any chunk vectors lack UMAP coordinates."""
         try:
-            chunk_umap = conn.execute("SELECT count(*) FROM chunks_vec_umap").fetchone()[0]
-            chunk_vecs = conn.execute("SELECT count(*) FROM chunks_vec_nodes").fetchone()[0]
+            chunk_umap: int = conn.execute("SELECT count(*) FROM chunks_vec_umap").fetchone()[0]
+            chunk_vecs: int = conn.execute("SELECT count(*) FROM chunks_vec_nodes").fetchone()[0]
             return chunk_umap != chunk_vecs
         except sqlite3.OperationalError:
             return True
@@ -114,7 +114,7 @@ class PhaseChunksUMAP(Phase):
         conn: sqlite3.Connection,
         umap2d_path: Path,
         umap3d_path: Path,
-        all_rows: list,
+        all_rows: list[Any],
     ) -> None:
         ids = [r[0] for r in all_rows]
         vecs = np.stack([np.frombuffer(bytes(r[1]), dtype=np.float32) for r in all_rows])
@@ -153,7 +153,7 @@ class PhaseChunksUMAP(Phase):
         conn: sqlite3.Connection,
         umap2d_path: Path,
         umap3d_path: Path,
-        all_rows: list,
+        all_rows: list[Any],
     ) -> None:
         reducer_2d = joblib.load(umap2d_path)
         reducer_3d = joblib.load(umap3d_path)
@@ -200,8 +200,8 @@ class PhaseEntitiesUMAP(Phase):
     def is_stale(self, conn: sqlite3.Connection) -> bool:
         """Return True if any entity vectors lack UMAP coordinates."""
         try:
-            entity_umap = conn.execute("SELECT count(*) FROM entities_vec_umap").fetchone()[0]
-            entity_vecs = conn.execute("SELECT count(*) FROM entity_vec_map").fetchone()[0]
+            entity_umap: int = conn.execute("SELECT count(*) FROM entities_vec_umap").fetchone()[0]
+            entity_vecs: int = conn.execute("SELECT count(*) FROM entity_vec_map").fetchone()[0]
             return entity_umap != entity_vecs
         except sqlite3.OperationalError:
             return True
@@ -240,7 +240,7 @@ class PhaseEntitiesUMAP(Phase):
         conn: sqlite3.Connection,
         umap2d_path: Path,
         umap3d_path: Path,
-        all_rows: list,
+        all_rows: list[Any],
     ) -> None:
         ids = [r[0] for r in all_rows]
         vecs = np.stack([np.frombuffer(bytes(r[1]), dtype=np.float32) for r in all_rows])
@@ -279,7 +279,7 @@ class PhaseEntitiesUMAP(Phase):
         conn: sqlite3.Connection,
         umap2d_path: Path,
         umap3d_path: Path,
-        all_rows: list,
+        all_rows: list[Any],
     ) -> None:
         reducer_2d = joblib.load(umap2d_path)
         reducer_3d = joblib.load(umap3d_path)

@@ -317,7 +317,7 @@ class TestRequiresMuninn:
 
     def test_default_is_true(self):
         """Treatment.requires_muninn defaults to True."""
-        assert Treatment.requires_muninn.fget is not None  # property exists
+        assert Treatment.requires_muninn.fget is not None  # type: ignore[attr-defined]  # property exists
         # FakeTreatment overrides to False, but the base default is True
         assert RequiresMuninnTreatment().requires_muninn is True
 
