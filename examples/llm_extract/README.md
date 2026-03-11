@@ -1,82 +1,87 @@
-# LLM Extract — Structured NER & RE with muninn
+# LLM Extract — Comparing muninn GGUF vs GLiNER2
 
-Zero-dependency end-to-end example: load a GGUF chat model, extract named
-entities, extract relations, and run summarisation — all via SQL functions
-inside a single SQLite extension. No Python ML libraries needed.
+Consolidated benchmark comparing structured information extraction across
+multiple GGUF chat models (via muninn SQL functions) and GLiNER2 (205M span
+extraction model) on 5 curated documents.
 
 ## Models
 
-| Model | Params | Quantization | Size | Context | License |
-|-------|--------|-------------|------|---------|---------|
-| **Qwen3-4B** (default) | 4B | Q4_K_M | ~2.5 GB | 32K | Apache 2.0 |
-| Qwen3-8B | 8B | Q4_K_M | ~5.0 GB | 32K | Apache 2.0 |
-| Phi-4-mini | 3.8B | Q4_K_M | ~2.5 GB | 128K | MIT |
-| Llama-3.2-1B | 1B | Q4_K_M | ~0.7 GB | 128K | Llama 3.2 |
+### GGUF Chat Models (via muninn)
 
-The default model (Qwen3-4B) is auto-downloaded to `models/` on first run.
-Edit `DEFAULT_MODEL` in `example.py` to switch models.
+| Model | Params | Quant | Size | Context | License |
+|-------|--------|-------|------|---------|---------|
+| **Qwen3-4B** | 4B | Q4_K_M | ~2.5 GB | 32K | Apache 2.0 |
+| **Qwen3-8B** | 8B | Q4_K_M | ~5.0 GB | 32K | Apache 2.0 |
+| **Gemma-3-4B** | 3.8B | Q4_K_M | ~2.5 GB | 8K | Gemma |
 
-## What This Demonstrates
+### Comparison Baseline
 
-| Feature | SQL |
-|---------|-----|
-| Load GGUF chat model | `INSERT INTO temp.muninn_chat_models(name, model) SELECT 'name', muninn_chat_model('path.gguf')` |
-| List loaded models | `SELECT name, n_ctx FROM muninn_chat_models` |
-| Plain chat completion | `SELECT muninn_chat('model', 'What is 2+2?')` |
-| Named entity recognition | `SELECT muninn_extract_entities('model', text, 'person,org,location')` |
-| Relation extraction | `SELECT muninn_extract_relations('model', text, entities_json)` |
-| Text summarisation | `SELECT muninn_summarize('model', text, 64)` |
-| Bulk NER→RE pipeline | CTE chaining `muninn_extract_entities` → `muninn_extract_relations` in pure SQL |
+| Model | Params | Size | Type |
+|-------|--------|------|------|
+| **GLiNER2** | 205M | ~400 MB | Span extraction (NER + RE) |
+
+## Sections
+
+| # | Section | What It Compares |
+|---|---------|------------------|
+| 1 | **Model Loading** | Load all GGUF models + GLiNER2, measure load times |
+| 2 | **Chat Completion** | Free-form text generation via `muninn_chat()` (GGUF only) |
+| 3 | **Summarisation** | Text summarisation via `muninn_summarize()` (GGUF only) |
+| 4 | **NER Comparison** | `muninn_extract_entities()` per model vs GLiNER2 `batch_extract_entities()` |
+| 5 | **RE Comparison** | `muninn_extract_relations()` per model vs GLiNER2 `batch_extract_relations()` |
+| 6 | **Combined NER+RE** | `muninn_extract_ner_re()` (1 LLM call/doc) vs GLiNER2 (2 batch calls) |
+| 7 | **CTE Pipeline** | SQL CTE chaining NER→RE (2 LLM calls/doc) vs GLiNER2 combined |
+| 8 | **Summary Tables** | Side-by-side timing, speedup, and extraction count tables |
 
 ## Prerequisites
 
-Build the muninn extension — that's it. No `pip install` needed.
-
 ```bash
-make all
+make all            # Build muninn extension
+uv add gliner2      # Install GLiNER2 for comparison baseline
 ```
 
 ## Run
 
 ```bash
-# Run the example (model auto-downloads on first run, ~2.5 GB)
-python examples/llm_extract/example.py
+# Models auto-download on first run (~10 GB total for all 3 GGUF models)
+uv run examples/llm_extract/example.py
 ```
-
-## Sections
-
-| # | Section | What It Shows |
-|---|---------|---------------|
-| 1 | **Model Loading** | Load a GGUF chat model into the `muninn_chat_models` registry, inspect context window |
-| 2 | **Plain Chat** | Free-form chat completion without grammar constraints |
-| 3 | **Named Entity Recognition** | Extract person, organization, location, date entities with GBNF grammar-constrained JSON output |
-| 4 | **Relation Extraction** | Chain NER entities into relation extraction, producing subject→predicate→object triples |
-| 5 | **Summarisation** | Generate concise labels for entity communities (the GraphRAG community naming use case) |
-| 6 | **Bulk SQL Pipeline** | NER→RE chained entirely in SQL via CTE — no Python in the loop |
 
 ## Data
 
-5 sample documents covering corporate, financial, scientific, and business domains:
+5 curated documents covering corporate, financial, scientific, and business domains:
 
-- "Alice Smith founded ACME Corporation in New York City in 1987."
-- "Bob Jones, CEO of TechStart, announced a partnership with ACME Corporation."
-- "The European Central Bank raised interest rates to combat inflation in the eurozone."
-- "Dr. Marie Curie discovered radium at the University of Paris in 1898."
-- "Amazon acquired Whole Foods for $13.7 billion, reshaping the grocery industry."
+1. "Alice Smith founded ACME Corporation in New York City in 1987."
+2. "Bob Jones, CEO of TechStart, announced a partnership with ACME Corporation."
+3. "The European Central Bank raised interest rates to combat inflation in the eurozone."
+4. "Dr. Marie Curie discovered radium at the University of Paris in 1898."
+5. "Amazon acquired Whole Foods for $13.7 billion, reshaping the grocery industry."
 
-## How It Works
+## Key Architectural Differences
 
-### Grammar-Constrained Generation
+### Grammar-Constrained Generation (muninn)
 
-`muninn_extract_entities` and `muninn_extract_relations` use GBNF grammars
-embedded in the C extension to constrain LLM output to valid JSON. This means
-the model *cannot* produce malformed output — every response is guaranteed to
-parse as the expected schema.
+`muninn_extract_entities`, `muninn_extract_relations`, and `muninn_extract_ner_re` use
+GBNF grammars embedded in the C extension to constrain LLM output at the **token level**.
+The grammar sampler rejects invalid tokens during generation, so output is guaranteed to
+be well-formed JSON matching the expected schema — no post-processing needed.
 
-### The Bulk SQL Pipeline (Section 6)
+### Span Extraction (GLiNER2)
 
-The key insight: since NER and RE are scalar SQL functions, they compose in
-standard SQL without any application code:
+GLiNER2 uses a 205M-param DeBERTa-based model trained for token classification.
+Entities are extracted as spans with start/end positions. Relations are extracted
+as head-tail pairs. No generative LLM is involved.
+
+### RE Input Asymmetry
+
+- **muninn** `muninn_extract_relations()` requires prior NER output — it chains off
+  extracted entities to find relations between them.
+- **GLiNER2** `batch_extract_relations()` operates directly on raw text — no entity
+  dependency. This makes the standalone RE comparison (Section 5) structurally asymmetric.
+
+### The CTE Pipeline (Section 7)
+
+Since NER and RE are scalar SQL functions, they compose in standard SQL:
 
 ```sql
 WITH ner AS (
@@ -89,9 +94,8 @@ SELECT id,
 FROM ner
 ```
 
-This runs NER on every document, then feeds the entity JSON directly into
-relation extraction — all in a single query. No Python loop, no intermediate
-storage, no serialisation overhead.
+This runs NER on every document, then feeds the entity JSON directly into relation
+extraction — all in a single query. No Python loop, no intermediate storage.
 
 ## Testing
 
@@ -102,3 +106,39 @@ uv run -m pytest pytests/test_chat_gguf.py -v
 # Full integration tests with a real model
 MUNINN_CHAT_MODEL=models/Qwen3-4B-Q4_K_M.gguf uv run -m pytest pytests/test_chat_gguf.py -v
 ```
+
+# Results
+
+```text
+  Absolute Timings (5 documents)
+  ---------------------------------------------------------------------------------
+                         Qwen3-4B        Qwen3-8B      Gemma-3-4B         GLiNER2
+  ---------------------------------------------------------------------------------
+         NER only          20.41s          32.84s          21.22s           0.46s
+          RE only          29.75s          35.77s          22.61s           0.61s
+  Combined NER+RE          49.65s          67.95s          44.60s           1.07s
+     CTE Pipeline          71.53s         101.22s          60.37s           1.07s
+  ---------------------------------------------------------------------------------
+
+  Per-Document Timings
+  ---------------------------------------------------------------------------------
+                         Qwen3-4B        Qwen3-8B      Gemma-3-4B         GLiNER2
+  ---------------------------------------------------------------------------------
+         NER only      4.083s/doc      6.568s/doc      4.243s/doc      0.092s/doc
+          RE only      5.951s/doc      7.153s/doc      4.523s/doc      0.122s/doc
+  Combined NER+RE      9.930s/doc     13.590s/doc      8.921s/doc      0.214s/doc
+     CTE Pipeline     14.307s/doc     20.244s/doc     12.074s/doc      0.214s/doc
+  ---------------------------------------------------------------------------------
+
+  Speedup (vs slowest per metric)
+  ---------------------------------------------------------------------------------
+                         Qwen3-4B        Qwen3-8B      Gemma-3-4B         GLiNER2
+  ---------------------------------------------------------------------------------
+         NER only            1.6x            1.0x            1.5x           71.3x
+          RE only            1.2x            1.0x            1.6x           58.7x
+  Combined NER+RE            1.4x            1.0x            1.5x           63.5x
+     CTE Pipeline            1.4x            1.0x            1.7x           94.6x
+  ---------------------------------------------------------------------------------
+```
+
+So whilst the `muninn_extract_entities` and `muninn_extract_relations` is available, there are smaller task focused models that perform better and faster than throwing a whole LLM at the task.
