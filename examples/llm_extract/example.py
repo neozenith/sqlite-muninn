@@ -54,16 +54,16 @@ class GgufModel:
 
 MODELS = [
     GgufModel(
-        "Qwen3-4B",
-        "Qwen3-4B-Q4_K_M.gguf",
-        "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
-        2.5,
+        "Qwen3.5-4B",
+        "Qwen3.5-4B-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+        2.7,
     ),
     GgufModel(
-        "Qwen3-8B",
-        "Qwen3-8B-Q4_K_M.gguf",
-        "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
-        5.0,
+        "Qwen3.5-9B",
+        "Qwen3.5-9B-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+        5.7,
     ),
     GgufModel(
         "Gemma-3-4B",

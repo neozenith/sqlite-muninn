@@ -112,33 +112,32 @@ MUNINN_CHAT_MODEL=models/Qwen3-4B-Q4_K_M.gguf uv run -m pytest pytests/test_chat
 ```text
   Absolute Timings (5 documents)
   ---------------------------------------------------------------------------------
-                         Qwen3-4B        Qwen3-8B      Gemma-3-4B         GLiNER2
+                       Qwen3.5-4B      Qwen3.5-9B      Gemma-3-4B         GLiNER2
   ---------------------------------------------------------------------------------
-         NER only          20.41s          32.84s          21.22s           0.46s
-          RE only          29.75s          35.77s          22.61s           0.61s
-  Combined NER+RE          49.65s          67.95s          44.60s           1.07s
-     CTE Pipeline          71.53s         101.22s          60.37s           1.07s
+         NER only          18.57s          34.78s          19.08s           0.39s
+          RE only          23.20s          34.72s          21.22s           0.42s
+  Combined NER+RE          38.71s          54.17s          40.82s           0.81s
+     CTE Pipeline          61.57s          93.81s          54.85s           0.81s
   ---------------------------------------------------------------------------------
 
   Per-Document Timings
   ---------------------------------------------------------------------------------
-                         Qwen3-4B        Qwen3-8B      Gemma-3-4B         GLiNER2
+                       Qwen3.5-4B      Qwen3.5-9B      Gemma-3-4B         GLiNER2
   ---------------------------------------------------------------------------------
-         NER only      4.083s/doc      6.568s/doc      4.243s/doc      0.092s/doc
-          RE only      5.951s/doc      7.153s/doc      4.523s/doc      0.122s/doc
-  Combined NER+RE      9.930s/doc     13.590s/doc      8.921s/doc      0.214s/doc
-     CTE Pipeline     14.307s/doc     20.244s/doc     12.074s/doc      0.214s/doc
+         NER only      3.714s/doc      6.956s/doc      3.815s/doc      0.078s/doc
+          RE only      4.639s/doc      6.945s/doc      4.244s/doc      0.084s/doc
+  Combined NER+RE      7.741s/doc     10.835s/doc      8.165s/doc      0.161s/doc
+     CTE Pipeline     12.314s/doc     18.762s/doc     10.970s/doc      0.161s/doc
   ---------------------------------------------------------------------------------
 
   Speedup (vs slowest per metric)
   ---------------------------------------------------------------------------------
-                         Qwen3-4B        Qwen3-8B      Gemma-3-4B         GLiNER2
+                       Qwen3.5-4B      Qwen3.5-9B      Gemma-3-4B         GLiNER2
   ---------------------------------------------------------------------------------
-         NER only            1.6x            1.0x            1.5x           71.3x
-          RE only            1.2x            1.0x            1.6x           58.7x
-  Combined NER+RE            1.4x            1.0x            1.5x           63.5x
-     CTE Pipeline            1.4x            1.0x            1.7x           94.6x
-  ---------------------------------------------------------------------------------
+         NER only            1.9x            1.0x            1.8x           89.6x
+          RE only            1.5x            1.0x            1.6x           82.9x
+  Combined NER+RE            1.4x            1.0x            1.3x           67.1x
+     CTE Pipeline            1.5x            1.0x            1.7x          116.3x
 ```
 
 So whilst the `muninn_extract_entities` and `muninn_extract_relations` is available, there are smaller task focused models that perform better and faster than throwing a whole LLM at the task.
