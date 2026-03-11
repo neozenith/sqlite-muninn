@@ -200,9 +200,10 @@ class ProgressTracker:
     cumulative), giving a responsive view of current throughput.
     """
 
-    def __init__(self, total: int, window: int = 200) -> None:
+    def __init__(self, total: int, window: int = 200, min_interval_s: float = 0.0) -> None:
         self._total = total
         self._window = window
+        self._min_interval_s = min_interval_s  # if > 0, also log when this many seconds elapsed
         self._done = 0
         self._start = time.monotonic()
         self._last_log_at = 0
@@ -225,8 +226,12 @@ class ProgressTracker:
         self._output_total += n
 
     def should_log(self) -> bool:
-        """Return True (and capture speed + output window samples) every `window` INPUT items."""
-        if self._done - self._last_log_at >= self._window:
+        """Return True (and capture speed + output window samples) every `window` INPUT items,
+        or when min_interval_s has elapsed (useful for slow per-item operations like LLM calls)."""
+        time_trigger = False
+        if self._min_interval_s > 0 and self._done > self._last_log_at:
+            time_trigger = (time.monotonic() - self._last_log_time) >= self._min_interval_s
+        if self._done - self._last_log_at >= self._window or time_trigger:
             now = time.monotonic()
             items_in_window = self._done - self._last_log_at
             time_in_window = now - self._last_log_time

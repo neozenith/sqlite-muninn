@@ -2,12 +2,8 @@
 
 import math
 import pathlib
+import sqlite3
 import struct
-
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -47,8 +43,14 @@ def _create_test_db(tmp_path: pathlib.Path) -> str:
         angle = i * 2 * math.pi / 10
         conn.execute(
             "INSERT INTO test_vec_umap VALUES (?, ?, ?, ?, ?, ?)",
-            (i + 1, round(math.cos(angle), 4), round(math.sin(angle), 4),
-             round(math.cos(angle) * 0.5, 4), round(math.sin(angle) * 0.5, 4), round(i * 0.1, 4)),
+            (
+                i + 1,
+                round(math.cos(angle), 4),
+                round(math.sin(angle), 4),
+                round(math.cos(angle) * 0.5, 4),
+                round(math.sin(angle) * 0.5, 4),
+                round(i * 0.1, 4),
+            ),
         )
     conn.commit()
 

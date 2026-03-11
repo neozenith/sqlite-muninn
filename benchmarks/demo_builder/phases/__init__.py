@@ -29,11 +29,19 @@ __all__ = [
 ]
 
 
-def default_phases(book_id: int, model_name: str, legacy_models: bool = False) -> list[Phase]:
+def default_phases(
+    book_id: int,
+    model_name: str,
+    legacy_models: bool = False,
+    muninn_model: str | None = None,
+) -> list[Phase]:
     """Create the default ordered list of build phases.
 
     legacy_models: if True, use the GLiNER + GLiREL + spaCy stack instead of
     the default GLiNER2 single-model backend for NER and RE phases.
+
+    muninn_model: if set, use muninn's combined NER+RE via llama.cpp GGUF chat
+    model. Value is the GGUF filename (e.g. "Qwen3-4B-Q4_K_M.gguf").
 
     Order is a topological sort of the true data dependency DAG:
 
@@ -47,13 +55,20 @@ def default_phases(book_id: int, model_name: str, legacy_models: bool = False) -
 
     For parallel execution use `manifest --makefile` to generate a Make-managed build.
     """
-    ner_backend = "gliner" if legacy_models else "gliner2"
-    re_backend = "glirel" if legacy_models else "gliner2"
+    if muninn_model:
+        ner_backend = "muninn"
+        re_backend = "muninn"
+    elif legacy_models:
+        ner_backend = "gliner"
+        re_backend = "glirel"
+    else:
+        ner_backend = "gliner2"
+        re_backend = "gliner2"
     return [
         PhaseChunks(book_id, model_name),
         PhaseChunksEmbeddings(book_id, model_name),
         PhaseChunksUMAP(),
-        PhaseNER(backend=ner_backend),
+        PhaseNER(backend=ner_backend, gguf_model=muninn_model),
         PhaseRE(backend=re_backend),
         PhaseEntityEmbeddings(model_name),
         PhaseEntitiesUMAP(),

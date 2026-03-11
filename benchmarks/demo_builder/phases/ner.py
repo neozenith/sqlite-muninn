@@ -1,4 +1,4 @@
-"""Phase 2: Entity Extraction (GLiNER2 or GLiNER zero-shot NER).
+"""Phase 2: Entity Extraction (GLiNER2 or GLiNER zero-shot NER, or muninn LLM).
 
 Incremental: tracks processed chunks in `ner_chunks_log`. Each run only
 processes chunks that don't yet have a ner_chunks_log entry, so re-runs
@@ -8,10 +8,13 @@ Backends:
   "gliner2" (default) — fastino/gliner2-base-v1, 205M DeBERTa-v3-base,
       loaded via the shared _gliner2_loader cache (one load per process).
   "gliner"  (legacy)  — urchade/gliner_medium-v2.1, requires gliner package.
+  "muninn"            — muninn_extract_ner_re() via llama.cpp GGUF chat model.
+      Combined NER+RE in one LLM pass; also populates relations table.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from datetime import UTC, datetime
@@ -21,7 +24,14 @@ from gliner import GLiNER
 from huggingface_hub import snapshot_download
 
 from benchmarks.demo_builder.common import ProgressTracker, offline_mode
-from benchmarks.demo_builder.constants import GLINER2_NER_LABELS, GLINER_LABELS
+from benchmarks.demo_builder.constants import (
+    GLINER2_NER_LABELS,
+    GLINER2_RE_LABELS,
+    GLINER_LABELS,
+    MUNINN_CHAT_MODEL_FILE,
+    MUNINN_CHAT_MODEL_NAME,
+    MUNINN_CHAT_MODELS_DIR,
+)
 from benchmarks.demo_builder.phases._gliner2_loader import get_gliner2
 from benchmarks.demo_builder.phases.base import Phase
 
@@ -43,15 +53,27 @@ _GLINER2_BATCH_SIZE = 8
 class PhaseNER(Phase):
     """Extract entities from all unprocessed chunks using NER model."""
 
-    def __init__(self, labels: list[str] | None = None, backend: str = "gliner2") -> None:
+    def __init__(
+        self,
+        labels: list[str] | None = None,
+        backend: str = "gliner2",
+        relation_labels: list[str] | None = None,
+        gguf_model: str | None = None,
+    ) -> None:
         self._model: Any = None
         self._backend = backend
+        self._gguf_model = gguf_model or MUNINN_CHAT_MODEL_FILE
+        self._muninn_model_name = MUNINN_CHAT_MODEL_NAME
         if labels is not None:
             self._labels = labels
         elif backend == "gliner2":
             self._labels = GLINER2_NER_LABELS
+        elif backend == "muninn":
+            self._labels = GLINER2_NER_LABELS
         else:
             self._labels = GLINER_LABELS
+        # Relation labels used by muninn combined NER+RE
+        self._relation_labels = relation_labels or GLINER2_RE_LABELS
 
     @property
     def name(self) -> str:
@@ -98,7 +120,40 @@ class PhaseNER(Phase):
             )
         """)
 
-        if self._backend == "gliner2":
+        if self._backend == "muninn":
+            log.info("  Loading muninn chat model: %s", self._gguf_model)
+            model_path = str(MUNINN_CHAT_MODELS_DIR / self._gguf_model)
+            # Register model — idempotent (ignores "already loaded" from prior phase/run)
+            try:
+                conn.execute(
+                    "INSERT INTO temp.muninn_chat_models(name, model) SELECT ?, muninn_chat_model(?)",
+                    (self._muninn_model_name, model_path),
+                )
+            except sqlite3.OperationalError as e:
+                if "already loaded" not in str(e):
+                    raise
+                log.info("  Model %s already loaded", self._muninn_model_name)
+            # Also create the relations table since combined NER+RE populates both
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS relations (
+                    relation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    src TEXT NOT NULL,
+                    dst TEXT NOT NULL,
+                    rel_type TEXT,
+                    weight REAL DEFAULT 1.0,
+                    chunk_id INTEGER,
+                    source TEXT NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_relations_src ON relations(src)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_relations_dst ON relations(dst)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS re_chunks_log (
+                    chunk_id INTEGER PRIMARY KEY,
+                    processed_at TEXT NOT NULL
+                )
+            """)
+        elif self._backend == "gliner2":
             log.info("  Loading GLiNER2 (fastino/gliner2-base-v1)...")
             self._model = get_gliner2()
         else:
@@ -108,6 +163,9 @@ class PhaseNER(Phase):
                 self._model = GLiNER.from_pretrained(path, local_files_only=True)
 
     def run(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        if self._backend == "muninn":
+            self._run_muninn(conn, ctx)
+            return
         assert self._model is not None, "setup() must be called before run()"
 
         # Only process chunks that haven't been logged yet.
@@ -175,4 +233,113 @@ class PhaseNER(Phase):
 
         log.info("  Extracted %d entity mentions from %d chunks", total_entities, len(chunks))
 
+        ctx.num_entity_mentions = conn.execute("SELECT count(*) FROM entities").fetchone()[0]
+
+    # ── muninn backend (combined NER+RE via llama.cpp) ────────────────────────
+
+    def _run_muninn(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        """Extract entities AND relations in a single LLM call per chunk via muninn_extract_ner_re."""
+        chunks = conn.execute("""
+            SELECT chunk_id, text FROM chunks
+            WHERE chunk_id NOT IN (SELECT chunk_id FROM ner_chunks_log)
+            ORDER BY chunk_id
+        """).fetchall()
+
+        if not chunks:
+            log.info("  All chunks already NER-processed")
+            ctx.num_entity_mentions = conn.execute("SELECT count(*) FROM entities").fetchone()[0]
+            return
+
+        entity_labels_csv = ",".join(self._labels)
+        relation_labels_csv = ",".join(self._relation_labels)
+        model_name = self._muninn_model_name
+
+        log.info(
+            "  NER+RE processing %d chunks [muninn] (entity labels: %s, relation labels: %s)",
+            len(chunks),
+            self._labels,
+            self._relation_labels,
+        )
+
+        total_entities = 0
+        total_relations = 0
+        ts = datetime.now(UTC).isoformat()
+        # LLM calls take ~2s each — log every 30s (not every 200 items) for visible progress
+        tracker = ProgressTracker(len(chunks), window=10, min_interval_s=30.0)
+
+        for chunk_id, text in chunks:
+            result_json = conn.execute(
+                "SELECT muninn_extract_ner_re(?, ?, ?, ?)",
+                (model_name, text, entity_labels_csv, relation_labels_csv),
+            ).fetchone()[0]
+
+            parsed = json.loads(result_json)
+
+            # Insert entities
+            entity_rows = []
+            for ent in parsed.get("entities", []):
+                entity_rows.append(
+                    (
+                        ent.get("text", ""),
+                        ent.get("type", ""),
+                        "muninn",
+                        chunk_id,
+                        ent.get("score", 1.0),
+                    )
+                )
+            if entity_rows:
+                conn.executemany(
+                    "INSERT INTO entities (name, entity_type, source, chunk_id, confidence) VALUES (?, ?, ?, ?, ?)",
+                    entity_rows,
+                )
+            total_entities += len(entity_rows)
+
+            # Insert relations
+            relation_rows = []
+            for rel in parsed.get("relations", []):
+                head = rel.get("head", "")
+                tail = rel.get("tail", "")
+                if head and tail and head != tail:
+                    relation_rows.append(
+                        (
+                            head,
+                            tail,
+                            rel.get("rel", ""),
+                            rel.get("score", 1.0),
+                            chunk_id,
+                            "muninn",
+                        )
+                    )
+            if relation_rows:
+                conn.executemany(
+                    "INSERT INTO relations (src, dst, rel_type, weight, chunk_id, source) VALUES (?, ?, ?, ?, ?, ?)",
+                    relation_rows,
+                )
+            total_relations += len(relation_rows)
+
+            # Mark chunk processed in both logs
+            conn.execute(
+                "INSERT OR IGNORE INTO ner_chunks_log (chunk_id, processed_at) VALUES (?, ?)",
+                (chunk_id, ts),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO re_chunks_log (chunk_id, processed_at) VALUES (?, ?)",
+                (chunk_id, ts),
+            )
+
+            # Commit every chunk — each LLM call takes ~2s, so the lock is
+            # held briefly per chunk (unlike GLiNER2 which batches 32 at a time).
+            conn.commit()
+
+            tracker.update(1)
+            tracker.record_output(len(entity_rows))
+            if tracker.should_log():
+                log.info("  NER+RE %s (rels: %d)", tracker.report(), total_relations)
+
+        log.info(
+            "  Extracted %d entities + %d relations from %d chunks",
+            total_entities,
+            total_relations,
+            len(chunks),
+        )
         ctx.num_entity_mentions = conn.execute("SELECT count(*) FROM entities").fetchone()[0]

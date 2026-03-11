@@ -204,10 +204,16 @@ export function GraphPage() {
             </CardHeader>
             <CardContent className="space-y-1 text-xs">
               <div>
-                Nodes: <Badge data-testid="graph-node-count" variant="secondary">{subgraph.node_count}</Badge>
+                Nodes:{' '}
+                <Badge data-testid="graph-node-count" variant="secondary">
+                  {subgraph.node_count}
+                </Badge>
               </div>
               <div>
-                Edges: <Badge data-testid="graph-edge-count" variant="secondary">{subgraph.edge_count}</Badge>
+                Edges:{' '}
+                <Badge data-testid="graph-edge-count" variant="secondary">
+                  {subgraph.edge_count}
+                </Badge>
               </div>
               {communities && (
                 <div>

@@ -1,5 +1,5 @@
 /*
- * test_embed_gguf.c — Unit tests for the GGUF embedding model registry
+ * test_llama_embed.c — Unit tests for the GGUF embedding model registry
  *
  * Tests the model registry (add/find/remove) and embed_register_functions()
  * without requiring a real GGUF model file. Integration tests with real
@@ -140,7 +140,7 @@ TEST(test_embed_model_bad_path) {
 
 /* ─── Suite entry point ───────────────────────────────────────── */
 
-void test_embed_gguf(void) {
+void test_llama_embed(void) {
     RUN_TEST(test_embed_register_functions);
     RUN_TEST(test_models_vtab_exists);
     RUN_TEST(test_embed_unloaded_model_error);

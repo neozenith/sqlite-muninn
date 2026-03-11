@@ -2,19 +2,15 @@
 
 import json
 import logging
+import sqlite3
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from server import config as _config
-from server.services.db import db_session, get_active_db_id, reconnect, set_active_db_id
 from server.services import kg as _kg
-
-try:
-    import pysqlite3 as sqlite3  # type: ignore[import-not-found]
-except ImportError:
-    import sqlite3
+from server.services.db import db_session, get_active_db_id, reconnect, set_active_db_id
 
 log = logging.getLogger(__name__)
 

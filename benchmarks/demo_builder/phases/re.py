@@ -1,4 +1,4 @@
-"""Phase 3: Relation Extraction (GLiNER2 or GLiREL zero-shot RE).
+"""Phase 3: Relation Extraction (GLiNER2 or GLiREL zero-shot RE, or muninn LLM).
 
 Incremental: tracks processed chunks in `re_chunks_log`. Each run only
 processes chunks that haven't been RE-logged yet.
@@ -11,6 +11,8 @@ Backends:
   "glirel"  (legacy)  — jackboyla/glirel-large-v0 + spaCy en_core_web_lg.
       Only processes chunks that already have ≥2 NER entities. Requires
       the glirel and spacy packages plus en_core_web_lg model download.
+  "muninn"            — No-op when following PhaseNER(backend="muninn"), which
+      already populates relations via the combined muninn_extract_ner_re() call.
 """
 
 from __future__ import annotations
@@ -124,7 +126,10 @@ class PhaseRE(Phase):
             )
         """)
 
-        if self._backend == "gliner2":
+        if self._backend == "muninn":
+            log.info("  RE [muninn]: tables created (relations populated by NER phase)")
+            return
+        elif self._backend == "gliner2":
             log.info("  Loading GLiNER2 (fastino/gliner2-base-v1)...")
             self._model = get_gliner2()
         else:
@@ -145,6 +150,14 @@ class PhaseRE(Phase):
             self._nlp = spacy.load("en_core_web_lg")
 
     def run(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
+        if self._backend == "muninn":
+            # Relations already populated by PhaseNER(backend="muninn") via combined NER+RE
+            try:
+                ctx.num_relations = conn.execute("SELECT count(*) FROM relations").fetchone()[0]
+            except sqlite3.OperationalError:
+                ctx.num_relations = 0
+            log.info("  RE [muninn]: %d relations already extracted by NER phase", ctx.num_relations)
+            return
         assert self._model is not None, "setup() must be called before run()"
         if self._backend == "gliner2":
             self._run_gliner2(conn, ctx)

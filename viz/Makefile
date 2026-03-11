@@ -66,22 +66,23 @@ test-e2e: install                                  ## Playwright E2E tests
 
 # ── Code Quality ─────────────────────────────────────────────────────
 
-format: format-python format-frontend           ## Format all code
+fix: fix-python fix-frontend           ## Format all code
 
-format-python:                                   ## Format Python code with ruff
+fix-python:                                   ## Format Python code with ruff
 	uv run --directory . ruff format .
 	uv run --directory . ruff check --fix-only .
 
-format-frontend: install-frontend                ## Format TypeScript code with prettier
+fix-frontend: install-frontend                ## Format TypeScript code with prettier
 	npm --prefix frontend run format
+	npm --prefix frontend audit fix
 
 lint: lint-python lint-frontend                  ## Lint all code
 
-lint-python: format-python                                     ## Lint Python code with ruff
+lint-python: fix-python                                     ## Lint Python code with ruff
 	uv run --directory . ruff check .
 	uv run --directory . ruff format --check .
 
-lint-frontend: install-frontend format-frontend                  ## Lint TypeScript code with eslint
+lint-frontend: install-frontend fix-frontend                  ## Lint TypeScript code with eslint
 	npm --prefix frontend run lint
 	npm --prefix frontend run format:check
 

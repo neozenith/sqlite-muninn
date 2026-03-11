@@ -2,12 +2,11 @@
 
 import logging
 import re
+import sqlite3
 import threading
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
-
-import sqlite3
 
 from server import config as _config
 

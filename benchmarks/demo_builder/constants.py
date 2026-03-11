@@ -130,6 +130,12 @@ GLINER2_RE_LABELS = [
     "opposes",
 ]
 
+# ── Default GGUF chat model for muninn NER/RE backend ──────────────
+
+MUNINN_CHAT_MODEL_NAME = "Qwen3-4B"
+MUNINN_CHAT_MODEL_FILE = "Qwen3-4B-Q4_K_M.gguf"
+MUNINN_CHAT_MODELS_DIR = PROJECT_ROOT / "models"
+
 # ── Phase names (for _build_progress table and manifest display) ─
 
 PHASE_NAMES = [

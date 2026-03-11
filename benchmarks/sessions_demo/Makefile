@@ -22,7 +22,8 @@ EXTENSION = ../../build/muninn$(EXT)
 GGUF_MODEL = ../../models/nomic-embed-text-v1.5.Q8_0.gguf
 
 .PHONY: help format lint fix typecheck test coverage extension clean ci \
-        build cache-init cache-update cache-rebuild cache-clear cache-status
+        build cache-init cache-update cache-rebuild cache-clear cache-status \
+        diagrams diagrams-clean
 
 help:                    ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -81,6 +82,18 @@ coverage: $(EXTENSION)   ## Run tests with coverage report
 	uv run --directory $(ROOT_ABS) python -m pytest $(PKG_ABS)/tests/ -v \
 		--cov=benchmarks.sessions_demo --cov-report=term-missing --cov-report=html:$(PKG_ABS)/htmlcov
 
+# ── Diagrams ─────────────────────────────────────────────────────
+DIAGRAMS_DIR = diagrams
+MMDC = npx -p @mermaid-js/mermaid-cli mmdc
+MMDC_FLAGS = --scale 4 --backgroundColor white --outputFormat png
+
+diagrams:                ## Render README Mermaid diagrams to PNG
+	@mkdir -p $(DIAGRAMS_DIR)
+	$(MMDC) -i README.md -a $(DIAGRAMS_DIR)/ $(MMDC_FLAGS)
+
+diagrams-clean:          ## Remove rendered diagram artefacts
+	rm -rf $(DIAGRAMS_DIR)
+
 # ── Cleanup ───────────────────────────────────────────────────────
 clean:                   ## Remove __pycache__, .pyc, coverage artifacts, output
 	find $(PKG_ABS) -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
@@ -88,4 +101,4 @@ clean:                   ## Remove __pycache__, .pyc, coverage artifacts, output
 	rm -rf $(PKG_ABS)/output
 
 # ── CI composite ──────────────────────────────────────────────────
-ci: lint typecheck test  ## Run full CI pipeline (lint + typecheck + test)
+ci: lint typecheck test diagrams  ## Run full CI pipeline (lint + typecheck + test)

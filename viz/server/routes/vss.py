@@ -87,9 +87,9 @@ def get_embeddings(
     info = _get_index_info(conn, index_name)
 
     umap_table = f"{index_name}_umap"
-    has_umap_table = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (umap_table,)
-    ).fetchone() is not None
+    has_umap_table = (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (umap_table,)).fetchone() is not None
+    )
 
     if not has_umap_table:
         raise HTTPException(

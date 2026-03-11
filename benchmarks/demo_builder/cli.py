@@ -172,13 +172,21 @@ def _cmd_run_phase(args: argparse.Namespace) -> None:
     ctx.db_path = staging_db_path
 
     # Instantiate all phases so we can call restore_ctx on preceding ones.
-    ner_backend = "gliner" if args.legacy_models else "gliner2"
-    re_backend = "glirel" if args.legacy_models else "gliner2"
+    muninn_model = getattr(args, "muninn_model", None)
+    if muninn_model:
+        ner_backend = "muninn"
+        re_backend = "muninn"
+    elif args.legacy_models:
+        ner_backend = "gliner"
+        re_backend = "glirel"
+    else:
+        ner_backend = "gliner2"
+        re_backend = "gliner2"
     all_phases = [
         PhaseChunks(book_id, model_name),
         PhaseChunksEmbeddings(book_id, model_name),
         PhaseChunksUMAP(),
-        PhaseNER(backend=ner_backend),
+        PhaseNER(backend=ner_backend, gguf_model=muninn_model),
         PhaseRE(backend=re_backend),
         PhaseEntityEmbeddings(model_name),
         PhaseEntitiesUMAP(),
@@ -271,7 +279,14 @@ def _cmd_build(args: argparse.Namespace) -> None:
 
     # ── Build ─────────────────────────────────────────────────────
     log.info("Building %s_%s", args.book_id, args.embedding_model)
-    build = DemoBuild(args.book_id, args.embedding_model, output_folder, legacy_models=args.legacy_models)
+    muninn_model = getattr(args, "muninn_model", None)
+    build = DemoBuild(
+        args.book_id,
+        args.embedding_model,
+        output_folder,
+        legacy_models=args.legacy_models,
+        muninn_model=muninn_model,
+    )
     build.setup()
     try:
         build.run()
@@ -374,6 +389,13 @@ def main() -> None:
         default=False,
         help="Use legacy GLiNER + GLiREL + spaCy stack instead of GLiNER2 for NER and RE phases",
     )
+    build_p.add_argument(
+        "--muninn-model",
+        type=str,
+        default=None,
+        dest="muninn_model",
+        help="Use muninn LLM NER+RE via this GGUF model filename (e.g. Qwen3-4B-Q4_K_M.gguf)",
+    )
 
     # ── write-manifest ────────────────────────────────────────────
     wm_p = subparsers.add_parser("write-manifest", help="Generate manifest.json from existing built DBs")
@@ -414,6 +436,13 @@ def main() -> None:
         dest="legacy_models",
         default=False,
         help="Use legacy GLiNER + GLiREL + spaCy stack instead of GLiNER2 for NER and RE phases",
+    )
+    rp.add_argument(
+        "--muninn-model",
+        type=str,
+        default=None,
+        dest="muninn_model",
+        help="Use muninn LLM NER+RE via this GGUF model filename (e.g. Qwen3-4B-Q4_K_M.gguf)",
     )
 
     # ── list-books ────────────────────────────────────────────────

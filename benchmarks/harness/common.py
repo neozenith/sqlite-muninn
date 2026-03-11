@@ -395,6 +395,38 @@ KG_NER_MODELS: list[dict[str, Any]] = [
         "params": None,
         "size_mb": 560,
     },
+    {
+        "slug": "llm-qwen3-4b",
+        "display": "Qwen3-4B (LLM)",
+        "type": "LLM NER",
+        "description": "Qwen3-4B instruction-tuned via llama.cpp GGUF",
+        "params": "4B",
+        "size_mb": 2500,
+    },
+    {
+        "slug": "llm-qwen3-8b",
+        "display": "Qwen3-8B (LLM)",
+        "type": "LLM NER",
+        "description": "Qwen3-8B instruction-tuned via llama.cpp GGUF",
+        "params": "8B",
+        "size_mb": 5000,
+    },
+    {
+        "slug": "llm-phi4-mini",
+        "display": "Phi-4-mini (LLM)",
+        "type": "LLM NER",
+        "description": "Microsoft Phi-4-mini instruction-tuned via llama.cpp GGUF",
+        "params": "3.8B",
+        "size_mb": 2500,
+    },
+    {
+        "slug": "llm-gemma3-4b",
+        "display": "Gemma-3-4B (LLM)",
+        "type": "LLM NER",
+        "description": "Google Gemma 3 4B instruction-tuned via llama.cpp GGUF",
+        "params": "4B",
+        "size_mb": 2500,
+    },
 ]
 
 KG_NER_DATASETS: list[dict[str, Any]] = [

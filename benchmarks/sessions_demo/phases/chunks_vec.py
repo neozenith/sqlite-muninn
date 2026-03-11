@@ -94,7 +94,7 @@ class PhaseChunksVec(Phase):
         """)
 
         total_embedded = 0
-        tracker = ProgressTracker(total_to_embed)
+        tracker = ProgressTracker(total_to_embed, min_interval_s=30.0)
         for row in cursor:
             chunk_id, text = row[0], row[1]
             embedded_before = total_embedded

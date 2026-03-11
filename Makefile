@@ -6,53 +6,44 @@ LDFLAGS = -lm
 # Version from VERSION file
 VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
 
-# Platform detection (needed early for llama.cpp BLAS config)
-UNAME_S := $(shell uname -s)
-
 # ── Single source of truth: scripts/generate_build.py ──
 _Q := uv run scripts/generate_build.py query
 
-# llama.cpp vendored dependency (CPU-only static build)
+# Platform detection (from generate_build.py)
+UNAME_S          := $(shell $(_Q) UNAME_S)
+SHARED_FLAGS     := $(shell $(_Q) SHARED_FLAGS)
+EXT              := $(shell $(_Q) EXT)
+CFLAGS_BASE      += $(shell $(_Q) CFLAGS_PLATFORM)
+LDFLAGS          += $(shell $(_Q) LDFLAGS_PLATFORM)
+
+# llama.cpp vendored dependency
 LLAMA_DIR     = vendor/llama.cpp
 LLAMA_BUILD   = $(LLAMA_DIR)/build
 LLAMA_INCLUDE    := $(shell $(_Q) LLAMA_INCLUDE)
 LLAMA_LIBS_CORE  := $(shell $(_Q) LLAMA_LIBS_CORE)
 LLAMA_CMAKE_FLAGS := $(shell $(_Q) LLAMA_CMAKE_FLAGS)
 
-# On macOS, BLAS is always available (Accelerate framework) so CMake always
-# builds libggml-blas.a.  Hardcode the path to avoid $(wildcard) failing on
-# clean builds (the file doesn't exist until CMake runs).
-# On Linux, BLAS availability depends on whether OpenBLAS is installed.
+# Full library list: core + platform backends (blas, metal)
+# On Linux, BLAS is optional — append via $(wildcard) if OpenBLAS was found.
 ifeq ($(UNAME_S),Darwin)
-    LLAMA_LIBS = $(LLAMA_LIBS_CORE) $(LLAMA_BUILD)/ggml/src/ggml-blas/libggml-blas.a
+    LLAMA_LIBS := $(shell $(_Q) LLAMA_LIBS)
 else
     LLAMA_LIBS = $(LLAMA_LIBS_CORE) $(wildcard $(LLAMA_BUILD)/ggml/src/ggml-blas/libggml-blas.a)
 endif
 
-# Platform-specific flags
+# macOS universal binary support: make ARCH=arm64 or make ARCH=x86_64
+ifdef ARCH
+    CFLAGS_BASE += -arch $(ARCH)
+    LLAMA_CMAKE_FLAGS += -DCMAKE_OSX_ARCHITECTURES=$(ARCH)
+endif
+
+# SQLite for test linking
 ifeq ($(UNAME_S),Darwin)
-    SHARED_FLAGS = -dynamiclib -undefined dynamic_lookup
-    EXT = .dylib
-    # macOS universal binary support: make ARCH=arm64 or make ARCH=x86_64
-    ifdef ARCH
-        CFLAGS_BASE += -arch $(ARCH)
-        LLAMA_CMAKE_FLAGS += -DCMAKE_OSX_ARCHITECTURES=$(ARCH)
-    endif
-    CFLAGS_BASE += -mmacosx-version-min=13.3
-    LLAMA_CMAKE_FLAGS += -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
-    # C++ runtime + Accelerate for llama.cpp
-    LDFLAGS += -lc++ -framework Accelerate
-    # SQLite for test linking (extension only needs headers from src/)
     SQLITE_PREFIX ?= $(shell brew --prefix sqlite 2>/dev/null || echo /usr/local)
     SQLITE_LIBS = -L$(SQLITE_PREFIX)/lib -lsqlite3
 else ifeq ($(UNAME_S),Linux)
-    SHARED_FLAGS = -shared
-    EXT = .so
-    LDFLAGS += -lstdc++ -lpthread
     SQLITE_LIBS ?= $(shell pkg-config --libs sqlite3 2>/dev/null || echo -lsqlite3)
 else
-    SHARED_FLAGS = -shared
-    EXT = .dll
     SQLITE_LIBS ?= -lsqlite3
 endif
 
@@ -91,6 +82,10 @@ EMCC_FLAGS = -O2 -msimd128 \
 	-DSQLITE_THREADSAFE=0 \
 	-DSQLITE_OMIT_LOAD_EXTENSION \
 	-I$(WASM_BUILD) -Isrc
+
+# Vendored C libraries (yyjson, etc.)
+VENDOR_SRC     := $(shell $(_Q) VENDOR_SRC)
+VENDOR_INCLUDE := $(shell $(_Q) VENDOR_INCLUDE)
 
 # Source files — from generate_build.py
 SRC          := $(shell $(_Q) SRC)
@@ -158,10 +153,10 @@ llama-clean:                                   ## Clean llama.cpp build artifact
 all: build/muninn$(EXT)                        ## Build the extension
 
 build: build/muninn$(EXT)
-build/muninn$(EXT): $(SRC) $(LLAMA_LIBS)
+build/muninn$(EXT): $(SRC) $(VENDOR_SRC) $(LLAMA_LIBS)
 	@mkdir -p build
 	$(CC) $(CFLAGS_BASE) $(CFLAGS_EXTRA) $(SHARED_FLAGS) \
-		-Isrc $(LLAMA_INCLUDE) -o $@ $(SRC) $(LLAMA_LIBS) $(LDFLAGS)
+		-Isrc $(VENDOR_INCLUDE) $(LLAMA_INCLUDE) -o $@ $(SRC) $(VENDOR_SRC) $(LLAMA_LIBS) $(LDFLAGS)
 
 debug: CFLAGS_BASE += -g -fsanitize=address,undefined -DDEBUG -O0
 debug: LDFLAGS += -fsanitize=address,undefined
@@ -191,8 +186,10 @@ build-wasm-lite: $(WASM_SQLITE_SRC)                ## Build lite WASM (no llama.
 	@command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found — install Emscripten SDK"; exit 1; }
 	emcc $(EMCC_FLAGS) \
 		-DMUNINN_NO_LLAMA \
+		$(VENDOR_INCLUDE) \
 		$(WASM_SQLITE_SRC) \
 		$(WASM_SRC_LITE) \
+		$(VENDOR_SRC) \
 		$(WASM_SRC_EXTRA) \
 		-lm \
 		-o $(WASM_JS)
@@ -201,9 +198,10 @@ build-wasm-lite: $(WASM_SQLITE_SRC)                ## Build lite WASM (no llama.
 build-wasm-full: $(WASM_SQLITE_SRC) $(LLAMA_WASM_LIBS) ## Build full WASM (with llama.cpp/embeddings)
 	@command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found — install Emscripten SDK"; exit 1; }
 	emcc $(EMCC_FLAGS) \
-		$(LLAMA_INCLUDE) \
+		$(VENDOR_INCLUDE) $(LLAMA_INCLUDE) \
 		$(WASM_SQLITE_SRC) \
 		$(SRC) \
+		$(VENDOR_SRC) \
 		$(WASM_SRC_EXTRA) \
 		$(LLAMA_WASM_LIBS) \
 		-lm \
@@ -220,15 +218,16 @@ test: build/test_runner                        ## Run C unit tests + coverage
 	if [ -x "$$GCOVR" ]; then \
 		$$GCOVR --root . --filter 'src/' --exclude 'src/sqlite3' \
 			--gcov-ignore-errors=source_not_found \
+			--gcov-ignore-parse-errors=suspicious_hits.warn_once_per_file \
 			--fail-under-line 50 --print-summary; \
 	else \
 		echo "gcovr not installed — skipping C coverage report"; \
 	fi
 
-build/test_runner: $(TEST_SRC) $(TEST_LINK_SRC) $(LLAMA_LIBS)
+build/test_runner: $(TEST_SRC) $(TEST_LINK_SRC) $(VENDOR_SRC) $(LLAMA_LIBS)
 	@mkdir -p build
-	$(CC) $(CFLAGS_BASE) $(CFLAGS_EXTRA) --coverage -Isrc $(LLAMA_INCLUDE) -o $@ \
-		$(TEST_SRC) $(TEST_LINK_SRC) $(LLAMA_LIBS) $(LDFLAGS_TEST)
+	$(CC) $(CFLAGS_BASE) $(CFLAGS_EXTRA) --coverage -DLLAMA_CHAT_TESTING -Isrc $(VENDOR_INCLUDE) $(LLAMA_INCLUDE) -o $@ \
+		$(TEST_SRC) $(TEST_LINK_SRC) $(VENDOR_SRC) $(LLAMA_LIBS) $(LDFLAGS_TEST)
 
 test-python: build/muninn$(EXT)                ## Run Python integration tests + coverage
 	.venv/bin/python -m pytest pytests/ -v

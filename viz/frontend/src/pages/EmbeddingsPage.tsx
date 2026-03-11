@@ -24,7 +24,11 @@ export function EmbeddingsPage() {
   const indexName = dataset ? decodeURIComponent(dataset) : null
 
   const { data: indexes, isLoading: indexesLoading } = useIndexes()
-  const { data: embeddings, isLoading: embeddingsLoading, isError: embeddingsError } = useEmbeddings(indexName, dimensions)
+  const {
+    data: embeddings,
+    isLoading: embeddingsLoading,
+    isError: embeddingsError,
+  } = useEmbeddings(indexName, dimensions)
   const { data: searchResults } = useVSSSearch(indexName, selectedPointId, k)
   const textSearch = useVSSTextSearch(indexName, searchText, k)
 
@@ -184,7 +188,10 @@ export function EmbeddingsPage() {
             </CardHeader>
             <CardContent className="space-y-1 text-xs">
               <div>
-                Points: <Badge data-testid="embedding-point-count" variant="secondary">{embeddings.count}</Badge>
+                Points:{' '}
+                <Badge data-testid="embedding-point-count" variant="secondary">
+                  {embeddings.count}
+                </Badge>
               </div>
               <div>
                 Original dim: <Badge variant="secondary">{embeddings.original_dimensions}</Badge>

@@ -12,6 +12,9 @@ const BENIGN_PATTERNS = [
   'Failed to initialize WebGL',
   'Failed to load resource',  // Chrome generic 500 for background API fetches (logged via failedResponses)
   'maxTextureDimension',  // luma.gl headless: no GPU adapter → undefined device limits
+  'SharedArrayBuffer',    // WASM threading: requires COOP/COEP headers (wasm demo only)
+  'Cross-Origin-Opener-Policy', // COOP header requirement for WASM SharedArrayBuffer
+  'Deprecation',          // Chrome deprecation notices in WASM context
 ];
 
 function isBenign(msg: string): boolean {

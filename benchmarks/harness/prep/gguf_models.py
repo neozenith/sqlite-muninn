@@ -1,7 +1,7 @@
 """Prep module: download GGUF embedding models.
 
 Ensures GGUF model files are available in the project's models/ directory.
-These are used by muninn's native embed_gguf subsystem (muninn_embed_model /
+These are used by muninn's native llama_embed subsystem (muninn_embed_model /
 muninn_embed SQL functions) for embedding benchmarks and examples.
 
 Model definitions are authoritative here and mirrored in
@@ -121,6 +121,67 @@ class GGUFModelPrepTask(PrepTask):
 
 
 GGUF_PREP_TASKS: list[PrepTask] = [GGUFModelPrepTask(m) for m in GGUF_MODELS]
+
+
+# ── Chat model catalog ────────────────────────────────────────────
+# GGUF chat models for LLM-based NER/RE extraction. Larger than embedding
+# models — only downloaded on explicit request via `prep gguf-chat`.
+
+GGUF_CHAT_MODELS: list[dict[str, str]] = [
+    {
+        "name": "Qwen3-4B",
+        "filename": "Qwen3-4B-Q4_K_M.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
+        "params": "4B",
+        "size_gb": "2.5",
+        "ctx_len": "32768",
+        "license": "Apache-2.0",
+        "task": "chat",
+    },
+    {
+        "name": "Qwen3-8B",
+        "filename": "Qwen3-8B-Q4_K_M.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+        "params": "8B",
+        "size_gb": "5.0",
+        "ctx_len": "32768",
+        "license": "Apache-2.0",
+        "task": "chat",
+    },
+    {
+        "name": "Phi-4-mini",
+        "filename": "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
+        "url": "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf",
+        "params": "3.8B",
+        "size_gb": "2.5",
+        "ctx_len": "131072",
+        "license": "MIT",
+        "task": "chat",
+    },
+    {
+        "name": "Llama-3.2-1B",
+        "filename": "llama-3.2-1b-instruct-q4_k_m.gguf",
+        "url": "https://huggingface.co/hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF/resolve/main/llama-3.2-1b-instruct-q4_k_m.gguf",
+        "params": "1B",
+        "size_gb": "0.7",
+        "ctx_len": "131072",
+        "license": "Llama-3.2",
+        "task": "chat",
+    },
+    {
+        "name": "Gemma-3-4B",
+        "filename": "google_gemma-3-4b-it-Q4_K_M.gguf",
+        "url": "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
+        "params": "4B",
+        "size_gb": "2.5",
+        "ctx_len": "131072",
+        "license": "Gemma",
+        "task": "chat",
+    },
+]
+
+
+GGUF_CHAT_PREP_TASKS: list[PrepTask] = [GGUFModelPrepTask(m) for m in GGUF_CHAT_MODELS]
 
 
 # ── Status display ───────────────────────────────────────────────

@@ -59,11 +59,13 @@ class DemoBuild:
         model_name: str,
         output_folder: Path,
         legacy_models: bool = False,
+        muninn_model: str | None = None,
     ) -> None:
         self._book_id = book_id
         self._model_name = model_name
         self._output_folder = output_folder
         self._legacy_models = legacy_models
+        self._muninn_model = muninn_model
         self._ctx = PhaseContext()
         self._conn: sqlite3.Connection | None = None
         # Attach file handlers to the package-level logger so that all
@@ -106,7 +108,12 @@ class DemoBuild:
     def run(self, phases: list[Phase] | None = None) -> None:
         """Execute phases sequentially. Default: default_phases()."""
         if phases is None:
-            phases = default_phases(self._book_id, self._model_name, legacy_models=self._legacy_models)
+            phases = default_phases(
+                self._book_id,
+                self._model_name,
+                legacy_models=self._legacy_models,
+                muninn_model=self._muninn_model,
+            )
 
         t_total = time.monotonic()
 

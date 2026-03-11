@@ -1,6 +1,6 @@
 # Demo Database Builder
 
-8-phase pipeline that generates self-contained SQLite demo databases for the viz app. Each database contains chunks, FTS5 index, HNSW vector index, NER entities, relations, entity resolution, UMAP projections, and Node2Vec embeddings.
+10-phase pipeline that generates self-contained SQLite demo databases for the viz app. Each database contains chunks, FTS5 index, HNSW vector index, NER entities, relations, entity resolution, UMAP projections, and Node2Vec embeddings.
 
 ## CLI Usage
 
@@ -25,18 +25,77 @@ uv run -m benchmarks.demo_builder write-manifest
 uv run -m benchmarks.demo_builder build --output-folder /tmp/demos --book-id 3300 --embedding-model MiniLM
 ```
 
+## Build Pipeline DAG
+
+The pipeline is a directed acyclic graph with two parallel tracks branching from `chunks`:
+
+```mermaid
+flowchart TB
+    TEXT[("Source Text<br/>Gutenberg / custom")]
+
+    subgraph VEC ["Vector Path  ·  embedding + projection"]
+        P1["1 · chunks<br/> chunks · chunks_fts"]
+        P2["2 · chunks_embeddings<br/> chunks_vec HNSW"]
+        P3["3 · chunks_umap<br/> chunks_vec_umap"]
+    end
+
+    subgraph NLP ["NLP Extraction  ·  NER + RE"]
+        P4["4 · ner<br/> entities · ner_chunks_log"]
+        P5["5 · relations<br/> relations · re_chunks_log"]
+    end
+
+    subgraph KG ["Graph Pipeline  ·  resolution + structural embeddings"]
+        P6["6 · entity_embeddings<br/> entities_vec HNSW · entity_vec_map"]
+        P7["7 · entities_umap<br/> entities_vec_umap"]
+        P8["8 · entity_resolution<br/> entity_clusters · nodes · edges"]
+        P9["9 · node2vec<br/> node2vec_emb HNSW"]
+    end
+
+    P10["10 · metadata<br/> meta"]
+
+    TEXT --> P1
+    P1  --> P2
+    P2  --> P3
+    P1  --> P4
+    P4  --> P5
+    P4  --> P6
+    P6  --> P7
+    P5  --> P8
+    P6  --> P8
+    P8  --> P9
+    P3  --> P10
+    P7  --> P10
+    P9  --> P10
+
+    classDef vec  fill:#1e3a5f,color:#e8f4fd,stroke:#3b82f6
+    classDef nlp  fill:#3b1f4a,color:#f3e8ff,stroke:#a855f7
+    classDef kg   fill:#14382a,color:#d1fae5,stroke:#10b981
+    classDef term fill:#3d2000,color:#fef3c7,stroke:#f59e0b
+
+    class P1,P2,P3 vec
+    class P4,P5 nlp
+    class P6,P7,P8,P9 kg
+    class P10 term
+```
+
+- **Phase 1 forks**: `chunks` feeds both `chunks_embeddings` (vector path) and `ner` (NLP path) independently
+- **UMAP phases are independent**: `chunks_umap` depends only on `chunks_embeddings`; `entities_umap` depends only on `entity_embeddings`
+- **Phase 8 joins**: `entity_resolution` depends on both `relations` (P5) and `entity_embeddings` (P6)
+
 ## Build Phases
 
-| # | Phase | Description |
-|---|-------|-------------|
-| 1 | chunks+fts+embeddings | Read raw text, split into model-aware chunks, build FTS5, compute/load embeddings, insert into HNSW |
-| 2 | ner | Extract named entities with GLiNER |
-| 3 | relations | Extract relations with GLiREL |
-| 4 | entity_embeddings | Compute entity name embeddings |
-| 5 | umap | UMAP 2D+3D projections for chunks and entities |
-| 6 | entity_resolution | HNSW blocking + Jaro-Winkler + Leiden clustering |
-| 7 | node2vec | Node2Vec random walks + Skip-gram embeddings |
-| 8 | metadata+validation | Write meta table, validate all tables |
+| # | Phase | Depends on | Description |
+|---|-------|------------|-------------|
+| 1 | **chunks** | source text | Split text into model-aware chunks, build FTS5 |
+| 2 | **chunks_embeddings** | chunks | SentenceTransformer → HNSW vector index |
+| 3 | **chunks_umap** | chunks_embeddings | UMAP 2D+3D projections for chunks |
+| 4 | **ner** | chunks | Extract named entities (GLiNER2 / GLiNER / muninn) |
+| 5 | **relations** | ner | Extract relations (GLiNER2 / GLiREL / muninn) |
+| 6 | **entity_embeddings** | ner | SentenceTransformer → entity HNSW index |
+| 7 | **entities_umap** | entity_embeddings | UMAP 2D+3D projections for entities |
+| 8 | **entity_resolution** | relations + entity_embeddings | HNSW blocking + Jaro-Winkler + Leiden clustering |
+| 9 | **node2vec** | entity_resolution | Node2Vec random walks + Skip-gram embeddings |
+| 10 | **metadata** | chunks_umap + entities_umap + node2vec | Write meta table, validate all tables |
 
 ## Database Schema
 
@@ -51,75 +110,92 @@ erDiagram
     }
     chunks_vec {
         int rowid PK
-        blob vector "HNSW float32"
+        blob vector "HNSW 768d cosine"
+    }
+    chunks_vec_umap {
+        int id PK
+        real x2d
+        real y2d
+        real x3d
+        real y3d
+        real z3d
     }
     entities {
         int entity_id PK
-        int chunk_id FK
         text name
         text entity_type
-        int start_char
-        int end_char
+        text source "gliner2 | gliner | muninn"
+        int chunk_id FK
+        real confidence
+    }
+    ner_chunks_log {
+        int chunk_id PK
+        text processed_at
     }
     relations {
         int relation_id PK
-        int chunk_id FK
-        text src
-        text rel_type
-        text dst
-        real score
-    }
-    entity_clusters {
-        text name
-        int cluster_id
-    }
-    nodes {
-        int node_id PK
-        text name
-        text entity_type
-        int mention_count
-    }
-    edges {
-        int edge_id PK
         text src
         text dst
         text rel_type
         real weight
+        int chunk_id
+        text source "gliner2 | glirel | muninn"
+    }
+    re_chunks_log {
+        int chunk_id PK
+        text processed_at
+    }
+    entity_vec_map {
+        int rowid PK
+        text name
     }
     entities_vec {
         int rowid PK
-        blob vector "HNSW float32"
+        blob vector "HNSW 768d cosine"
+    }
+    entities_vec_umap {
+        int id PK
+        real x2d
+        real y2d
+        real x3d
+        real y3d
+        real z3d
+    }
+    entity_clusters {
+        text name PK
+        text canonical
+    }
+    nodes {
+        int node_id PK
+        text name UK
+        text entity_type
+        int mention_count
+    }
+    edges {
+        text src PK "composite PK"
+        text dst PK "composite PK"
+        text rel_type PK "composite PK"
+        real weight
     }
     node2vec_emb {
         int rowid PK
-        blob vector "HNSW float32"
-    }
-    chunks_vec_umap {
-        int chunk_id PK
-        real x2d
-        real y2d
-        real x3d
-        real y3d
-        real z3d
-    }
-    entities_vec_umap {
-        int entity_id PK
-        real x2d
-        real y2d
-        real x3d
-        real y3d
-        real z3d
+        blob vector "HNSW 64d cosine"
     }
     meta {
         text key PK
         text value
     }
 
+    chunks ||--|| chunks_vec : "chunk_id = rowid"
+    chunks ||--|| chunks_vec_umap : "chunk_id = id"
     chunks ||--o{ entities : "chunk_id"
     chunks ||--o{ relations : "chunk_id"
+    entity_vec_map ||--|| entities_vec : "rowid"
+    entity_vec_map ||--|| entities_vec_umap : "rowid = id"
     entities }o--o{ entity_clusters : "name"
-    entity_clusters }o--|| nodes : "cluster → node"
-    nodes ||--o{ edges : "src/dst"
+    entity_clusters }o--|| nodes : "canonical = name"
+    nodes ||--o{ edges : "name = src/dst"
+    nodes ||--|| node2vec_emb : "node_id = rowid"
 ```
 
 ## Prerequisites

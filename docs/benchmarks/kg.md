@@ -21,6 +21,10 @@ Compares NER models on entity extraction quality (micro F1) and performance. Eva
 | **GNER-T5 base** | Seq2seq NER | 248M | 990 MB | Generative NER via T5-base (slower, higher quality) | 
 | **GNER-T5 large** | Seq2seq NER | 783M | 3100 MB | Generative NER via T5-large | 
 | **spaCy en_core_web_lg** | Statistical NER | — | 560 MB | spaCy's large English pipeline | 
+| **Qwen3-4B (LLM)** | LLM NER | 4B | 2500 MB | Qwen3-4B instruction-tuned via llama.cpp GGUF | 
+| **Qwen3-8B (LLM)** | LLM NER | 8B | 5000 MB | Qwen3-8B instruction-tuned via llama.cpp GGUF | 
+| **Phi-4-mini (LLM)** | LLM NER | 3.8B | 2500 MB | Microsoft Phi-4-mini instruction-tuned via llama.cpp GGUF | 
+| **Gemma-3-4B (LLM)** | LLM NER | 4B | 2500 MB | Google Gemma 3 4B instruction-tuned via llama.cpp GGUF | 
 
 
 #### NER Datasets

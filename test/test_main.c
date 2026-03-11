@@ -61,7 +61,8 @@ extern void test_id_validate(void);
 extern void test_graph_load(void);
 extern void test_graph_csr(void);
 extern void test_graph_selector(void);
-extern void test_embed_gguf(void);
+extern void test_llama_embed(void);
+extern void test_llama_chat(void);
 
 int main(void) {
     /* Capture the real sqlite3_api pointer so extension code works */
@@ -96,8 +97,11 @@ int main(void) {
     printf("\n[graph_selector]\n");
     test_graph_selector();
 
-    printf("\n[embed_gguf]\n");
-    test_embed_gguf();
+    printf("\n[llama_embed]\n");
+    test_llama_embed();
+
+    printf("\n[llama_chat]\n");
+    test_llama_chat();
 
     printf("\n=== Results: %d passed, %d failed ===\n", total_passed, total_failed);
 

@@ -21,6 +21,7 @@ Usage:
 import argparse
 import json
 import logging
+import platform
 import re
 import shutil
 from datetime import UTC, datetime
@@ -47,7 +48,8 @@ TEST_LINK_SOURCES = [
     "src/graph_csr.c",
     "src/graph_selector_parse.c",
     "src/graph_selector_eval.c",
-    "src/embed_gguf.c",
+    "src/llama_embed.c",
+    "src/llama_chat.c",
 ]
 
 # ── CMake flags ──────────────────────────────────────────────────────
@@ -74,6 +76,63 @@ CMAKE_FLAGS_BASE = {
 _WASM_REMOVE = {"GGML_HIP", "GGML_SYCL", "LLAMA_BUILD_COMMON", "LLAMA_BUILD_TOOLS"}
 CMAKE_FLAGS_WASM = {k: v for k, v in CMAKE_FLAGS_BASE.items() if k not in _WASM_REMOVE}
 CMAKE_FLAGS_WASM["LLAMA_WASM_MEM64"] = "OFF"
+
+# ── Platform detection ───────────────────────────────────────────────
+UNAME_S = platform.system()  # "Darwin", "Linux", "Windows"
+
+
+def _platform_cmake_overrides() -> dict[str, str]:
+    """Platform-specific CMake flag overrides layered on CMAKE_FLAGS_BASE."""
+    if UNAME_S == "Darwin":
+        return {
+            "GGML_METAL": "ON",
+            "GGML_METAL_EMBED_LIBRARY": "ON",
+            "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
+        }
+    return {}
+
+
+def _platform_cflags() -> list[str]:
+    """Platform-specific CFLAGS additions."""
+    if UNAME_S == "Darwin":
+        return ["-mmacosx-version-min=13.3", "-DMUNINN_DEFAULT_GPU_LAYERS=99"]
+    return []
+
+
+def _platform_ldflags() -> list[str]:
+    """Platform-specific LDFLAGS (beyond base -lm)."""
+    if UNAME_S == "Darwin":
+        return [
+            "-lc++",
+            "-framework Accelerate",
+            "-framework Metal",
+            "-framework MetalKit",
+            "-framework Foundation",
+        ]
+    if UNAME_S == "Linux":
+        return ["-lstdc++", "-lpthread"]
+    return []
+
+
+def _platform_shared_flags() -> str:
+    """Linker flags for building a shared library."""
+    if UNAME_S == "Darwin":
+        return "-dynamiclib -undefined dynamic_lookup"
+    return "-shared"
+
+
+def _platform_ext() -> str:
+    """Extension file suffix."""
+    if UNAME_S == "Darwin":
+        return ".dylib"
+    if UNAME_S == "Linux":
+        return ".so"
+    return ".dll"
+
+
+# ── Vendored C libraries (lightweight header+source pairs) ──────────
+VENDOR_SOURCES = ["vendor/yyjson/yyjson.c"]
+VENDOR_INCLUDE_DIRS = ["vendor/yyjson"]
 
 # ── llama.cpp paths ──────────────────────────────────────────────────
 LLAMA_LIBS = ["libllama.a", "libggml.a", "libggml-base.a", "libggml-cpu.a"]
@@ -199,8 +258,9 @@ HEADERS = _topo_sort_headers(_discover("src", "*.h", _HEADERS_EXCLUDE))
 SOURCES = _sort_sources_by_header_order(_discover("src", "*.c", _SOURCES_EXCLUDE), HEADERS)
 TEST_SOURCES = _discover("test", "test_*.c", set())
 
-# WASM lite: exclude embed_gguf.c (needs llama.cpp)
-_SOURCES_EXCLUDE_WASM_LITE = _SOURCES_EXCLUDE | {"embed_gguf.c"}
+# WASM lite: exclude llama_*.c sources (need llama.cpp)
+_LLAMA_SOURCES = {p.name for p in (PROJECT_ROOT / "src").glob("llama_*.c")}
+_SOURCES_EXCLUDE_WASM_LITE = _SOURCES_EXCLUDE | _LLAMA_SOURCES
 SOURCES_WASM_LITE = _sort_sources_by_header_order(_discover("src", "*.c", _SOURCES_EXCLUDE_WASM_LITE), HEADERS)
 
 # ── Validation ───────────────────────────────────────────────────────
@@ -247,8 +307,26 @@ def _lib_subpath(lib_name: str) -> str:
 
 
 def _llama_lib_paths() -> list[str]:
-    """Full relative paths to llama.cpp static libraries."""
+    """Full relative paths to llama.cpp core static libraries."""
     return [f"vendor/llama.cpp/build/{_lib_subpath(lib)}" for lib in LLAMA_LIBS]
+
+
+def _llama_lib_paths_full() -> list[str]:
+    """Core libs + platform-specific backend libs (blas, metal)."""
+    core = _llama_lib_paths()
+    build = "vendor/llama.cpp/build"
+    if UNAME_S == "Darwin":
+        # macOS: Accelerate BLAS always available + Metal GPU
+        core.append(f"{build}/ggml/src/ggml-blas/libggml-blas.a")
+        core.append(f"{build}/ggml/src/ggml-metal/libggml-metal.a")
+    # Linux: BLAS only if OpenBLAS installed — caller uses $(wildcard) fallback
+    return core
+
+
+def _cmake_flags_platform() -> str:
+    """CMAKE_FLAGS_BASE merged with platform overrides, as -DKEY=VAL string."""
+    merged = {**CMAKE_FLAGS_BASE, **_platform_cmake_overrides()}
+    return _cmake_flags_str(merged)
 
 
 # ======================================================================
@@ -259,6 +337,8 @@ def _llama_lib_paths() -> list[str]:
 # Makefile evaluates these via: VAR := $(shell python3 scripts/generate_build.py query VAR)
 QUERY_VARS: dict[str, callable] = {
     # File lists
+    "VENDOR_SRC": lambda: " ".join(VENDOR_SOURCES),
+    "VENDOR_INCLUDE": lambda: " ".join(f"-I{d}" for d in VENDOR_INCLUDE_DIRS),
     "SRC": lambda: " ".join(SOURCES),
     "HEADERS": lambda: " ".join(HEADERS),
     "TEST_SRC": lambda: " ".join(TEST_SOURCES),
@@ -271,12 +351,20 @@ QUERY_VARS: dict[str, callable] = {
     "MUNINN_SRC_WASM_LITE_ROOT": lambda: " ".join(SOURCES_WASM_LITE),
     "SOURCES_WASM_EXTRA_ROOT": lambda: " ".join(SOURCES_WASM_EXTRA),
     # CMake flags
-    "LLAMA_CMAKE_FLAGS": lambda: _cmake_flags_str(CMAKE_FLAGS_BASE),
+    "LLAMA_CMAKE_FLAGS": lambda: _cmake_flags_platform(),
+    "LLAMA_CMAKE_FLAGS_BASE": lambda: _cmake_flags_str(CMAKE_FLAGS_BASE),
     "LLAMA_CMAKE_FLAGS_WASM": lambda: _cmake_flags_str(CMAKE_FLAGS_WASM),
     # llama.cpp paths
     "LLAMA_INCLUDE": lambda: " ".join(f"-I{d}" for d in LLAMA_INCLUDE_DIRS),
     "LLAMA_INCLUDE_WASM": lambda: " ".join(f"-I../{d}" for d in LLAMA_INCLUDE_DIRS),
     "LLAMA_LIBS_CORE": lambda: " ".join(_llama_lib_paths()),
+    "LLAMA_LIBS": lambda: " ".join(_llama_lib_paths_full()),
+    # Platform-specific flags
+    "SHARED_FLAGS": lambda: _platform_shared_flags(),
+    "EXT": lambda: _platform_ext(),
+    "CFLAGS_PLATFORM": lambda: " ".join(_platform_cflags()),
+    "LDFLAGS_PLATFORM": lambda: " ".join(_platform_ldflags()),
+    "UNAME_S": lambda: UNAME_S,
 }
 
 
@@ -367,8 +455,10 @@ def cmd_windows(args: argparse.Namespace) -> int:
     bs = "\\"  # backslash for f-strings
     content = _WINDOWS_BAT_TEMPLATE.format(
         cmake_flags=_bat_continuation(f"    -D{k}={v}" for k, v in CMAKE_FLAGS_BASE.items()),
-        include_flags=_bat_continuation(f"    /I{d.replace('/', bs)}" for d in LLAMA_INCLUDE_DIRS),
-        source_files=_bat_continuation(f"    {s.replace('/', bs)}" for s in SOURCES),
+        include_flags=_bat_continuation(
+            f"    /I{d.replace('/', bs)}" for d in VENDOR_INCLUDE_DIRS + LLAMA_INCLUDE_DIRS
+        ),
+        source_files=_bat_continuation(f"    {s.replace('/', bs)}" for s in VENDOR_SOURCES + SOURCES),
         lib_files=_bat_continuation(f"    {lib}" for lib in LLAMA_LIBS_WINDOWS),
     )
 
@@ -483,6 +573,16 @@ def cmd_amalgamate(args: argparse.Namespace) -> int:
             lines.append(line)
         lines.append("")
 
+    # Inline vendored C sources (yyjson, etc.)
+    for src in VENDOR_SOURCES:
+        src_path = PROJECT_ROOT / src
+        lines.append(f"/* ──── {src} ──── */")
+        for line in src_path.read_text().splitlines():
+            if '#include "' in line:
+                continue
+            lines.append(line)
+        lines.append("")
+
     # Inline all source files (strip #include "..." and SQLITE_EXTENSION_INIT1)
     for src in SOURCES:
         src_path = PROJECT_ROOT / src
@@ -565,10 +665,10 @@ def cmd_npm(args: argparse.Namespace) -> int:
     scope = main["name"]
 
     # Platform binary packages
-    for platform, (os_name, cpu, ext) in NPM_PLATFORMS.items():
-        pkg_dir = dist_dir / platform
+    for plat_name, (os_name, cpu, ext) in NPM_PLATFORMS.items():
+        pkg_dir = dist_dir / plat_name
         pkg = {
-            "name": f"@{scope}/{platform}",
+            "name": f"@{scope}/{plat_name}",
             "version": main["version"],
             "description": f"{scope} native binary for {os_name} {cpu}",
             "repository": main["repository"],
@@ -597,7 +697,7 @@ def cmd_npm(args: argparse.Namespace) -> int:
 
     # Sync optionalDependencies in npm/package.json
     version = main["version"]
-    optional = {f"@{scope}/{platform}": version for platform in NPM_PLATFORMS}
+    optional = {f"@{scope}/{p}": version for p in NPM_PLATFORMS}
     if main.get("optionalDependencies") != optional:
         main["optionalDependencies"] = optional
         _write_json(main_pkg_path, main)

@@ -1,5 +1,5 @@
 /*
- * embed_gguf.c — GGUF model embedding via llama.cpp
+ * llama_embed.c — GGUF model embedding via llama.cpp
  *
  * Wraps llama.cpp's extern "C" API to provide text embedding,
  * tokenization, and model management from SQL.
@@ -12,7 +12,7 @@
  * The llama.cpp API is pure C (extern "C"), so this file compiles
  * as C11 despite linking against C++ internals at link time.
  */
-#include "embed_gguf.h"
+#include "llama_embed.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +22,7 @@
 SQLITE_EXTENSION_INIT3
 
 #include "llama.h"
+#include "yyjson.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * Model Registry
@@ -128,13 +129,21 @@ typedef struct {
 
 /*
  * Load a GGUF model for embedding inference.
+ * n_ctx_override: if > 0, use this context size; otherwise auto-detect from model metadata.
  * Returns 0 on success, -1 on failure (writes error to errbuf).
  */
-static int load_gguf_model(const char *path, LoadedModel *out, char *errbuf, int errbuf_sz) {
+static int load_gguf_model(const char *path, int n_ctx_override, LoadedModel *out, char *errbuf, int errbuf_sz) {
     ensure_backend();
 
     struct llama_model_params mparams = llama_model_default_params();
-    mparams.n_gpu_layers = 0; /* CPU-only */
+#ifndef MUNINN_DEFAULT_GPU_LAYERS
+#define MUNINN_DEFAULT_GPU_LAYERS 0
+#endif
+    int ngl = MUNINN_DEFAULT_GPU_LAYERS;
+    const char *ngl_env = getenv("MUNINN_GPU_LAYERS");
+    if (ngl_env)
+        ngl = atoi(ngl_env);
+    mparams.n_gpu_layers = ngl;
     mparams.use_mmap = 1;
 
     struct llama_model *model = llama_model_load_from_file(path, mparams);
@@ -150,17 +159,23 @@ static int load_gguf_model(const char *path, LoadedModel *out, char *errbuf, int
         return -1;
     }
 
-    /* Determine context size: use model's training context, capped for
-     * memory sanity. Embedding queries are typically short, so 8K suffices
-     * even for models trained with 32K+ context. */
-    int n_ctx_train = (int)llama_model_n_ctx_train(model);
-    int n_ctx = (n_ctx_train > 0) ? n_ctx_train : 512;
-    if (n_ctx > 8192)
-        n_ctx = 8192;
+    /* Determine context size: caller override > model metadata > fallback 512.
+     * Capped at 8192 for memory sanity — embedding queries are typically short. */
+    int n_ctx;
+    if (n_ctx_override > 0) {
+        n_ctx = n_ctx_override;
+    } else {
+        int n_ctx_train = (int)llama_model_n_ctx_train(model);
+        n_ctx = (n_ctx_train > 0) ? n_ctx_train : 512;
+        if (n_ctx > 8192)
+            n_ctx = 8192;
+    }
 
     struct llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx = (uint32_t)n_ctx;
     cparams.n_batch = (uint32_t)n_ctx;
+    /* Encoder models require n_ubatch >= n_tokens because llama_encode()
+     * processes the full sequence at once (no micro-batching possible). */
     cparams.n_ubatch = (uint32_t)n_ctx;
     cparams.embeddings = 1;
     /* Let each model's GGUF metadata control pooling type:
@@ -168,6 +183,7 @@ static int load_gguf_model(const char *path, LoadedModel *out, char *errbuf, int
      *   Decoder models (Qwen3-Embedding) → LAST token pooling */
     cparams.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
     cparams.n_threads = 4;
+    cparams.n_threads_batch = 4;
 
     struct llama_context *ctx = llama_init_from_model(model, cparams);
     if (!ctx) {
@@ -274,25 +290,30 @@ static int embed_text(ModelEntry *me, const char *text, float *out, int max_dim,
 static const char *EMBED_MODEL_PTR_TYPE = "muninn_embed_model";
 
 /*
- * muninn_embed_model(path TEXT) -> POINTER
+ * muninn_embed_model(path TEXT [, n_ctx INTEGER]) -> POINTER
  *
  * Load a GGUF model file and return an opaque pointer handle.
+ * Optional n_ctx overrides the context window size (default: model metadata, capped at 8192).
  * Used with: INSERT INTO temp.muninn_models(name, model)
  *              SELECT 'name', muninn_embed_model('path.gguf');
+ *              SELECT 'name', muninn_embed_model('path.gguf', 2048);
  */
 static void fn_embed_model(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    (void)argc;
-
     if (sqlite3_value_type(argv[0]) != SQLITE_TEXT) {
         sqlite3_result_error(ctx, "muninn_embed_model: path must be TEXT", -1);
         return;
     }
 
     const char *path = (const char *)sqlite3_value_text(argv[0]);
+    int n_ctx_override = 0; /* 0 = auto-detect from model metadata */
+    if (argc >= 2 && sqlite3_value_type(argv[1]) == SQLITE_INTEGER) {
+        n_ctx_override = sqlite3_value_int(argv[1]);
+    }
+
     char errbuf[256];
     LoadedModel lm;
 
-    if (load_gguf_model(path, &lm, errbuf, (int)sizeof(errbuf)) != 0) {
+    if (load_gguf_model(path, n_ctx_override, &lm, errbuf, (int)sizeof(errbuf)) != 0) {
         sqlite3_result_error(ctx, errbuf, -1);
         return;
     }
@@ -376,11 +397,20 @@ static void fn_model_dim(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     sqlite3_result_int(ctx, me->n_embd);
 }
 
-/*
- * muninn_tokenize(model_name TEXT, text TEXT) -> TEXT (JSON array)
+/* ──────────────────────────────────────────────────────────────────
+ * SQL Function: muninn_tokenize(model_name TEXT, text TEXT) -> TEXT (JSON subtype)
  *
- * Return the token IDs as a JSON array for debugging/inspection.
- */
+ * Tokenizes text using the loaded model's vocabulary and returns the
+ * token IDs as a JSON array, e.g. [1, 4521, 382, 9103, 2].
+ *
+ * Use cases:
+ *   - Estimate token counts for chunking: json_array_length(muninn_tokenize(...))
+ *   - Debug tokenization differences between models
+ *   - Pre-flight context window checks before muninn_chat() calls
+ *
+ * Result has JSON subtype ('J') so json_each()/json_array_length()
+ * skip re-parsing.
+ * ────────────────────────────────────────────────────────────── */
 static void fn_tokenize(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     (void)argc;
 
@@ -421,30 +451,62 @@ static void fn_tokenize(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
         return;
     }
 
-    /* Build JSON array string: [1, 2, 3, ...] */
-    /* Each token ID is at most 11 chars (-2147483648) plus comma+space */
-    size_t buf_sz = (size_t)actual * 14 + 3;
-    char *json = (char *)sqlite3_malloc((int)buf_sz);
+    /* Build JSON array via yyjson */
+    yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *arr = yyjson_mut_arr(doc);
+    yyjson_mut_doc_set_root(doc, arr);
+    for (int i = 0; i < actual; i++) {
+        yyjson_mut_arr_add_int(doc, arr, tokens[i]);
+    }
+    free(tokens);
+
+    size_t json_len = 0;
+    char *json = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, &json_len);
+    yyjson_mut_doc_free(doc);
     if (!json) {
-        free(tokens);
-        sqlite3_result_error_nomem(ctx);
+        sqlite3_result_error(ctx, "muninn_tokenize: JSON serialization failed", -1);
+        return;
+    }
+    sqlite3_result_text(ctx, json, (int)json_len, free);
+    sqlite3_result_subtype(ctx, (unsigned int)'J');
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * SQL Function: muninn_token_count(model_name TEXT, text TEXT) -> INTEGER
+ *
+ * Returns the number of tokens the model's tokenizer produces for the
+ * given text. Lightweight alternative to muninn_tokenize() when only
+ * the count is needed — no token buffer allocation, no JSON serialization.
+ *
+ * Use cases:
+ *   - Filter/partition chunks by token length before LLM calls
+ *   - Pre-flight context window checks: WHERE muninn_token_count(...) < 7600
+ * ────────────────────────────────────────────────────────────── */
+static void fn_token_count(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    (void)argc;
+
+    if (sqlite3_value_type(argv[0]) != SQLITE_TEXT || sqlite3_value_type(argv[1]) != SQLITE_TEXT) {
+        sqlite3_result_error(ctx, "muninn_token_count: expected (model_name TEXT, text TEXT)", -1);
         return;
     }
 
-    int pos = 0;
-    json[pos++] = '[';
-    for (int i = 0; i < actual; i++) {
-        if (i > 0) {
-            json[pos++] = ',';
-            json[pos++] = ' ';
-        }
-        pos += snprintf(json + pos, buf_sz - (size_t)pos, "%d", tokens[i]);
-    }
-    json[pos++] = ']';
-    json[pos] = '\0';
+    const char *name = (const char *)sqlite3_value_text(argv[0]);
+    const char *text = (const char *)sqlite3_value_text(argv[1]);
 
-    free(tokens);
-    sqlite3_result_text(ctx, json, pos, sqlite3_free);
+    ModelEntry *me = registry_find(name);
+    if (!me) {
+        char err[128];
+        snprintf(err, sizeof(err), "muninn_token_count: model '%s' not loaded", name);
+        sqlite3_result_error(ctx, err, -1);
+        return;
+    }
+
+    const struct llama_vocab *vocab = llama_model_get_vocab(me->model);
+    int n_tokens = llama_tokenize(vocab, text, (int)strlen(text), NULL, 0, 1, 1);
+    if (n_tokens < 0)
+        n_tokens = -n_tokens;
+
+    sqlite3_result_int(ctx, n_tokens);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -693,7 +755,7 @@ static sqlite3_module models_module = {
 int embed_register_functions(sqlite3 *db) {
     int rc;
 
-    rc = sqlite3_create_function(db, "muninn_embed_model", 1, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, fn_embed_model,
+    rc = sqlite3_create_function(db, "muninn_embed_model", -1, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, fn_embed_model,
                                  NULL, NULL);
     if (rc != SQLITE_OK)
         return rc;
@@ -709,6 +771,11 @@ int embed_register_functions(sqlite3 *db) {
 
     rc = sqlite3_create_function(db, "muninn_tokenize", 2, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, fn_tokenize, NULL,
                                  NULL);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    rc = sqlite3_create_function(db, "muninn_token_count", 2, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, fn_token_count,
+                                 NULL, NULL);
     if (rc != SQLITE_OK)
         return rc;
 

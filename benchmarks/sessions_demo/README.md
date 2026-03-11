@@ -1,6 +1,6 @@
 # Sessions Demo Builder
 
-10-phase pipeline that builds a sessions demo SQLite database from Claude Code JSONL session logs (`~/.claude/projects/**/*.jsonl`). The output DB is fully compatible with the `viz/` frontend: it produces the same tables as `demo_builder` (chunks, entities, relations, nodes, edges, UMAP projections, node2vec embeddings) and is registered in `manifest.json` alongside other demo DBs.
+11-phase pipeline that builds a sessions demo SQLite database from Claude Code JSONL session logs (`~/.claude/projects/**/*.jsonl`). The output DB is fully compatible with the `viz/` frontend: it produces the same tables as `demo_builder` (chunks, entities, relations, nodes, edges, UMAP projections, node2vec embeddings) and is registered in `manifest.json` alongside other demo DBs.
 
 ## CLI Usage
 
@@ -29,41 +29,41 @@ uv run -m benchmarks.sessions_demo -v build
 
 The pipeline is a directed acyclic graph, not a linear sequence. The key structural points are:
 
-- **Phase 2 forks**: `chunks` feeds both `embeddings` (vector path) and `ner` (NLP path) independently
-- **UMAP phases are independent**: `chunks_vec_umap` depends only on `embeddings`; `entities_vec_umap` depends only on `entity_embeddings` — neither depends on the other
+- **Phase 2 fans out 3-way**: `chunks` feeds `chunks_vec` (vector path), `ner`, and `relations` (NLP paths) independently — all three can run in parallel
+- **UMAP phases are independent**: `chunks_vec_umap` depends only on `chunks_vec`; `entities_vec_umap` depends only on `entity_embeddings` — neither depends on the other
 - **Phase 9 joins**: `entity_resolution` depends on both `relations` (P6) and `entity_embeddings` (P7)
 
 ```mermaid
 flowchart TB
-    JSONL[("JSONL Files\n~/.claude/projects/**/*.jsonl")]
+    JSONL[("JSONL Files<br/>~/.claude/projects/**/*.jsonl")]
 
     subgraph PRE ["Pre-KG  ·  always incremental"]
-        P1["1 · ingest\n↳ events · event_edges · projects · sessions"]
-        P2["2 · chunks\n↳ event_message_chunks · chunks · chunks_fts"]
-        P3["3 · embeddings\n↳ chunks_vec  768d HNSW"]
-        P4["4 · chunks_vec_umap\n↳ chunks_vec_umap"]
+        P1["1 · ingest<br/> events · event_edges · projects · sessions"]
+        P2["2 · chunks<br/> event_message_chunks · chunks · chunks_fts"]
+        P3["3 · embeddings<br/> chunks_vec  768d HNSW"]
+        P4["4 · chunks_vec_umap<br/> chunks_vec_umap"]
     end
 
     subgraph NLP ["NLP Extraction  ·  incremental via log tables"]
-        P5["5 · ner\n↳ entities · ner_chunks_log"]
-        P6["6 · relations\n↳ relations · re_chunks_log"]
+        P5["5 · ner<br/> entities · ner_chunks_log"]
+        P6["6 · relations<br/> relations · re_chunks_log"]
     end
 
     subgraph KG ["Graph Pipeline  ·  self-managing rebuild"]
-        P7["7 · entity_embeddings\n↳ entities_vec  768d HNSW · entity_vec_map"]
-        P8["8 · entities_vec_umap\n↳ entities_vec_umap"]
-        P9["9 · entity_resolution\n↳ entity_clusters · nodes · edges"]
-        P10["10 · node2vec\n↳ node2vec_emb HNSW"]
+        P7["7 · entity_embeddings<br/> entities_vec  768d HNSW · entity_vec_map"]
+        P8["8 · entities_vec_umap<br/> entities_vec_umap"]
+        P9["9 · entity_resolution<br/> entity_clusters · nodes · edges"]
+        P10["10 · node2vec<br/> node2vec_emb HNSW"]
     end
 
-    P11["11 · metadata\n↳ meta"]
+    P11["11 · metadata<br/> meta"]
 
     JSONL --> P1
     P1  --> P2
     P2  --> P3
     P3  --> P4
     P2  --> P5
-    P5  --> P6
+    P2  --> P6
     P5  --> P7
     P7  --> P8
     P6  --> P9
@@ -95,7 +95,7 @@ Each phase tracks its own staleness with `is_stale(conn)` — only stale phases 
 | 3 | **embeddings** | chunks | `chunk_id NOT IN chunks_vec_nodes` | `chunks_vec` (HNSW 768d) |
 | 4 | **chunks_vec_umap** | embeddings | `chunks_vec_umap` count ≠ `chunks_vec_nodes` count | `chunks_vec_umap`, `*_chunks_umap*.joblib` |
 | 5 | **ner** | chunks | Chunks `NOT IN ner_chunks_log` | `entities`, `ner_chunks_log` |
-| 6 | **relations** | ner | NER-processed chunks `NOT IN re_chunks_log` | `relations`, `re_chunks_log` |
+| 6 | **relations** | chunks | Chunks `NOT IN re_chunks_log` | `relations`, `re_chunks_log` |
 | 7 | **entity_embeddings** | ner | Entity names `NOT IN entity_vec_map` | `entities_vec` (HNSW 768d), `entity_vec_map` |
 | 8 | **entities_vec_umap** | entity_embeddings | `entities_vec_umap` count ≠ `entity_vec_map` count | `entities_vec_umap`, `*_entities_umap*.joblib` |
 | 9 | **entity_resolution** | relations + entity_embeddings | `entity_clusters` count < distinct entity names | `entity_clusters`, `nodes`, `edges` |
@@ -117,18 +117,26 @@ Each phase tracks its own staleness with `is_stale(conn)` — only stale phases 
 
 The output DB is split into two logical layers: the **session layer** (events, chunks, embeddings) and the **KG layer** (entities, relations, graph, UMAP, node2vec).
 
+### Session Layer
+
 ```mermaid
 erDiagram
     source_files {
         int id PK
-        text filepath
+        text filepath UK
         real mtime
+        int size_bytes
+        int line_count
+        text last_ingested_at
         text project_id
         text session_id
+        text file_type "main_session | subagent | agent_root"
     }
     projects {
         int id PK
         text project_id UK
+        text first_activity
+        text last_activity
         int session_count
         int event_count
     }
@@ -136,23 +144,80 @@ erDiagram
         int id PK
         text session_id
         text project_id
+        text first_timestamp
+        text last_timestamp
         int event_count
+        int subagent_count
+        int total_input_tokens
+        int total_output_tokens
+        int total_cache_read_tokens
+        int total_cache_creation_tokens
         real total_cost_usd
     }
     events {
         int id PK
         text uuid
+        text parent_uuid
         text fqn_id "project::session::uuid"
         text event_type
+        text timestamp
+        text timestamp_local
+        text session_id
+        text project_id
+        int is_sidechain
+        text agent_id
+        text agent_slug
+        text message_role
+        int is_meta
+        text first_content_block_type
         text message_content
+        text message_content_json
         text model_id
+        int input_tokens
+        int output_tokens
+        int cache_read_tokens
+        int cache_creation_tokens
+        int cache_5m_tokens
         int source_file_id FK
+        int line_number
+        text raw_json
     }
     event_edges {
         int id PK
+        text project_id
+        text session_id
+        text event_uuid
+        text parent_event_uuid
         text fqn_src "project::session::parent_uuid"
         text fqn_dst "project::session::uuid"
+        int source_file_id FK
     }
+    event_message_chunks {
+        int chunk_id PK
+        int event_id FK
+        text text
+        int chunk_offset
+    }
+    chunks {
+        int chunk_id PK
+        text text
+    }
+
+    source_files ||--o{ events : "source_file_id"
+    source_files ||--o{ event_edges : "source_file_id"
+    projects ||--o{ sessions : "project_id"
+    sessions ||--o{ events : "session_id"
+    events ||--o{ event_edges : "uuid"
+    events ||--o{ event_message_chunks : "event_id"
+    event_message_chunks ||--|| chunks : "chunk_id"
+```
+
+FTS5 virtual tables (`events_fts`, `event_message_chunks_fts`, `chunks_fts`) mirror their content tables for full-text search. Internal tracking tables (`cache_metadata`, `_build_progress`) manage incremental build state.
+
+### KG Layer
+
+```mermaid
+erDiagram
     chunks {
         int chunk_id PK
         text text
@@ -170,18 +235,29 @@ erDiagram
         real z3d
     }
     entities {
-        int id PK
-        int chunk_id FK
+        int entity_id PK
         text name
         text entity_type
-        real score
+        text source "gliner2 | gliner | muninn"
+        int chunk_id FK
+        real confidence
+    }
+    ner_chunks_log {
+        int chunk_id PK
+        text processed_at
     }
     relations {
-        int id PK
+        int relation_id PK
         text src
         text dst
         text rel_type
         real weight
+        int chunk_id
+        text source "gliner2 | glirel | muninn"
+    }
+    re_chunks_log {
+        int chunk_id PK
+        text processed_at
     }
     entity_vec_map {
         int rowid PK
@@ -210,33 +286,30 @@ erDiagram
         int mention_count
     }
     edges {
-        text src
-        text dst
-        text rel_type
+        text src PK "composite PK"
+        text dst PK "composite PK"
+        text rel_type PK "composite PK"
         real weight
     }
     node2vec_emb {
         int rowid PK
-        blob vector "HNSW node embeddings"
+        blob vector "HNSW 64d cosine"
     }
     meta {
         text key PK
         text value
     }
 
-    source_files ||--o{ events : "source_file_id"
-    events ||--o{ event_edges : "uuid"
-    events ||--o{ chunks : "event_id"
     chunks ||--|| chunks_vec : "chunk_id = rowid"
     chunks ||--|| chunks_vec_umap : "chunk_id = id"
     chunks ||--o{ entities : "chunk_id"
+    chunks ||--o{ relations : "chunk_id"
     entity_vec_map ||--|| entities_vec : "rowid"
     entity_vec_map ||--|| entities_vec_umap : "rowid = id"
+    entities }o--o{ entity_clusters : "name"
     entity_clusters }o--|| nodes : "canonical = name"
     nodes ||--o{ edges : "name = src/dst"
     nodes ||--|| node2vec_emb : "node_id = rowid"
-    projects ||--o{ sessions : "project_id"
-    sessions ||--o{ events : "session_id"
 ```
 
 ## Fully Qualified Names (FQN)
