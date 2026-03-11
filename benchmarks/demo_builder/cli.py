@@ -13,6 +13,7 @@ Usage:
     uv run -m benchmarks.demo_builder manifest --missing --commands
     uv run -m benchmarks.demo_builder manifest --makefile --limit 3 > Makefile
     uv run -m benchmarks.demo_builder build --book-id 3300 --embedding-model MiniLM
+    uv run -m benchmarks.demo_builder build --book-id 3300 --embedding-model MiniLM --status
     uv run -m benchmarks.demo_builder run-phase --book-id 3300 --embedding-model MiniLM chunks
     uv run -m benchmarks.demo_builder write-manifest
     uv run -m benchmarks.demo_builder list-books
@@ -45,6 +46,14 @@ from benchmarks.demo_builder.manifest import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _fmt_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(n) < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024  # type: ignore[assignment]
+    return f"{n:.1f} TB"
 
 
 def _resolve_output_folder(args: argparse.Namespace) -> Path:
@@ -233,6 +242,75 @@ def _cmd_run_phase(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def _cmd_build_status(args: argparse.Namespace) -> None:
+    """Print build status for a single permutation without running anything."""
+    from benchmarks.demo_builder.build import DemoBuild, get_build_status
+
+    output_folder = _resolve_output_folder(args)
+    build = DemoBuild(args.book_id, args.embedding_model, output_folder)
+
+    # Check final path first, then staging path.
+    if build.final_path.exists():
+        db_path = build.final_path
+        location = "final"
+    elif build.staging_db_path.exists():
+        db_path = build.staging_db_path
+        location = "staging"
+    else:
+        print(f"Database not found for {build.perm_id}")
+        print(f"  Final   : {build.final_path}")
+        print(f"  Staging : {build.staging_db_path}")
+        print("Run 'build' to create it.")
+        return
+
+    s = get_build_status(db_path)
+    completed = s["completed_phases"]
+    n_phases = len(PHASE_NAMES)
+
+    print()
+    print("=== demo_builder Build Status ===")
+    print(f"Database : {s['db_path']}")
+    print(f"Location : {location}")
+    print(f"Size     : {_fmt_bytes(s['db_size_bytes'])}")
+    print()
+
+    # ── Phase progress ────────────────────────────────────────────
+    print("Phase Progress:")
+    for i, name in enumerate(PHASE_NAMES, 1):
+        if s["build_finalized"]:
+            # Build complete — all phases are done (table was dropped).
+            status_icon = "✓"
+            state_str = "complete"
+        elif name in completed:
+            status_icon = "✓"
+            _phase_num, ts = completed[name]
+            ts_str = ts[11:19] if len(ts) >= 19 else ts
+            state_str = f"last:{ts_str}"
+        else:
+            status_icon = " "
+            state_str = "[pending]"
+        counts = s["phase_counts"].get(name)
+        if counts is not None:
+            done_val, pend_val = counts
+            counts_str = f"  done:{done_val:>8,}  pend:{pend_val:>8,}"
+        else:
+            counts_str = ""
+        print(f"  [{status_icon}] {i:>2}/{n_phases}  {name:<22}  {state_str:<24}{counts_str}")
+    print()
+
+    # ── Current data ──────────────────────────────────────────────
+    print("Current Data:")
+    print(f"  Chunks              : {s['chunks']:>10,}  ({s['chunks_embedded']:,} embedded)")
+    print(f"  Entities            : {s['entities']:>10,}  ({s['entities_embedded']:,} embedded)")
+    print(f"  Relations           : {s['relations']:>10,}")
+    print(f"  Nodes / Edges       : {s['nodes']:,} / {s['edges']:,}")
+    print(f"  N2V embeddings      : {s['n2v_embeddings']:>10,}")
+    print(f"  UMAP (chunks)       : {s['chunks_umap']:>10,}")
+    print(f"  UMAP (entities)     : {s['entities_umap']:>10,}")
+    print(f"  Entity clusters     : {s['entity_clusters']:>10,}")
+    print()
+
+
 def _cmd_build(args: argparse.Namespace) -> None:
     """Handle the 'build' subcommand.
 
@@ -363,6 +441,11 @@ def main() -> None:
     # ── build ─────────────────────────────────────────────────────
     build_p = subparsers.add_parser("build", help="Build a single demo database")
     build_p.add_argument(
+        "--status",
+        action="store_true",
+        help="Show build status and table counts without running anything",
+    )
+    build_p.add_argument(
         "--output-folder",
         type=str,
         default=DEFAULT_OUTPUT_FOLDER,
@@ -466,7 +549,10 @@ def main() -> None:
     if args.command == "manifest":
         _cmd_manifest(args)
     elif args.command == "build":
-        _cmd_build(args)
+        if args.status:
+            _cmd_build_status(args)
+        else:
+            _cmd_build(args)
     elif args.command == "run-phase":
         _cmd_run_phase(args)
     elif args.command == "write-manifest":

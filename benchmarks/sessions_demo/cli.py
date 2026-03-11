@@ -4,6 +4,8 @@ Usage:
     uv run -m benchmarks.sessions_demo build
     uv run -m benchmarks.sessions_demo build --status
     uv run -m benchmarks.sessions_demo build --output-folder viz/frontend/public/demos
+    uv run -m benchmarks.sessions_demo build --phase ner
+    uv run -m benchmarks.sessions_demo build --phase ner --force
     uv run -m benchmarks.sessions_demo run-phase ner
     uv run -m benchmarks.sessions_demo run-phase entity_resolution
     uv run -m benchmarks.sessions_demo run-phase metadata
@@ -210,19 +212,44 @@ def _cmd_build(args: argparse.Namespace) -> None:
         print(f"Valid phase names: {', '.join(PHASE_NAMES)}")
         sys.exit(1)
 
-    message_types = _parse_message_types(args.message_types)
+    if args.force and not args.phase:
+        print("Error: --force requires --phase")
+        sys.exit(1)
 
+    if args.phase and args.run_from:
+        print("Error: --phase and --run-from are mutually exclusive")
+        sys.exit(1)
+
+    message_types = _parse_message_types(args.message_types)
     db_path = args.output_folder / args.db_name
-    build = SessionsBuild(db_path)
-    build.setup()
-    try:
-        build.run(
-            run_from=args.run_from,
-            message_types=message_types,
-            legacy_models=args.legacy_models,
-        )
-    finally:
-        build.teardown()
+
+    if args.phase:
+        # Single-phase mode: run one phase only (incremental or forced).
+        if not db_path.exists():
+            print(f"Error: database not found: {db_path}")
+            print("Run 'build' first to create it.")
+            sys.exit(1)
+
+        build = SessionsBuild(db_path)
+        build.setup()
+        try:
+            if args.force:
+                build.clear_phase(args.phase)
+            build.run_single_phase(args.phase, message_types=message_types, legacy_models=args.legacy_models)
+        finally:
+            build.teardown()
+    else:
+        # Full pipeline mode.
+        build = SessionsBuild(db_path)
+        build.setup()
+        try:
+            build.run(
+                run_from=args.run_from,
+                message_types=message_types,
+                legacy_models=args.legacy_models,
+            )
+        finally:
+            build.teardown()
 
     # Update shared manifest.json so the viz frontend discovers sessions_demo.db
     # alongside any demo_builder DBs in the same output folder.
@@ -288,6 +315,26 @@ def main(argv: list[str] | None = None) -> None:
             "content and isMeta=False — excludes tool results, skill injections, wrappers). "
             f"Other values: {', '.join(t for t in ALL_MESSAGE_TYPES if t != 'human')}. "
             "To switch filters on an existing DB, re-run with --run-from chunks."
+        ),
+    )
+    build_parser.add_argument(
+        "--phase",
+        metavar="PHASE",
+        default=None,
+        choices=PHASE_NAMES,
+        help=(
+            "Run only the named phase (restoring ctx from DB for preceding phases). "
+            "Runs incrementally by default; combine with --force to clear and rebuild. "
+            f"Valid names: {', '.join(PHASE_NAMES)}"
+        ),
+    )
+    build_parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help=(
+            "When used with --phase, clear the phase's output tables before running, "
+            "forcing a complete rebuild of that phase from scratch."
         ),
     )
     build_parser.add_argument(

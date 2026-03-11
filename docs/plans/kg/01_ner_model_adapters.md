@@ -36,8 +36,38 @@ Implement 7 NER model adapters conforming to `NerModelAdapter` ABC, wire them in
 
 The `_run_ner_dataset()` method extracts unique entity labels from gold annotations (`entities.jsonl`) and passes those as the `labels` parameter to adapters. This replaces the previously hardcoded label list.
 
+## Offline Preparation
+
+All NER adapters use `snapshot_download(repo_id, local_files_only=True)` at load time. Run once while online:
+
+```bash
+# Download all KG models (covers all NER adapters)
+uv run -m benchmarks.harness prep kg-models
+
+# Download a specific NER adapter only
+uv run -m benchmarks.harness prep kg-models --model gliner_medium-v2.1
+uv run -m benchmarks.harness prep kg-models --model numind_NuNerZero
+uv run -m benchmarks.harness prep kg-models --model gner-t5-base
+```
+
+### Per-adapter notes
+
+| Adapter | Backbone | Offline pattern |
+|---------|----------|-----------------|
+| `GLiNERAdapter` (small/medium) | `deberta-v3-base` | `snapshot_download` + `offline_mode()` |
+| `GLiNERAdapter` (large) | `deberta-v3-large` | `snapshot_download` + `offline_mode()` |
+| `NuNerZeroAdapter` | read from `gliner_config.json` | `snapshot_download` + `offline_mode()` |
+| `GNERAdapter` (T5 base/large) | none — self-contained | `snapshot_download(local_files_only=True)` only |
+| `SpaCyAdapter` | n/a — spaCy package | `spacy download en_core_web_lg` (installed once) |
+
+`offline_mode()` is required for GLiNER-based adapters because `GLiNER.from_pretrained()` calls
+`AutoTokenizer.from_pretrained(config.model_name)` without `local_files_only`. The patch forces the
+entire `transformers` loading chain into offline mode for the duration of the `with` block.
+
 ## Files
 
 - `benchmarks/harness/treatments/kg_types.py` — shared `EntityMention` and `NerModelAdapter` ABC
 - `benchmarks/harness/treatments/kg_ner_adapters.py` — adapter implementations
 - `benchmarks/harness/treatments/kg_extract.py` — `NER_ADAPTERS` dict + treatment
+- `benchmarks/harness/prep/kg_models.py` — `prep_kg_models()` for model cache prep
+- `benchmarks/demo_builder/common.py` — `offline_mode()`, `_read_backbone()` shared utilities

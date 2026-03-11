@@ -26,6 +26,24 @@ Implement retrieval quality benchmarks comparing VSS-only vs VSS+graph expansion
 
 Requires: `requires_muninn = True` (HNSW + graph_bfs)
 
+## Prerequisites
+
+GraphRAG benchmarks do not load any ML models at benchmark time. Retrieval operates entirely on a
+pre-built demo database. No `prep kg-models` step is needed for this phase.
+
+**Required before running GraphRAG benchmarks:**
+
+```bash
+# Option A: Build from Gutenberg text (sessions_demo pipeline)
+uv run -m benchmarks.sessions_demo build
+
+# Option B: Build from book text (demo_builder pipeline)
+uv run -m benchmarks.demo_builder build --book-id 3300
+```
+
+The pre-built DB must contain: `chunks`, `chunks_vec` (HNSW), `nodes`, `edges`, `chunks_fts` (FTS5).
+These are produced by the chunks, NER, RE, entity_embeddings, and node2vec phases.
+
 ## Files
 
 - **MODIFY**: `benchmarks/harness/treatments/kg_graphrag.py`

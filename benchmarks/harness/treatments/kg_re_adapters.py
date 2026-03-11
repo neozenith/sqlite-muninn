@@ -9,16 +9,20 @@ Adapters:
 - EntityPairAdapter: Baseline that emits all entity pairs as "related_to"
 """
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import spacy
 from glirel import GLiREL
 from huggingface_hub import snapshot_download
+from llama_cpp import Llama
 
 from benchmarks.demo_builder.common import offline_mode
+from benchmarks.harness.common import GGUF_MODELS_DIR
 from benchmarks.harness.treatments.kg_types import EntityMention
 
 log = logging.getLogger(__name__)
@@ -258,6 +262,127 @@ class EntityPairAdapter(ReModelAdapter):
         return "entity_pair_proxy"
 
 
+class LlmREAdapter(ReModelAdapter):
+    """LLM-based relation extraction via llama-cpp-python with structured JSON output.
+
+    Uses a GGUF chat model to extract relations between provided entities via
+    prompted generation with JSON schema grammar constraints.
+    """
+
+    def __init__(self, model_path: str, relation_types: list[str] | None = None, ctx_len: int = 4096):
+        self._model_path = model_path
+        self._relation_types = relation_types or GLIREL_DEFAULT_LABELS
+        self._ctx_len = ctx_len
+        self._model: Llama | None = None
+
+    def load(self):
+        log.info("Loading LLM RE model: %s (ctx=%d)", self._model_path, self._ctx_len)
+        self._model = Llama(
+            model_path=self._model_path,
+            n_ctx=self._ctx_len,
+            n_gpu_layers=0,
+            verbose=False,
+            chat_format="chatml",
+        )
+
+    def extract_relations(self, text, entities):
+        assert self._model is not None, "load() must be called before extract_relations()"
+
+        if len(entities) < 2:
+            return []
+
+        # Build entities JSON for the prompt
+        entities_json = json.dumps(
+            [{"text": e.text, "type": e.label, "start": e.start, "end": e.end} for e in entities]
+        )
+        relation_types_csv = ", ".join(self._relation_types)
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise relation extraction system. "
+                    "Extract relations between provided entities. /no_think"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (f"Relation types: {relation_types_csv}\nEntities: {entities_json}\nText: {text}"),
+            },
+        ]
+
+        response_format = {
+            "type": "json_object",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "relations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "head": {"type": "string"},
+                                "rel": {"type": "string"},
+                                "tail": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["head", "rel", "tail"],
+                        },
+                    }
+                },
+                "required": ["relations"],
+            },
+        }
+
+        response = self._model.create_chat_completion(
+            messages=messages,
+            response_format=response_format,
+            max_tokens=512,
+            temperature=0.0,
+        )
+
+        content = response["choices"][0]["message"]["content"]
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            log.warning("LLM RE returned invalid JSON: %.200s", content)
+            return []
+
+        # Build entity name set for validation
+        entity_names = {e.text for e in entities}
+
+        mentions = []
+        for rel in parsed.get("relations", []):
+            head = rel.get("head", "")
+            predicate = rel.get("rel", "")
+            tail = rel.get("tail", "")
+            score = float(rel.get("score", 1.0))
+
+            if not head or not predicate or not tail:
+                continue
+            if head == tail:
+                continue
+
+            # Only emit relations where at least one side is a known entity
+            if head not in entity_names and tail not in entity_names:
+                continue
+
+            mentions.append(
+                RelationMention(
+                    subject=head,
+                    predicate=predicate,
+                    object=tail,
+                    score=score,
+                )
+            )
+
+        return mentions
+
+    @property
+    def model_id(self):
+        return Path(self._model_path).stem
+
+
 def _get_span_text(token: spacy.tokens.Token) -> str:
     """Get the full span text for a token including its subtree compound modifiers."""
     # Include compound modifiers to get full noun phrases
@@ -274,4 +399,8 @@ RE_ADAPTERS: dict[str, type[ReModelAdapter] | Callable[[], ReModelAdapter]] = {
     "glirel": GLiRELAdapter,
     "spacy_svo": SpaCySVOAdapter,
     "entity_pair": EntityPairAdapter,
+    "llm-qwen3-4b": lambda: LlmREAdapter(str(GGUF_MODELS_DIR / "Qwen3-4B-Q4_K_M.gguf")),
+    "llm-qwen3-8b": lambda: LlmREAdapter(str(GGUF_MODELS_DIR / "Qwen3-8B-Q4_K_M.gguf")),
+    "llm-phi4-mini": lambda: LlmREAdapter(str(GGUF_MODELS_DIR / "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf")),
+    "llm-gemma3-4b": lambda: LlmREAdapter(str(GGUF_MODELS_DIR / "google_gemma-3-4b-it-Q4_K_M.gguf")),
 }

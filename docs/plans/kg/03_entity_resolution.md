@@ -26,6 +26,34 @@ Requires: `requires_muninn = True` (HNSW + Leiden TVFs)
 5. Cluster via Leiden
 6. Evaluate: `bcubed_f1` and pairwise F1 from `kg_metrics.py`
 
+## Offline Preparation
+
+```bash
+# Download SentenceTransformer models used by entity resolution
+uv run -m benchmarks.harness prep kg-models --model all-MiniLM-L6-v2
+uv run -m benchmarks.harness prep kg-models --model nomic-embed-text-v1.5
+```
+
+### SentenceTransformer offline loading pattern
+
+SentenceTransformer models are self-contained — no separate backbone download needed.
+Passing the local snapshot path directly bypasses all hub lookup:
+
+```python
+from huggingface_hub import snapshot_download
+from sentence_transformers import SentenceTransformer
+
+# Resolve to local snapshot path
+path = snapshot_download("nomic-ai/nomic-embed-text-v1.5", local_files_only=True)
+# Local path bypasses HF hub entirely — no offline_mode() patch required
+model = SentenceTransformer(path, trust_remote_code=True)
+```
+
+This is in contrast to GLiNER/GLiREL which need `offline_mode()` because they call
+`AutoTokenizer.from_pretrained(repo_id)` (a hub URL, not a local path) internally.
+
 ## Files
 
 - **MODIFY**: `benchmarks/harness/treatments/kg_resolve.py`
+- `benchmarks/harness/prep/kg_models.py` — includes ST models in registry
+- `benchmarks/demo_builder/phases/entity_embeddings.py` — same pattern for demo_builder

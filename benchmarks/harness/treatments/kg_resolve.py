@@ -8,13 +8,16 @@ Reference: benchmarks/demo_builder/phases/entity_resolution.py
 Source: docs/plans/kg/03_entity_resolution.md
 """
 
+import json
 import logging
 import sqlite3 as _sqlite3
 import time
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from llama_cpp import Llama
 from sentence_transformers import SentenceTransformer
 
 from benchmarks.harness.common import KG_DIR
@@ -219,6 +222,115 @@ def _run_er_pipeline(
     conn.execute("DROP TABLE IF EXISTS _er_vec")
 
     return entity_to_canonical
+
+
+class LlmERAdapter:
+    """LLM-based entity resolution via llama-cpp-python with structured JSON output.
+
+    Uses a GGUF chat model to determine which entity mentions refer to the same
+    real-world entity. Operates on candidate groups (e.g. from HNSW blocking)
+    and returns merge groups.
+
+    Not an ABC subclass — entity resolution does not have an adapter ABC.
+    """
+
+    def __init__(self, model_path: str, ctx_len: int = 4096):
+        self._model_path = model_path
+        self._ctx_len = ctx_len
+        self._model: Llama | None = None
+
+    def load(self):
+        log.info("Loading LLM ER model: %s (ctx=%d)", self._model_path, self._ctx_len)
+        self._model = Llama(
+            model_path=self._model_path,
+            n_ctx=self._ctx_len,
+            n_gpu_layers=0,
+            verbose=False,
+            chat_format="chatml",
+        )
+
+    def should_merge(self, candidates: list[str]) -> list[list[str]]:
+        """Given candidate entity mentions, group those referring to the same entity.
+
+        Args:
+            candidates: List of entity mention strings to consider for merging.
+
+        Returns:
+            List of merge groups, where each group is a list of mentions that
+            should be resolved to the same canonical entity.
+        """
+        assert self._model is not None, "load() must be called before should_merge()"
+
+        if len(candidates) < 2:
+            return []
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise entity resolution system. "
+                    "Group entity mentions that refer to the same real-world entity. /no_think"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Given these candidate entity mentions, group those that refer to the same "
+                    "real-world entity. Return JSON: "
+                    '{"groups": [["mention1", "mention2"], ...]}\n'
+                    f"Candidates: {json.dumps(candidates)}"
+                ),
+            },
+        ]
+
+        response_format = {
+            "type": "json_object",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "groups": {
+                        "type": "array",
+                        "items": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    }
+                },
+                "required": ["groups"],
+            },
+        }
+
+        response = self._model.create_chat_completion(
+            messages=messages,
+            response_format=response_format,
+            max_tokens=512,
+            temperature=0.0,
+        )
+
+        content = response["choices"][0]["message"]["content"]
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            log.warning("LLM ER returned invalid JSON: %.200s", content)
+            return []
+
+        groups = parsed.get("groups", [])
+
+        # Validate: only keep groups with 2+ members, and only members from candidates
+        candidate_set = set(candidates)
+        valid_groups = []
+        for group in groups:
+            if not isinstance(group, list):
+                continue
+            filtered = [m for m in group if isinstance(m, str) and m in candidate_set]
+            if len(filtered) >= 2:
+                valid_groups.append(filtered)
+
+        return valid_groups
+
+    @property
+    def model_id(self) -> str:
+        return Path(self._model_path).stem
 
 
 class KGEntityResolutionTreatment(Treatment):

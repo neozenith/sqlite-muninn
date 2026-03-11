@@ -13,12 +13,13 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from benchmarks.harness.common import KG_DIR
+from benchmarks.harness.common import GGUF_MODELS_DIR, KG_DIR
 from benchmarks.harness.treatments.base import Treatment
 from benchmarks.harness.treatments.kg_metrics import entity_micro_f1
 from benchmarks.harness.treatments.kg_ner_adapters import (
     GLiNERAdapter,
     GNERAdapter,
+    LlmNerAdapter,
     NuNerZeroAdapter,
     SpaCyAdapter,
 )
@@ -38,6 +39,10 @@ NER_ADAPTERS: dict[str, type[NerModelAdapter] | Callable[[], NerModelAdapter]] =
     "gner-t5-base": lambda: GNERAdapter("dyyyyyyyy/GNER-T5-base"),
     "gner-t5-large": lambda: GNERAdapter("dyyyyyyyy/GNER-T5-large"),
     "spacy_en_core_web_lg": SpaCyAdapter,
+    "llm-qwen3-4b": lambda: LlmNerAdapter(str(GGUF_MODELS_DIR / "Qwen3-4B-Q4_K_M.gguf")),
+    "llm-qwen3-8b": lambda: LlmNerAdapter(str(GGUF_MODELS_DIR / "Qwen3-8B-Q4_K_M.gguf")),
+    "llm-phi4-mini": lambda: LlmNerAdapter(str(GGUF_MODELS_DIR / "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf")),
+    "llm-gemma3-4b": lambda: LlmNerAdapter(str(GGUF_MODELS_DIR / "google_gemma-3-4b-it-Q4_K_M.gguf")),
 }
 
 

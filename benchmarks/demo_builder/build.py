@@ -21,8 +21,10 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from benchmarks.demo_builder.common import _fmt_elapsed, load_muninn
+from benchmarks.demo_builder.constants import PHASE_NAMES
 from benchmarks.demo_builder.phases import Phase, default_phases
 
 
@@ -255,3 +257,81 @@ class DemoBuild:
 
         db_size = self.final_path.stat().st_size
         self._log.info("Done! %s (%.1f MB)", self.final_path.name, db_size / 1e6)
+
+
+# ── Standalone status query ──────────────────────────────────────
+
+
+def get_build_status(db_path: Path) -> dict[str, Any]:
+    """Return a status dict for the given demo database.
+
+    Works on both staging (in-progress) and final (complete) databases.
+    Does NOT require the muninn extension or ML dependencies — only standard
+    SQLite queries against regular tables and HNSW shadow tables.
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        status: dict[str, Any] = {}
+        status["db_path"] = str(db_path)
+        status["db_size_bytes"] = db_path.stat().st_size
+
+        # ── Phase progress from _build_progress ──────────────────
+        # This table exists during build and is dropped after successful finalization.
+        # Missing table → build completed (all phases done).
+        try:
+            rows = conn.execute(
+                "SELECT phase, name, completed_at FROM _build_progress ORDER BY phase"
+            ).fetchall()
+            status["completed_phases"] = {name: (phase, ts) for phase, name, ts in rows}
+            status["build_finalized"] = False
+        except sqlite3.OperationalError:
+            status["completed_phases"] = {}
+            status["build_finalized"] = True
+
+        # ── Table row counts ─────────────────────────────────────
+        def _count(table: str) -> int:
+            try:
+                return int(conn.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0])
+            except sqlite3.OperationalError:
+                return 0
+
+        status["chunks"] = _count("chunks")
+        status["chunks_embedded"] = _count("chunks_vec_nodes")
+        status["chunks_umap"] = _count("chunks_vec_umap")
+        status["entities"] = _count("entities")
+        status["relations"] = _count("relations")
+        status["entities_embedded"] = _count("entities_vec_nodes")
+        status["entities_umap"] = _count("entities_vec_umap")
+        status["entity_clusters"] = _count("entity_clusters")
+        status["nodes"] = _count("nodes")
+        status["edges"] = _count("edges")
+        status["n2v_embeddings"] = _count("node2vec_emb_nodes")
+        status["meta"] = _count("meta")
+
+        # NER/RE processing logs (incremental tracking tables)
+        status["ner_logged"] = _count("ner_chunks_log")
+        status["re_logged"] = _count("re_chunks_log")
+
+        # ── Per-phase done/pending counts ────────────────────────
+        ch = status["chunks"]
+        emb = status["chunks_embedded"]
+        ent = status["entities"]
+        ent_emb = status["entities_embedded"]
+        nodes = status["nodes"]
+
+        status["phase_counts"] = {
+            "chunks": (ch, 0),
+            "chunks_embeddings": (emb, max(0, ch - emb)),
+            "chunks_umap": (status["chunks_umap"], max(0, emb - status["chunks_umap"])),
+            "ner": (status["ner_logged"] or ent, max(0, ch - (status["ner_logged"] or ch))),
+            "relations": (status["re_logged"] or status["relations"], max(0, ch - (status["re_logged"] or ch))),
+            "entity_embeddings": (ent_emb, max(0, ent - ent_emb)),
+            "entities_umap": (status["entities_umap"], max(0, ent_emb - status["entities_umap"])),
+            "entity_resolution": (status["entity_clusters"], max(0, ent - status["entity_clusters"])),
+            "node2vec": (status["n2v_embeddings"], max(0, nodes - status["n2v_embeddings"])),
+            "metadata": (status["meta"], 0 if status["meta"] > 0 else 1),
+        }
+
+        return status
+    finally:
+        conn.close()

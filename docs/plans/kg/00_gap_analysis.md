@@ -29,3 +29,39 @@ The KG benchmark suite benchmarks NER, RE, ER, and GraphRAG pipelines using muni
 3. **Phase 3**: ER pipeline — DONE
 4. **Phase 4**: GraphRAG retrieval — DONE
 5. **Phase 5**: Charts — DONE (verify after data flows)
+
+## Offline Readiness
+
+All KG benchmark model adapters use a two-phase offline workflow:
+
+| Phase | When | Command |
+|-------|------|---------|
+| **Online (prep)** | Once, while connected | `uv run -m benchmarks.harness prep kg-models` |
+| **Offline (benchmark)** | Any time after prep | `uv --offline run -m benchmarks.harness benchmark --id <id>` |
+
+### Model categories
+
+| Type | Models | Backbone needed? |
+|------|--------|-----------------|
+| GLiNER (3 variants) | `urchade/gliner_{small,medium,large}-v2.1` | Yes — `deberta-v3-base` / `deberta-v3-large` |
+| NuNerZero | `numind/NuNerZero` | Yes — read from `gliner_config.json:model_name` |
+| GNER-T5 (2 variants) | `dyyyyyyyy/GNER-T5-{base,large}` | No — T5 is self-contained |
+| GLiREL | `jackboyla/glirel-large-v0` | Yes — `deberta-v3-large` |
+| SentenceTransformer | MiniLM, nomic-embed-text-v1.5 | No — local snapshot path bypasses hub |
+| spaCy | `en_core_web_lg` | N/A — installed via `spacy download` |
+
+### Verification commands
+
+```bash
+# All models (KG harness, sessions_demo, demo_builder)
+uv run -m benchmarks.harness prep kg-models --status
+```
+
+### Key implementation details
+
+- **`offline_mode()` in `benchmarks.demo_builder.common`**: patches `huggingface_hub.constants.HF_HUB_OFFLINE = True`
+  so `is_offline_mode()` returns True for the entire call tree (including transformers' `AutoTokenizer`/`AutoModel`).
+  Setting `os.environ["HF_HUB_OFFLINE"]` after import is a no-op — the constant is frozen at import time.
+- **GLiNER/GLiREL backbone issue**: their snapshots ship weights only; backbone tokenizer/model repos
+  must be downloaded separately. `_read_backbone()` in `common.py` reads the backbone repo ID from the model config.
+- **SentenceTransformer**: passing a local snapshot path directly bypasses all hub lookup — no `offline_mode()` needed.

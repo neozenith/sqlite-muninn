@@ -80,6 +80,22 @@ _KG_TABLES: list[str] = [
     "_match_edges",
 ]
 
+# Tables created by each phase. Used by clear_phase() for --force rebuilds.
+# HNSW virtual tables cascade to shadow tables via xDestroy on DROP.
+_PHASE_TABLES: dict[str, list[str]] = {
+    "ingest": ["source_files", "projects", "sessions", "events", "event_edges", "events_fts"],
+    "chunks": ["event_message_chunks", "event_message_chunks_fts", "chunks", "chunks_fts"],
+    "chunks_vec": ["chunks_vec"],
+    "chunks_vec_umap": ["chunks_vec_umap"],
+    "ner": ["entities", "ner_chunks_log"],
+    "relations": ["relations", "re_chunks_log"],
+    "entity_embeddings": ["entities_vec", "entity_vec_map"],
+    "entities_vec_umap": ["entities_vec_umap"],
+    "entity_resolution": ["entity_clusters", "nodes", "edges", "_match_edges"],
+    "node2vec": ["node2vec_emb"],
+    "metadata": ["meta"],
+}
+
 
 @dataclass
 class PhaseContext:
@@ -471,3 +487,37 @@ class SessionsBuild:
         placeholders = ",".join("?" * len(names))
         self._db.execute(f"DELETE FROM _build_progress WHERE name IN ({placeholders})", names)
         self._db.commit()
+
+    def clear_phase(self, phase_name: str) -> None:
+        """Drop all tables and files created by a single phase for a clean re-run.
+
+        Used by ``build --phase PHASE --force`` to reset one phase's output
+        without touching the rest of the pipeline.  HNSW virtual table drops
+        cascade to shadow tables via xDestroy.  UMAP phases also delete their
+        joblib model files so the next run does a full refit.
+        """
+        tables = _PHASE_TABLES.get(phase_name, [])
+        for table in tables:
+            self._db.execute(f'DROP TABLE IF EXISTS "{table}"')
+        self._db.commit()
+
+        # Delete UMAP joblib models when clearing a UMAP phase.
+        if phase_name == "chunks_vec_umap":
+            from benchmarks.sessions_demo.phases.umap import _chunks_model_paths
+
+            for p in _chunks_model_paths(self._db_path):
+                if p.exists():
+                    p.unlink()
+                    self._log.info("Deleted UMAP model: %s", p.name)
+        elif phase_name == "entities_vec_umap":
+            from benchmarks.sessions_demo.phases.umap import _entities_model_paths
+
+            for p in _entities_model_paths(self._db_path):
+                if p.exists():
+                    p.unlink()
+                    self._log.info("Deleted UMAP model: %s", p.name)
+
+        # Remove build-progress record so status reflects the cleared state.
+        self._db.execute("DELETE FROM _build_progress WHERE name = ?", (phase_name,))
+        self._db.commit()
+        self._log.info("Cleared phase '%s': dropped %d table(s)", phase_name, len(tables))

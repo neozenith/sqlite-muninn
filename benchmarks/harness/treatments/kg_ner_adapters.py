@@ -10,12 +10,15 @@ Adapters:
 - SpaCyAdapter: Statistical NER via spaCy en_core_web_lg pipeline
 """
 
+import json
 import logging
 import re
+from pathlib import Path
 
 import spacy
 from gliner import GLiNER
 from huggingface_hub import snapshot_download
+from llama_cpp import Llama
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 from benchmarks.demo_builder.common import offline_mode
@@ -251,3 +254,115 @@ class SpaCyAdapter(NerModelAdapter):
     @property
     def model_type(self):
         return "spacy"
+
+
+class LlmNerAdapter(NerModelAdapter):
+    """LLM-based NER via llama-cpp-python with structured JSON output.
+
+    Uses a GGUF chat model to extract entities via prompted generation with
+    JSON schema grammar constraints. Slower than encoder models but supports
+    arbitrary entity types without fine-tuning.
+    """
+
+    def __init__(self, model_path: str, ctx_len: int = 4096):
+        self._model_path = model_path
+        self._ctx_len = ctx_len
+        self._model: Llama | None = None
+
+    def load(self):
+        log.info("Loading LLM NER model: %s (ctx=%d)", self._model_path, self._ctx_len)
+        self._model = Llama(
+            model_path=self._model_path,
+            n_ctx=self._ctx_len,
+            n_gpu_layers=0,
+            verbose=False,
+            chat_format="chatml",
+        )
+
+    def extract(self, text, labels):
+        assert self._model is not None, "load() must be called before extract()"
+
+        labels_csv = ", ".join(labels)
+        messages = [
+            {
+                "role": "system",
+                "content": ("You are a precise NER system. Extract entities of specified types. /no_think"),
+            },
+            {
+                "role": "user",
+                "content": f"Extract entities of types: {labels_csv}\nText: {text}",
+            },
+        ]
+
+        response_format = {
+            "type": "json_object",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "entities": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "type": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["text", "type"],
+                        },
+                    }
+                },
+                "required": ["entities"],
+            },
+        }
+
+        response = self._model.create_chat_completion(
+            messages=messages,
+            response_format=response_format,
+            max_tokens=512,
+            temperature=0.0,
+        )
+
+        content = response["choices"][0]["message"]["content"]
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            log.warning("LLM NER returned invalid JSON: %.200s", content)
+            return []
+
+        mentions = []
+        for entity in parsed.get("entities", []):
+            entity_text = entity.get("text", "")
+            entity_type = entity.get("type", "")
+            score = float(entity.get("score", 1.0))
+
+            if not entity_text or not entity_type:
+                continue
+
+            # Locate entity span in original text (same pattern as GNERAdapter)
+            start = text.find(entity_text)
+            if start == -1:
+                start = text.lower().find(entity_text.lower())
+            if start == -1:
+                continue
+
+            end = start + len(entity_text)
+            mentions.append(
+                EntityMention(
+                    text=text[start:end],
+                    label=entity_type,
+                    start=start,
+                    end=end,
+                    score=score,
+                )
+            )
+
+        return mentions
+
+    @property
+    def model_id(self):
+        return Path(self._model_path).stem
+
+    @property
+    def model_type(self):
+        return "llm"

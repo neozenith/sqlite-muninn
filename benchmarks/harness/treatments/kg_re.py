@@ -53,6 +53,10 @@ def _load_re_dataset(dataset_name: str) -> tuple[list[dict[str, Any]], list[dict
 _MODEL_TO_RE_ADAPTER: dict[str, str] = {
     "gliner_small-v2.1": "glirel",
     "spacy_en_core_web_lg": "spacy_svo",
+    "llm-qwen3-4b": "llm-qwen3-4b",
+    "llm-qwen3-8b": "llm-qwen3-8b",
+    "llm-phi4-mini": "llm-phi4-mini",
+    "llm-gemma3-4b": "llm-gemma3-4b",
 }
 
 
