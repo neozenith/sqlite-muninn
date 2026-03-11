@@ -144,33 +144,7 @@ export interface CentralityResponse {
   scores: CentralityScore[]
 }
 
-// ── KG Pipeline ─────────────────────────────────────────────────────
-
-export interface PipelineStage {
-  stage: number
-  name: string
-  description: string
-  count: number
-  available: boolean
-  extra?: Record<string, unknown>
-}
-
-export interface PipelineSummary {
-  stages: PipelineStage[]
-}
-
-export interface StageDetail {
-  stage: number
-  name?: string
-  available?: boolean
-  count?: number
-  [key: string]: unknown
-}
-
-export interface GraphRAGResult {
-  query: string
-  stages: Record<string, unknown>
-}
+// ── KG Search ──────────────────────────────────────────────────────
 
 export interface KGSearchFtsResult {
   chunk_id: number
@@ -208,49 +182,6 @@ export interface KGSearchResult {
   graph_edges: KGSearchGraphEdge[]
   node_community?: Record<string, number>
   community_count?: number
-}
-
-export interface StageItemsResponse {
-  stage: number
-  items: Record<string, unknown>[]
-  total: number
-  page: number
-  page_size: number
-}
-
-// ── Entity Views ───────────────────────────────────────────────────
-
-export interface GroupedEntity {
-  name: string
-  entity_type: string
-  chunk_ids: string[]
-  mention_count: number
-}
-
-export interface GroupedEntitiesResponse {
-  items: GroupedEntity[]
-  total: number
-  page: number
-  page_size: number
-}
-
-export interface ChunkEntity {
-  name: string
-  entity_type: string
-}
-
-export interface ChunkEntities {
-  chunk_id: string
-  text: string
-  entities: ChunkEntity[]
-  entity_count: number
-}
-
-export interface ChunkEntitiesResponse {
-  items: ChunkEntities[]
-  total: number
-  page: number
-  page_size: number
 }
 
 // ── UI State ────────────────────────────────────────────────────────

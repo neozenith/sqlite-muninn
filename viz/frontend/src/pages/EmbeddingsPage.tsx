@@ -23,7 +23,7 @@ export function EmbeddingsPage() {
 
   const indexName = dataset ? decodeURIComponent(dataset) : null
 
-  const { data: indexes, isLoading: indexesLoading } = useIndexes()
+  const { data: indexes } = useIndexes()
   const {
     data: embeddings,
     isLoading: embeddingsLoading,
@@ -60,41 +60,6 @@ export function EmbeddingsPage() {
 
   const is3D = dimensions === 3
   const selectedNeighbor = activeResults?.neighbors.find((n: SearchNeighbor) => n.id === selectedPointId)
-
-  // No dataset selected — show dataset picker
-  if (!indexName) {
-    return (
-      <div className="max-w-2xl mx-auto space-y-4">
-        <h2 className="text-lg font-semibold">HNSW Indexes</h2>
-        <p className="text-sm text-muted-foreground">Select an index to explore its embeddings.</p>
-        {indexesLoading ? (
-          <div className="text-muted-foreground">Loading indexes...</div>
-        ) : !indexes?.length ? (
-          <div className="text-muted-foreground">No HNSW indexes found in this database.</div>
-        ) : (
-          <div className="grid gap-3">
-            {indexes.map((idx: HnswIndexInfo) => (
-              <Card
-                key={idx.name}
-                className="hover:border-primary/50 transition-colors cursor-pointer"
-                onClick={() => navigate(`/embeddings/${encodeURIComponent(idx.name)}`)}
-              >
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">{idx.name}</CardTitle>
-                </CardHeader>
-                <CardContent className="flex gap-2">
-                  <Badge variant="secondary">{idx.node_count} points</Badge>
-                  <Badge variant="outline">{idx.dimensions}D</Badge>
-                  <Badge variant="outline">{idx.metric}</Badge>
-                  <Badge variant="outline">M={idx.m}</Badge>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
-    )
-  }
 
   return (
     <div className="flex h-full gap-4">

@@ -7,9 +7,9 @@ import { useTheme } from '@/components/ThemeProvider'
 const STORAGE_KEY = 'muninn-sidebar'
 
 const NAV_ITEMS = [
-  { to: '/embeddings', label: 'Embeddings', icon: Boxes },
-  { to: '/graph', label: 'Graph', icon: Network },
-  { to: '/kg', label: 'KG Pipeline', icon: Workflow },
+  { to: '/embeddings/chunks_vec', label: 'Embeddings', icon: Boxes },
+  { to: '/graph/edges', label: 'Graph', icon: Network },
+  { to: '/kg/query', label: 'KG Query', icon: Workflow },
 ] as const
 
 export function AppSidebar() {

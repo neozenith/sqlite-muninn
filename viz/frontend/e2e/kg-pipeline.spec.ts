@@ -1,55 +1,37 @@
 import { test, expect } from '@playwright/test';
 import { setupConsoleMonitor, checkpoint } from './helpers/checkpoint';
 
-test.describe('KG Pipeline Explorer', () => {
-  test('renders pipeline stages and allows navigation', async ({ page }) => {
+test.describe('KG Query (Escalator: Python Server-Backed)', () => {
+  test('redirects / to /kg/query/', async ({ page }) => {
     setupConsoleMonitor(page);
 
     await page.goto('/');
+    await page.waitForURL(/\/kg\/query\//);
+    await checkpoint(page, 'kg-root-redirect');
+  });
 
-    // Click the "KG Pipeline" sidebar link
-    await page.getByRole('link', { name: 'KG Pipeline' }).click();
-    await page.waitForURL(/\/kg\/?$/);
-    await checkpoint(page, 'kg-page-loaded');
+  test('redirects /kg/ to /kg/query/', async ({ page }) => {
+    setupConsoleMonitor(page);
 
-    // Pipeline heading should show loaded stages (not 0/7)
-    const pipelineHeading = page.getByText(/KG Pipeline \([1-7]\/7\)/);
-    await expect(pipelineHeading).toBeVisible({ timeout: 15_000 });
-
-    // Stage cards are rendered as Links with "N. Name" text
-    const stage1 = page.locator('a', { hasText: /^1\./ }).first();
-    await expect(stage1).toBeVisible({ timeout: 5_000 });
-
-    await checkpoint(page, 'kg-overview-loaded');
-
-    // Click on stage 3 (Entity Extraction) card — navigates to stage page
-    const stage3 = page.locator('a', { hasText: /^3\./ }).first();
-    await stage3.click();
-    await page.waitForURL(/\/kg\/entity/);
-
-    // KG stage pills should be visible on stage pages (exact: true avoids matching stage card links)
-    const entityPill = page.getByRole('link', { name: 'Entity Extraction', exact: true });
-    await expect(entityPill).toBeVisible({ timeout: 5_000 });
-
-    await checkpoint(page, 'kg-stage-3-entities');
-
-    // Navigate back to overview via pill
-    const overviewPill = page.getByRole('link', { name: 'Overview' });
-    await overviewPill.click();
-    await page.waitForURL(/\/kg\/?$/);
-
-    // Data funnel should be visible on overview
-    const funnelCard = page.getByText('Data Funnel');
-    await expect(funnelCard).toBeVisible({ timeout: 10_000 });
-
-    await checkpoint(page, 'kg-funnel-visible');
+    await page.goto('/kg/');
+    await page.waitForURL(/\/kg\/query\//);
+    await checkpoint(page, 'kg-redirect');
   });
 
   test('3-panel KG search with matching checkpoints', async ({ page }) => {
+    test.setTimeout(60_000);
     setupConsoleMonitor(page);
 
     // Navigate directly to the KG query page
     await page.goto('/kg/query/');
+
+    // Ensure the default DB (3300_NomicEmbed) is selected — previous tests may
+    // have switched to a DB without full KG tables.
+    const dbSelector = page.getByTestId('db-selector');
+    await expect(dbSelector).toBeVisible({ timeout: 10_000 });
+    await dbSelector.selectOption('3300_NomicEmbed');
+    // Wait for DB switch to complete
+    await expect(page.getByTestId('db-switching')).not.toBeVisible({ timeout: 15_000 });
 
     // 1. Initial state — 3-panel layout before search
     const queryInput = page.locator('input[placeholder*="knowledge graph"]');
@@ -62,23 +44,40 @@ test.describe('KG Pipeline Explorer', () => {
     await queryInput.pressSequentially('trade and commerce between nations', { delay: 50 });
     await searchButton.click();
 
-    // 3. Wait for FTS results in left panel
-    const ftsCard = page.locator('.border.rounded.p-2').first();
-    await expect(ftsCard).toBeVisible({ timeout: 30_000 });
+    // 3. Wait for FTS results in left panel (look for "X results" count text)
+    await expect(page.getByText(/\d+ results/)).toBeVisible({ timeout: 30_000 });
     await checkpoint(page, 'viz-checkpoint-02-fts-results');
 
     // 4. Check embedding panel shows points count
-    const embeddingCount = page.getByText(/\d+ points/);
-    await expect(embeddingCount).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/\d+ points/)).toBeVisible({ timeout: 30_000 });
     await checkpoint(page, 'viz-checkpoint-03-embedding-results');
 
     // 5. Check graph panel shows nodes count
-    const graphCount = page.getByText(/\d+ nodes/);
-    await expect(graphCount).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/\d+ nodes/)).toBeVisible({ timeout: 30_000 });
     await checkpoint(page, 'viz-checkpoint-04-graph-results');
 
     // 6. Final state — all three panels populated, hold for 6s
     await page.waitForTimeout(6_000);
     await checkpoint(page, 'viz-checkpoint-05-final-state');
+  });
+});
+
+test.describe('Embeddings Route', () => {
+  test('redirects /embeddings/ to /embeddings/chunks_vec/', async ({ page }) => {
+    setupConsoleMonitor(page);
+
+    await page.goto('/embeddings/');
+    await page.waitForURL(/\/embeddings\/chunks_vec\//);
+    await checkpoint(page, 'embeddings-redirect');
+  });
+});
+
+test.describe('Graph Route', () => {
+  test('redirects /graph/ to /graph/edges/', async ({ page }) => {
+    setupConsoleMonitor(page);
+
+    await page.goto('/graph/');
+    await page.waitForURL(/\/graph\/edges\//);
+    await checkpoint(page, 'graph-redirect');
   });
 });

@@ -4,8 +4,6 @@ import { ThemeProvider } from '@/components/ThemeProvider'
 import { Layout } from '@/components/Layout'
 import { EmbeddingsPage } from '@/pages/EmbeddingsPage'
 import { GraphPage } from '@/pages/GraphPage'
-import { KGOverviewPage } from '@/pages/KGOverviewPage'
-import { KGStagePage } from '@/pages/KGStagePage'
 import { KGQueryPage } from '@/pages/KGQueryPage'
 
 const queryClient = new QueryClient({
@@ -23,15 +21,14 @@ export default function App() {
       <ThemeProvider>
         <Routes>
           <Route element={<Layout />}>
-            <Route index element={<Navigate to="/embeddings/" replace />} />
-            <Route path="embeddings/" element={<EmbeddingsPage />} />
+            <Route index element={<Navigate to="/kg/query/" replace />} />
+            <Route path="embeddings/" element={<Navigate to="/embeddings/chunks_vec/" replace />} />
             <Route path="embeddings/:dataset" element={<EmbeddingsPage />} />
-            <Route path="graph/" element={<GraphPage />} />
+            <Route path="graph/" element={<Navigate to="/graph/edges/" replace />} />
             <Route path="graph/:dataset" element={<GraphPage />} />
-            <Route path="kg/" element={<KGOverviewPage />} />
+            <Route path="kg/" element={<Navigate to="/kg/query/" replace />} />
             <Route path="kg/query/" element={<KGQueryPage />} />
-            <Route path="kg/:stageName/" element={<KGStagePage />} />
-            <Route path="*" element={<Navigate to="/embeddings/" replace />} />
+            <Route path="*" element={<Navigate to="/kg/query/" replace />} />
           </Route>
         </Routes>
       </ThemeProvider>

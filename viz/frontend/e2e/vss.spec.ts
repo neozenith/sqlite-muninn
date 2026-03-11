@@ -2,43 +2,32 @@ import { test, expect } from '@playwright/test';
 import { setupConsoleMonitor, checkpoint } from './helpers/checkpoint';
 
 test.describe('VSS Explorer', () => {
-  test('renders embeddings page and discovers indexes', async ({ page }) => {
+  test('renders embeddings page and loads canvas state', async ({ page }) => {
     setupConsoleMonitor(page);
 
-    // Root redirects to /embeddings/ (the default sidebar route)
-    await page.goto('/');
+    // Navigate directly to the default embeddings dataset (index pages removed)
+    await page.goto('/embeddings/chunks_vec');
     await checkpoint(page, 'vss-page-loaded');
 
-    // The sidebar "Embeddings" link should be the active route
+    // The sidebar "Embeddings" link should be visible
     const sidebarLink = page.getByRole('link', { name: 'Embeddings' });
-    await expect(sidebarLink).toBeVisible();
+    await expect(sidebarLink).toBeVisible({ timeout: 10_000 });
 
-    // The dataset picker shows "HNSW Indexes" heading when no dataset selected
-    await expect(page.getByText('HNSW Indexes')).toBeVisible({ timeout: 10_000 });
-
-    // Wait for at least one index card to appear (contains "points" badge)
-    await expect(async () => {
-      const cards = await page.locator('text=/\\d+ points/').count();
-      expect(cards).toBeGreaterThanOrEqual(1);
-    }).toPass({ timeout: 10_000 });
-
-    await checkpoint(page, 'vss-indexes-discovered');
-
-    // Click the first index card to select it
-    const firstCard = page.locator('[class*="cursor-pointer"]').first();
-    await firstCard.click();
-    await page.waitForURL(/\/embeddings\/.+/);
-
-    await checkpoint(page, 'vss-index-selected');
-
-    // UMAP projection can take > 30s for large vectors.
-    // Verify we see a definitive canvas state: loading spinner, stats card, or empty state.
+    // The canvas area must show a definitive state: loading, stats, empty, or error.
     // (Never a blank canvas with no indication of state.)
     const loading = page.getByTestId('embedding-state-loading');
     const stats = page.getByTestId('embedding-stats');
     const empty = page.getByTestId('embedding-empty-state');
+    const error = page.getByTestId('embedding-state-error');
 
-    await expect(loading.or(stats).or(empty)).toBeVisible({ timeout: 5_000 });
-    await checkpoint(page, 'vss-umap-started');
+    await expect(loading.or(stats).or(empty).or(error)).toBeVisible({ timeout: 30_000 });
+    await checkpoint(page, 'vss-canvas-definitive-state');
+
+    // If stats are visible, verify point count > 0
+    if (await stats.isVisible()) {
+      const count = Number(await stats.getAttribute('data-count'));
+      expect(count, 'chunks_vec should have points > 0').toBeGreaterThan(0);
+      await checkpoint(page, 'vss-data-loaded');
+    }
   });
 });

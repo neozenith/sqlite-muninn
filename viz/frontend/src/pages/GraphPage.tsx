@@ -34,7 +34,7 @@ export function GraphPage() {
 
   const cyRef = useRef<cytoscape.Core | null>(null)
 
-  const { data: graphs, isLoading: graphsLoading } = useGraphs()
+  const { data: graphs } = useGraphs()
   const { data: subgraph, isLoading: subgraphLoading, isError: subgraphError } = useSubgraph(edgeTable)
   const { data: bfsData } = useBFS(edgeTable, nodeParam, maxDepth)
   const { data: communities } = useCommunities(edgeTable, resolution)
@@ -77,42 +77,6 @@ export function GraphPage() {
       cyRef.current.layout({ name: layoutParam, animate: true, animationDuration: 300 } as any).run()
     }
   }, [layoutParam])
-
-  // No dataset selected — show dataset picker
-  if (!edgeTable) {
-    return (
-      <div className="max-w-2xl mx-auto space-y-4">
-        <h2 className="text-lg font-semibold">Edge Tables</h2>
-        <p className="text-sm text-muted-foreground">Select an edge table to explore its graph.</p>
-        {graphsLoading ? (
-          <div className="text-muted-foreground">Loading edge tables...</div>
-        ) : !graphs?.length ? (
-          <div className="text-muted-foreground">No edge tables found in this database.</div>
-        ) : (
-          <div className="grid gap-3">
-            {graphs.map((g: EdgeTableInfo) => (
-              <Card
-                key={g.table_name}
-                className="hover:border-primary/50 transition-colors cursor-pointer"
-                onClick={() => navigate(`/graph/${encodeURIComponent(g.table_name)}`)}
-              >
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">{g.table_name}</CardTitle>
-                </CardHeader>
-                <CardContent className="flex gap-2">
-                  <Badge variant="secondary">{g.edge_count} edges</Badge>
-                  <Badge variant="outline">
-                    {g.src_col} → {g.dst_col}
-                  </Badge>
-                  {g.weight_col && <Badge variant="outline">weight: {g.weight_col}</Badge>}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
-    )
-  }
 
   // Build Cytoscape elements
   let elements = subgraph ? toCytoscapeElements(subgraph.nodes, subgraph.edges) : []

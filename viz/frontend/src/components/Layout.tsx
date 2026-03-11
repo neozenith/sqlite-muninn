@@ -1,16 +1,12 @@
-import { Outlet, useLocation } from 'react-router-dom'
+import { Outlet } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { AppSidebar } from '@/components/AppSidebar'
 import { DatabaseSelector } from '@/components/DatabaseSelector'
-import { KGStagePills } from '@/components/KGStagePills'
 import { fetchJSON } from '@/lib/services/api-client'
 import type { HealthStatus } from '@/lib/types'
 
 export function Layout() {
-  const location = useLocation()
-  const isKG = location.pathname.startsWith('/kg')
-
   const { data: health } = useQuery({
     queryKey: ['health'],
     queryFn: () => fetchJSON<HealthStatus>('/api/health'),
@@ -45,8 +41,6 @@ export function Layout() {
             </div>
           )}
         </header>
-
-        {isKG && <KGStagePills />}
 
         <div className="flex-1 min-h-0 overflow-y-auto p-4">
           <Outlet />

@@ -51,24 +51,3 @@ export const LAYOUT_OPTIONS = [
 
 export type LayoutName = (typeof LAYOUT_OPTIONS)[number]['value']
 
-/** Pipeline stage names for display. */
-export const STAGE_NAMES: Record<number, string> = {
-  1: 'Chunking',
-  2: 'Embedding',
-  3: 'Entity Extraction',
-  4: 'Relation Extraction',
-  5: 'Entity Resolution',
-  6: 'Graph Construction',
-  7: 'Node2Vec',
-}
-
-/** Pipeline stage URL slugs. */
-export const KG_STAGE_ROUTES: Record<number, string> = {
-  1: 'chunk',
-  2: 'embedding',
-  3: 'entity',
-  4: 'relation',
-  5: 'resolution',
-  6: 'graph',
-  7: 'node2vec',
-}
