@@ -321,6 +321,12 @@ examples-test-fast: examples-colab-jupytext build/muninn$(EXT)  ## Run fast exam
 examples-test-gguf: examples-colab-jupytext build/muninn$(EXT)  ## Run GGUF examples (downloads models)
 	uv run pytest --no-cov --nbmake --nbmake-timeout=600 $(foreach e,$(EXAMPLES_GGUF),examples/$(e)/$(e).ipynb)
 
+examples-test-colab: examples-colab-jupytext        ## E2E test: verify Colab badge links load in browser
+	uv run examples/e2e_colab.py
+
+examples-test-colab-code: examples-colab-jupytext    ## E2E test: verify Colab links + check _IN_COLAB code present
+	uv run examples/e2e_colab.py --check-code
+
 dist: examples-colab-jupytext dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
 	@echo ""
 	@echo "All artifacts in dist/:"

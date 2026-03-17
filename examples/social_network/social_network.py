@@ -8,12 +8,28 @@ direction='both' traverses undirected edges stored in one direction.
 """
 
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
+
+_IN_COLAB = "google.colab" in sys.modules
 
 try:
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 except NameError:
-    PROJECT_ROOT = Path.cwd().parent.parent  # notebook kernel CWD is examples/{name}/
+    if _IN_COLAB:
+        _REPO = Path("/content/sqlite-muninn")
+        if not _REPO.exists():
+            subprocess.run(
+                ["git", "clone", "--recursive", "https://github.com/neozenith/sqlite-muninn.git", str(_REPO)],
+                check=True,
+            )
+        if not list((_REPO / "build").glob("muninn.*")):
+            subprocess.run(["apt-get", "install", "-y", "libsqlite3-dev"], check=True)
+            subprocess.run(["make", "all"], cwd=str(_REPO), check=True)
+        PROJECT_ROOT = _REPO
+    else:
+        PROJECT_ROOT = Path.cwd().parent.parent  # local notebook CWD is examples/{name}/
 EXTENSION_PATH = str(PROJECT_ROOT / "build" / "muninn")
 
 # ── Data: Two friend clusters with a bridge ──────────────────────────

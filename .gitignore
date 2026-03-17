@@ -72,6 +72,7 @@ tmp/
 docs/logo/
 .playwright-cli/
 .browser-test-snap.yml
+examples/e2e_screenshots/
 npm/platforms/
 npm/wasm/
 npm/README.md
