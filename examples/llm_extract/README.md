@@ -1,6 +1,6 @@
 # LLM Extract — Comparing muninn GGUF vs GLiNER2
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/llm_extract/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/llm_extract/llm_extract.ipynb)
 
 Consolidated benchmark comparing structured information extraction across
 multiple GGUF chat models (via muninn SQL functions) and GLiNER2 (205M span
@@ -47,7 +47,7 @@ uv add gliner2      # Install GLiNER2 for comparison baseline
 
 ```bash
 # Models auto-download on first run (~7 GB total for all 4 GGUF models)
-uv run examples/llm_extract/example.py
+uv run examples/llm_extract/llm_extract.py
 ```
 
 ## Data

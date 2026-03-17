@@ -1,6 +1,6 @@
 # LLM Tokenize — Inspect How GGUF Models Tokenize Text
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/llm_tokenize/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/llm_tokenize/llm_tokenize.ipynb)
 
 Compares tokenisation across an embed model (BERT/WordPiece) and a chat model
 (BPE) using `muninn_tokenize()`, `muninn_tokenize_text()`, and
@@ -27,7 +27,7 @@ make all
 ## Run
 
 ```bash
-python examples/llm_tokenize/example.py
+python examples/llm_tokenize/llm_tokenize.py
 ```
 
 Models auto-download on first run.

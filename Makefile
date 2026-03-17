@@ -300,11 +300,26 @@ version-stamp:                                 ## Stamp VERSION into skill files
 generate-windows:                              ## Generate build_windows.bat from centralised config
 	uv run scripts/generate_build.py windows
 
+######################################################################
+# EXAMPLES
+######################################################################
+
 examples-colab-jupytext:                       ## Generate Colab notebooks + enforce README badges
 	uv run scripts/generate_build.py examples
 
 examples-colab-check:                          ## Check notebooks + README badges are up to date
 	uv run scripts/generate_build.py examples --status
+
+EXAMPLES_FAST := semantic_search social_network transit_routes research_papers movie_recommendations
+EXAMPLES_GGUF := text_embeddings llm_chat llm_summarize llm_tokenize llm_extract
+
+examples-test: examples-test-fast examples-test-gguf  ## Run all example notebooks as tests
+
+examples-test-fast: examples-colab-jupytext build/muninn$(EXT)  ## Run fast examples (no model downloads)
+	uv run pytest --nbmake $(foreach e,$(EXAMPLES_FAST),examples/$(e)/$(e).ipynb)
+
+examples-test-gguf: examples-colab-jupytext build/muninn$(EXT)  ## Run GGUF examples (downloads models)
+	uv run pytest --nbmake --nbmake-timeout=600 $(foreach e,$(EXAMPLES_GGUF),examples/$(e)/$(e).ipynb)
 
 dist: examples-colab-jupytext dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
 	@echo ""

@@ -5,7 +5,7 @@ These are used by muninn's native llama_embed subsystem (muninn_embed_model /
 muninn_embed SQL functions) for embedding benchmarks and examples.
 
 Model definitions are authoritative here and mirrored in
-examples/text_embeddings/example.py.
+examples/text_embeddings/text_embeddings.py.
 """
 
 import logging

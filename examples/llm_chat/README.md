@@ -1,6 +1,6 @@
 # LLM Chat — Free-form and Structured Chat Completion
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/llm_chat/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/llm_chat/llm_chat.ipynb)
 
 Demonstrates `muninn_chat()` for plain chat completion and grammar-constrained
 structured JSON output via GBNF.
@@ -24,7 +24,7 @@ make all
 ## Run
 
 ```bash
-python examples/llm_chat/example.py
+python examples/llm_chat/llm_chat.py
 ```
 
 Models auto-download on first run (~0.5–1.5 GB).

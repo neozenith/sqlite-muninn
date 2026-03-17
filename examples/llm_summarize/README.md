@@ -1,6 +1,6 @@
 # LLM Summarize — Text Summarisation via muninn
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/llm_summarize/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/llm_summarize/llm_summarize.ipynb)
 
 Demonstrates document summarisation using `muninn_summarize()` with a GGUF
 chat model. Handles `<think>` blocks internally — thinking models reason first,
@@ -25,7 +25,7 @@ make all
 ## Run
 
 ```bash
-python examples/llm_summarize/example.py
+python examples/llm_summarize/llm_summarize.py
 ```
 
 Model auto-downloads on first run (~0.5 GB).

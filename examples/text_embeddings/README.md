@@ -1,6 +1,6 @@
 # Text Embeddings — Semantic Search with muninn
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/text_embeddings/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/text_embeddings/text_embeddings.ipynb)
 
 Zero-dependency end-to-end example: load GGUF embedding models, embed documents,
 build HNSW indices, and perform semantic similarity search — all inside a single
@@ -41,10 +41,10 @@ make all
 
 ```bash
 # Run the example (models auto-download on first run)
-python examples/text_embeddings/example.py
+python examples/text_embeddings/text_embeddings.py
 
 # See llama.cpp internals (model loading, tensor info, etc.)
-MUNINN_LOG_LEVEL=verbose python examples/text_embeddings/example.py
+MUNINN_LOG_LEVEL=verbose python examples/text_embeddings/text_embeddings.py
 ```
 
 ## Sections

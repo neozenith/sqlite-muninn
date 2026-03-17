@@ -344,7 +344,7 @@ A complete end-to-end example is in [`examples/text_embeddings/`](https://github
 ```bash
 make all
 pip install sqlite-lembed              # local GGUF (no API key needed)
-python examples/text_embeddings/example.py
+python examples/text_embeddings/text_embeddings.py
 ```
 
 The GGUF model file (all-MiniLM-L6-v2, 36 MB) is **downloaded automatically** on first run. Set `GGUF_MODEL_PATH` to use a custom model, or `OPENAI_API_KEY` to enable the rembed section:
@@ -352,7 +352,7 @@ The GGUF model file (all-MiniLM-L6-v2, 36 MB) is **downloaded automatically** on
 ```bash
 # Both local and remote embedding
 export OPENAI_API_KEY="sk-..."
-python examples/text_embeddings/example.py
+python examples/text_embeddings/text_embeddings.py
 ```
 
 Each section runs conditionally — if sqlite-lembed or sqlite-rembed is not installed, or if `OPENAI_API_KEY` is empty, the corresponding section is skipped with a warning.

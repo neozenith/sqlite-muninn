@@ -1,6 +1,6 @@
 # Research Papers — Citation Analysis
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/research_papers/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/research_papers/research_papers.ipynb)
 
 Discover research communities and influential papers using graph algorithms.
 
@@ -23,7 +23,7 @@ Discover research communities and influential papers using graph algorithms.
 
 ```bash
 make all
-python examples/research_papers/example.py
+python examples/research_papers/research_papers.py
 ```
 
 ## Expected Output

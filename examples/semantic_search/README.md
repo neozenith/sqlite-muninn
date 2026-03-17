@@ -1,6 +1,6 @@
 # Semantic Search — Document Similarity with HNSW
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/semantic_search/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/semantic_search/semantic_search.ipynb)
 
 Find similar documents using vector embeddings and cosine similarity.
 
@@ -27,7 +27,7 @@ Find similar documents using vector embeddings and cosine similarity.
 ```bash
 # From sqlite-muninn/ after building:
 make all
-python examples/semantic_search/example.py
+python examples/semantic_search/semantic_search.py
 ```
 
 ## Expected Output

@@ -770,15 +770,15 @@ _COLAB_BASE_URL = "https://colab.research.google.com/github"
 
 def _colab_badge_md(example_name: str) -> str:
     """Markdown for the 'Open in Colab' badge linking to an example's notebook."""
-    nb_path = f"examples/{example_name}/example.ipynb"
+    nb_path = f"examples/{example_name}/{example_name}.ipynb"
     url = f"{_COLAB_BASE_URL}/{GITHUB_OWNER}/{GITHUB_REPO}/blob/{GITHUB_BRANCH}/{nb_path}"
     return f"[![Open In Colab]({_COLAB_BADGE_IMG})]({url})"
 
 
 def _discover_examples() -> list[str]:
-    """Return sorted list of example directory names containing example.py."""
+    """Return sorted list of example directory names containing {name}.py."""
     examples_dir = PROJECT_ROOT / "examples"
-    return sorted(d.name for d in examples_dir.iterdir() if d.is_dir() and (d / "example.py").exists())
+    return sorted(d.name for d in examples_dir.iterdir() if d.is_dir() and (d / f"{d.name}.py").exists())
 
 
 def _readme_has_colab_badge(readme_path: Path, example_name: str) -> bool:
@@ -836,8 +836,8 @@ def cmd_examples(args: argparse.Namespace) -> int:
     examples = _discover_examples()
     examples_dir = PROJECT_ROOT / "examples"
 
-    input_paths = [examples_dir / name / "example.py" for name in examples]
-    output_ipynb = [examples_dir / name / "example.ipynb" for name in examples]
+    input_paths = [examples_dir / name / f"{name}.py" for name in examples]
+    output_ipynb = [examples_dir / name / f"{name}.ipynb" for name in examples]
     readme_paths = [(name, examples_dir / name / "README.md") for name in examples]
 
     if args.list_inputs:
@@ -857,8 +857,8 @@ def cmd_examples(args: argparse.Namespace) -> int:
         all_ok = True
         for name in examples:
             readme = examples_dir / name / "README.md"
-            ipynb = examples_dir / name / "example.ipynb"
-            py = examples_dir / name / "example.py"
+            ipynb = examples_dir / name / f"{name}.ipynb"
+            py = examples_dir / name / f"{name}.py"
 
             if not readme.exists():
                 log.error("missing: examples/%s/README.md", name)
@@ -868,7 +868,7 @@ def cmd_examples(args: argparse.Namespace) -> int:
                 all_ok = False
 
             if dirty(ipynb, py):
-                log.error("stale: examples/%s/example.ipynb", name)
+                log.error("stale: examples/%s/%s.ipynb", name, name)
                 all_ok = False
 
         return 0 if all_ok else 1
@@ -892,25 +892,25 @@ def cmd_examples(args: argparse.Namespace) -> int:
 
     # 2. Generate .ipynb via jupytext
     for name in examples:
-        py = examples_dir / name / "example.py"
-        ipynb = examples_dir / name / "example.ipynb"
+        py = examples_dir / name / f"{name}.py"
+        ipynb = examples_dir / name / f"{name}.ipynb"
 
         if not args.force and not dirty(ipynb, py):
-            log.info("notebook: examples/%s/example.ipynb (up to date)", name)
+            log.info("notebook: examples/%s/%s.ipynb (up to date)", name, name)
             continue
 
         if args.dry_run:
-            log.info("DRY RUN: would generate examples/%s/example.ipynb", name)
+            log.info("DRY RUN: would generate examples/%s/%s.ipynb", name, name)
             continue
 
-        log.info("notebook: examples/%s/example.ipynb (generating)", name)
+        log.info("notebook: examples/%s/%s.ipynb (generating)", name, name)
         result = subprocess.run(
             [sys.executable, "-m", "jupytext", "--to", "notebook", str(py)],
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            errors.append(f"jupytext failed for examples/{name}/example.py: {result.stderr.strip()}")
+            errors.append(f"jupytext failed for examples/{name}/{name}.py: {result.stderr.strip()}")
 
     if errors:
         for err in errors:

@@ -1,6 +1,6 @@
 # Transit Routes — Shortest Paths
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/transit_routes/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/transit_routes/transit_routes.ipynb)
 
 Compare fewest-stops (BFS) vs fastest-time (Dijkstra) routing.
 
@@ -32,7 +32,7 @@ A transit network where the direct route is slow but the indirect route is fast:
 
 ```bash
 make all
-python examples/transit_routes/example.py
+python examples/transit_routes/transit_routes.py
 ```
 
 ## Expected Output

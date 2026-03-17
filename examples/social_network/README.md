@@ -1,6 +1,6 @@
 # Social Network — Friends of Friends
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/social_network/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/social_network/social_network.ipynb)
 
 Explore social connections using BFS and DFS graph traversal.
 
@@ -29,7 +29,7 @@ Edges are stored once (e.g., `Alice→Bob`) but `direction='both'` traverses bot
 
 ```bash
 make all
-python examples/social_network/example.py
+python examples/social_network/social_network.py
 ```
 
 ## Expected Output

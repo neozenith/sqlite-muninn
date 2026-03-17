@@ -113,7 +113,7 @@ Self-contained examples in the [`examples/`](examples/) directory:
 
 ```bash
 make all
-python examples/semantic_search/example.py
+python examples/semantic_search/semantic_search.py
 ```
 
 ## API Reference

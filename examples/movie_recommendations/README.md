@@ -1,6 +1,6 @@
 # Movie Recommendations — Full Pipeline
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/movie_recommendations/example.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/movie_recommendations/movie_recommendations.ipynb)
 
 Learn movie embeddings from co-viewing patterns and find similar movies.
 
@@ -44,7 +44,7 @@ See `node2vec.c:72-92` (`graph_node_index()`) and `node2vec.c:559` (`rowid = i +
 
 ```bash
 make all
-python examples/movie_recommendations/example.py
+python examples/movie_recommendations/movie_recommendations.py
 ```
 
 ## Expected Output
