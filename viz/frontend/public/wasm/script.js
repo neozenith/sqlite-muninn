@@ -406,7 +406,7 @@ function renderDbSelector(databases) {
   const select = document.createElement("select");
   select.id = "wasm-db-selector";
   select.className =
-    "h-7 rounded-md border border-gray-700 bg-gray-900 px-2 text-xs text-gray-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50";
+    "h-7 rounded-md border border-white/15 bg-surface px-2 text-xs text-neutral-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50";
   select.setAttribute("aria-label", "Select database");
 
   for (const db of databases) {
@@ -630,36 +630,52 @@ function initDeckGL() {
 function updateDeckGL(points) {
   if (!deckInstance) return;
 
-  const sphere = new luma.SphereGeometry({ radius: 1, nlat: 10, nlong: 20 });
-
-  let cx = 0,
-    cy = 0,
-    cz = 0;
-  for (const p of points) {
-    cx += p.position[0];
-    cy += p.position[1];
-    cz += p.position[2];
-  }
+  const sphere = new luma.SphereGeometry({ radius: 1, nlat: 16, nlong: 16 });
   const n = points.length || 1;
-  cx /= n;
-  cy /= n;
-  cz /= n;
 
-  let maxR = 0;
+  // ── 1. Axis-aligned bounding box (AABB) ─────────────────────────────
+  // Use AABB not bounding sphere — matches the React implementation.
+  // Point radii are a rendering concern and must NOT inflate the camera fit.
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
   for (const p of points) {
-    const dx = p.position[0] - cx;
-    const dy = p.position[1] - cy;
-    const dz = p.position[2] - cz;
-    const r = Math.sqrt(dx * dx + dy * dy + dz * dz) + p.radius;
-    if (r > maxR) maxR = r;
+    const [x, y, z] = p.position;
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
   }
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const rangeZ = maxZ - minZ || 1;
 
+  // ── 2. Centroid ──────────────────────────────────────────────────────
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const cz = (minZ + maxZ) / 2;
+
+  // ── 3. Density-proportional sphere scale ─────────────────────────────
+  // avgRange / √N / 16  — spheres shrink as the cloud gets denser,
+  // and scale relative to the cloud's extent so they're always visible
+  // but never occlude the structure.
+  const avgRange = (rangeX + rangeY + rangeZ) / 3;
+  const sphereScale = avgRange / Math.sqrt(n) / 32;
+
+  // ── 4. Per-axis zoom to fit viewport with 10% padding ───────────────
+  // zoom = log₂(viewport_px / padded_world_range)
+  // Take the minimum across all three axes so nothing clips.
+  // Z uses min(viewW, viewH) because the depth axis projects onto
+  // both screen dimensions under perspective rotation.
   const container = document.getElementById("deckgl-container");
-  const viewSize =
-    Math.min(container.clientWidth, container.clientHeight) || 400;
-  const padding = 2.0;
-  const effectiveRadius = maxR * padding || 1;
-  const zoom = Math.log2(viewSize / (2 * effectiveRadius));
+  const viewW = container.clientWidth || 800;
+  const viewH = container.clientHeight || 600;
+  const paddedX = rangeX * 1.1;
+  const paddedY = rangeY * 1.1;
+  const paddedZ = rangeZ * 1.1;
+  const zoomX = Math.log2(viewW / paddedX);
+  const zoomY = Math.log2(viewH / paddedY);
+  const zoomZ = Math.log2(Math.min(viewW, viewH) / paddedZ);
+  const zoom = Math.min(zoomX, zoomY, zoomZ);
 
   deckInstance.setProps({
     initialViewState: {
@@ -675,12 +691,15 @@ function updateDeckGL(points) {
         mesh: sphere,
         getPosition: (d) => d.position,
         getColor: (d) => d.color,
-        getTransformMatrix: (d) => [
-          d.radius, 0, 0, 0,
-          0, d.radius, 0, 0,
-          0, 0, d.radius, 0,
-          0, 0, 0, 1,
-        ],
+        getTransformMatrix: (d) => {
+          const s = d.radius * sphereScale;
+          return [
+            s, 0, 0, 0,
+            0, s, 0, 0,
+            0, 0, s, 0,
+            0, 0, 0, 1,
+          ];
+        },
         pickable: true,
         autoHighlight: true,
         updateTriggers: {
@@ -1078,12 +1097,12 @@ async function performSearch(queryText) {
           const similarity = 1 - sr.distance;
           return {
             position: coords || [
-              Math.cos((rank / total) * Math.PI * 2) * 30,
-              (similarity - 0.5) * 60,
-              Math.sin((rank / total) * Math.PI * 2) * 30,
+              Math.cos((rank / total) * Math.PI * 2) * 5,
+              (similarity - 0.5) * 10,
+              Math.sin((rank / total) * Math.PI * 2) * 5,
             ],
             color: rankColor(rank, total),
-            radius: 3 + similarity * 8,
+            radius: 5,
             chunkId: sr.rowid,
             chunkText: chunkMap[sr.rowid] || "",
             similarity: similarity,
@@ -1136,7 +1155,7 @@ function showFtsResults(results) {
       <div class="flex items-center justify-between mb-1">
         <span class="text-xs text-indigo-400 font-medium">Chunk #${r.id}</span>
       </div>
-      <p class="text-sm text-gray-300">${escapeHtml(r.text)}</p>
+      <p class="text-sm text-neutral-300">${escapeHtml(r.text)}</p>
     `;
     list.appendChild(card);
   }
@@ -1169,9 +1188,9 @@ function showEmbeddingResults(searchResults, chunkMap) {
     card.innerHTML = `
       <div class="flex items-center justify-between mb-1">
         <span class="text-xs text-indigo-400 font-medium">Chunk #${sr.rowid}</span>
-        <span class="text-xs font-mono ${similarity > 0.5 ? "text-amber-400" : similarity > 0.2 ? "text-purple-400" : "text-gray-500"}">${(similarity * 100).toFixed(1)}%</span>
+        <span class="text-xs font-mono ${similarity > 0.5 ? "text-amber-400" : similarity > 0.2 ? "text-purple-400" : "text-neutral-500"}">${(similarity * 100).toFixed(1)}%</span>
       </div>
-      <p class="text-xs text-gray-400">${escapeHtml(text)}</p>
+      <p class="text-xs text-neutral-400">${escapeHtml(text)}</p>
     `;
     container.appendChild(card);
   }

@@ -18,6 +18,17 @@ classifiers = [
     "Topic :: Database",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+dependencies = [
+    "gliner>=0.2.25",
+    "gliner2>=1.2.4",
+    "glirel>=1.2.1",
+    "huggingface-hub>=1.4.1",
+    "loguru>=0.7.3",
+    "numpy>=2.3.5",
+    "sentence-transformers>=5.2.2",
+    "spacy>=3.8.11",
+    "umap-learn>=0.5.11",
+]
 
 [project.urls]
 Homepage = "https://github.com/user/sqlite-muninn"

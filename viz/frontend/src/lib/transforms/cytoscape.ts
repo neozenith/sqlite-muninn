@@ -113,19 +113,23 @@ export function highlightBfsNodes(elements: CytoscapeElement[], bfsNodeIds: Set<
 /**
  * Add compound parent nodes per community and set `parent` on member nodes.
  * Cytoscape's cose layout natively groups children within parent bounding boxes.
+ *
+ * When `communityLabels` is provided, parent nodes use the precomputed label
+ * (e.g. "Economic Trade Theory") instead of the generic "Community 3" fallback.
  */
 export function applyCommunityGrouping(
   elements: CytoscapeElement[],
   nodeCommunity: Record<string, number>,
+  communityLabels?: Record<string, string>,
 ): CytoscapeElement[] {
   // Collect unique community IDs
   const communityIds = new Set(Object.values(nodeCommunity))
 
-  // Create parent nodes
+  // Create parent nodes — use precomputed labels when available
   const parentNodes: CytoscapeNode[] = [...communityIds].map((id) => ({
     data: {
       id: `community-${id}`,
-      label: `Community ${id}`,
+      label: communityLabels?.[String(id)] ?? `Community ${id}`,
     },
   }))
 

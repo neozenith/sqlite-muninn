@@ -1,18 +1,19 @@
 /*
  * llama_embed.c — GGUF model embedding via llama.cpp
  *
- * Wraps llama.cpp's extern "C" API to provide text embedding,
- * tokenization, and model management from SQL.
+ * Wraps llama.cpp's extern "C" API to provide text embedding
+ * and model management from SQL.
  *
  * Architecture:
- *   - Global model registry (fixed-size array, up to 16 models)
- *   - muninn_models eponymous virtual table for model lifecycle
- *   - Scalar functions for embedding, tokenization, and metadata
+ *   - Uses shared model registry from llama_common.c
+ *   - muninn_models eponymous virtual table for embed model lifecycle
+ *   - Scalar functions for embedding and metadata
  *
  * The llama.cpp API is pure C (extern "C"), so this file compiles
  * as C11 despite linking against C++ internals at link time.
  */
 #include "llama_embed.h"
+#include "llama_common.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -22,99 +23,6 @@
 SQLITE_EXTENSION_INIT3
 
 #include "llama.h"
-#include "yyjson.h"
-
-/* ═══════════════════════════════════════════════════════════════════
- * Model Registry
- * ═══════════════════════════════════════════════════════════════════ */
-
-#define MAX_MODELS 16
-#define MAX_MODEL_NAME 64
-
-typedef struct {
-    struct llama_model *model;
-    struct llama_context *ctx;
-    int n_embd;
-    int n_ctx;
-    char name[MAX_MODEL_NAME];
-    int in_use; /* 1 = slot occupied */
-} ModelEntry;
-
-static ModelEntry g_models[MAX_MODELS];
-static int g_backend_initialized = 0;
-static enum ggml_log_level g_log_level = GGML_LOG_LEVEL_NONE;
-
-/*
- * Log callback that filters by g_log_level.
- * Default level is NONE (silent). Set MUNINN_LOG_LEVEL=verbose
- * to see all llama.cpp output on stderr.
- */
-static void muninn_log_callback(enum ggml_log_level level, const char *text, void *user_data) {
-    (void)user_data;
-    if (level >= g_log_level && g_log_level != GGML_LOG_LEVEL_NONE) {
-        fputs(text, stderr);
-    }
-}
-
-static void ensure_backend(void) {
-    if (!g_backend_initialized) {
-        /* Check env var before first init — this is the only chance
-         * to suppress the model-loading chatter from llama.cpp */
-        const char *env = getenv("MUNINN_LOG_LEVEL");
-        if (env && strcmp(env, "verbose") == 0) {
-            g_log_level = GGML_LOG_LEVEL_DEBUG;
-        } else if (env && strcmp(env, "warn") == 0) {
-            g_log_level = GGML_LOG_LEVEL_WARN;
-        } else if (env && strcmp(env, "error") == 0) {
-            g_log_level = GGML_LOG_LEVEL_ERROR;
-        }
-        llama_log_set(muninn_log_callback, NULL);
-        llama_backend_init();
-        g_backend_initialized = 1;
-    }
-}
-
-static ModelEntry *registry_find(const char *name) {
-    for (int i = 0; i < MAX_MODELS; i++) {
-        if (g_models[i].in_use && strcmp(g_models[i].name, name) == 0) {
-            return &g_models[i];
-        }
-    }
-    return NULL;
-}
-
-static int registry_add(const char *name, struct llama_model *model, struct llama_context *ctx, int n_embd, int n_ctx) {
-    if (registry_find(name) != NULL)
-        return -1; /* duplicate name */
-
-    for (int i = 0; i < MAX_MODELS; i++) {
-        if (!g_models[i].in_use) {
-            g_models[i].model = model;
-            g_models[i].ctx = ctx;
-            g_models[i].n_embd = n_embd;
-            g_models[i].n_ctx = n_ctx;
-            strncpy(g_models[i].name, name, MAX_MODEL_NAME - 1);
-            g_models[i].name[MAX_MODEL_NAME - 1] = '\0';
-            g_models[i].in_use = 1;
-            return 0;
-        }
-    }
-    return -2; /* registry full */
-}
-
-static void registry_remove(const char *name) {
-    for (int i = 0; i < MAX_MODELS; i++) {
-        if (g_models[i].in_use && strcmp(g_models[i].name, name) == 0) {
-            llama_free(g_models[i].ctx);
-            llama_model_free(g_models[i].model);
-            g_models[i].in_use = 0;
-            g_models[i].ctx = NULL;
-            g_models[i].model = NULL;
-            g_models[i].name[0] = '\0';
-            return;
-        }
-    }
-}
 
 /* ═══════════════════════════════════════════════════════════════════
  * Model Loading
@@ -133,7 +41,7 @@ typedef struct {
  * Returns 0 on success, -1 on failure (writes error to errbuf).
  */
 static int load_gguf_model(const char *path, int n_ctx_override, LoadedModel *out, char *errbuf, int errbuf_sz) {
-    ensure_backend();
+    muninn_ensure_backend();
 
     struct llama_model_params mparams = llama_model_default_params();
 #ifndef MUNINN_DEFAULT_GPU_LAYERS
@@ -207,7 +115,7 @@ static int load_gguf_model(const char *path, int n_ctx_override, LoadedModel *ou
  * Generate an L2-normalized embedding for the given text.
  * Writes n_embd floats to out[]. Returns n_embd on success, -1 on error.
  */
-static int embed_text(ModelEntry *me, const char *text, float *out, int max_dim, char *errbuf, int errbuf_sz) {
+static int embed_text(MuninnModelEntry *me, const char *text, float *out, int max_dim, char *errbuf, int errbuf_sz) {
     const struct llama_vocab *vocab = llama_model_get_vocab(me->model);
     int text_len = (int)strlen(text);
 
@@ -347,7 +255,7 @@ static void fn_embed(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     const char *name = (const char *)sqlite3_value_text(argv[0]);
     const char *text = (const char *)sqlite3_value_text(argv[1]);
 
-    ModelEntry *me = registry_find(name);
+    MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_EMBED);
     if (!me) {
         char err[128];
         snprintf(err, sizeof(err), "muninn_embed: model '%s' not loaded", name);
@@ -386,7 +294,7 @@ static void fn_model_dim(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     }
 
     const char *name = (const char *)sqlite3_value_text(argv[0]);
-    ModelEntry *me = registry_find(name);
+    MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_EMBED);
     if (!me) {
         char err[128];
         snprintf(err, sizeof(err), "muninn_model_dim: model '%s' not loaded", name);
@@ -395,118 +303,6 @@ static void fn_model_dim(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     }
 
     sqlite3_result_int(ctx, me->n_embd);
-}
-
-/* ──────────────────────────────────────────────────────────────────
- * SQL Function: muninn_tokenize(model_name TEXT, text TEXT) -> TEXT (JSON subtype)
- *
- * Tokenizes text using the loaded model's vocabulary and returns the
- * token IDs as a JSON array, e.g. [1, 4521, 382, 9103, 2].
- *
- * Use cases:
- *   - Estimate token counts for chunking: json_array_length(muninn_tokenize(...))
- *   - Debug tokenization differences between models
- *   - Pre-flight context window checks before muninn_chat() calls
- *
- * Result has JSON subtype ('J') so json_each()/json_array_length()
- * skip re-parsing.
- * ────────────────────────────────────────────────────────────── */
-static void fn_tokenize(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    (void)argc;
-
-    if (sqlite3_value_type(argv[0]) != SQLITE_TEXT || sqlite3_value_type(argv[1]) != SQLITE_TEXT) {
-        sqlite3_result_error(ctx, "muninn_tokenize: expected (model_name TEXT, text TEXT)", -1);
-        return;
-    }
-
-    const char *name = (const char *)sqlite3_value_text(argv[0]);
-    const char *text = (const char *)sqlite3_value_text(argv[1]);
-
-    ModelEntry *me = registry_find(name);
-    if (!me) {
-        char err[128];
-        snprintf(err, sizeof(err), "muninn_tokenize: model '%s' not loaded", name);
-        sqlite3_result_error(ctx, err, -1);
-        return;
-    }
-
-    const struct llama_vocab *vocab = llama_model_get_vocab(me->model);
-    int text_len = (int)strlen(text);
-
-    /* Tokenize — first pass to get count */
-    int n_tokens = llama_tokenize(vocab, text, text_len, NULL, 0, 1, 1);
-    if (n_tokens < 0)
-        n_tokens = -n_tokens;
-
-    llama_token *tokens = (llama_token *)malloc((size_t)n_tokens * sizeof(llama_token));
-    if (!tokens) {
-        sqlite3_result_error_nomem(ctx);
-        return;
-    }
-
-    int actual = llama_tokenize(vocab, text, text_len, tokens, n_tokens, 1, 1);
-    if (actual < 0) {
-        free(tokens);
-        sqlite3_result_error(ctx, "muninn_tokenize: tokenization failed", -1);
-        return;
-    }
-
-    /* Build JSON array via yyjson */
-    yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
-    yyjson_mut_val *arr = yyjson_mut_arr(doc);
-    yyjson_mut_doc_set_root(doc, arr);
-    for (int i = 0; i < actual; i++) {
-        yyjson_mut_arr_add_int(doc, arr, tokens[i]);
-    }
-    free(tokens);
-
-    size_t json_len = 0;
-    char *json = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, &json_len);
-    yyjson_mut_doc_free(doc);
-    if (!json) {
-        sqlite3_result_error(ctx, "muninn_tokenize: JSON serialization failed", -1);
-        return;
-    }
-    sqlite3_result_text(ctx, json, (int)json_len, free);
-    sqlite3_result_subtype(ctx, (unsigned int)'J');
-}
-
-/* ──────────────────────────────────────────────────────────────────
- * SQL Function: muninn_token_count(model_name TEXT, text TEXT) -> INTEGER
- *
- * Returns the number of tokens the model's tokenizer produces for the
- * given text. Lightweight alternative to muninn_tokenize() when only
- * the count is needed — no token buffer allocation, no JSON serialization.
- *
- * Use cases:
- *   - Filter/partition chunks by token length before LLM calls
- *   - Pre-flight context window checks: WHERE muninn_token_count(...) < 7600
- * ────────────────────────────────────────────────────────────── */
-static void fn_token_count(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    (void)argc;
-
-    if (sqlite3_value_type(argv[0]) != SQLITE_TEXT || sqlite3_value_type(argv[1]) != SQLITE_TEXT) {
-        sqlite3_result_error(ctx, "muninn_token_count: expected (model_name TEXT, text TEXT)", -1);
-        return;
-    }
-
-    const char *name = (const char *)sqlite3_value_text(argv[0]);
-    const char *text = (const char *)sqlite3_value_text(argv[1]);
-
-    ModelEntry *me = registry_find(name);
-    if (!me) {
-        char err[128];
-        snprintf(err, sizeof(err), "muninn_token_count: model '%s' not loaded", name);
-        sqlite3_result_error(ctx, err, -1);
-        return;
-    }
-
-    const struct llama_vocab *vocab = llama_model_get_vocab(me->model);
-    int n_tokens = llama_tokenize(vocab, text, (int)strlen(text), NULL, 0, 1, 1);
-    if (n_tokens < 0)
-        n_tokens = -n_tokens;
-
-    sqlite3_result_int(ctx, n_tokens);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -525,7 +321,7 @@ typedef struct {
 
 typedef struct {
     sqlite3_vtab_cursor base;
-    int current; /* index into g_models */
+    int current; /* index into unified registry */
 } ModelsCursor;
 
 static int models_connect(sqlite3 *db, void *pAux, int argc, const char *const *argv, sqlite3_vtab **ppVtab,
@@ -586,9 +382,13 @@ static int models_close(sqlite3_vtab_cursor *pCursor) {
     return SQLITE_OK;
 }
 
-/* Advance to the next in-use slot */
+/* Advance to the next in-use embed model slot */
 static void models_advance(ModelsCursor *cur) {
-    while (cur->current < MAX_MODELS && !g_models[cur->current].in_use) {
+    int cap = muninn_registry_capacity();
+    while (cur->current < cap) {
+        MuninnModelEntry *e = muninn_registry_at(cur->current);
+        if (e && e->in_use && e->type == MUNINN_MODEL_EMBED)
+            break;
         cur->current++;
     }
 }
@@ -597,13 +397,16 @@ static int models_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *i
     (void)idxStr;
     ModelsCursor *cur = (ModelsCursor *)pCursor;
 
+    int cap = muninn_registry_capacity();
     if (idxNum == 1 && argc >= 1) {
         /* name = ? lookup */
         const char *name = (const char *)sqlite3_value_text(argv[0]);
-        cur->current = MAX_MODELS; /* EOF by default */
+        cur->current = cap; /* EOF by default */
         if (name) {
-            for (int i = 0; i < MAX_MODELS; i++) {
-                if (g_models[i].in_use && strcmp(g_models[i].name, name) == 0) {
+            for (int i = 0; i < cap; i++) {
+                MuninnModelEntry *e = muninn_registry_at(i);
+                if (e && e->in_use && e->type == MUNINN_MODEL_EMBED &&
+                    strcmp(e->name, name) == 0) {
                     cur->current = i;
                     break;
                 }
@@ -626,12 +429,12 @@ static int models_next(sqlite3_vtab_cursor *pCursor) {
 }
 
 static int models_eof(sqlite3_vtab_cursor *pCursor) {
-    return ((ModelsCursor *)pCursor)->current >= MAX_MODELS;
+    return ((ModelsCursor *)pCursor)->current >= muninn_registry_capacity();
 }
 
 static int models_column(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int col) {
     ModelsCursor *cur = (ModelsCursor *)pCursor;
-    ModelEntry *me = &g_models[cur->current];
+    MuninnModelEntry *me = muninn_registry_at(cur->current);
 
     switch (col) {
     case 0: /* name */
@@ -661,12 +464,14 @@ static int models_rowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid) {
 static int models_update(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sqlite3_int64 *pRowid) {
     (void)pVtab;
 
+    int cap = muninn_registry_capacity();
+
     /* DELETE */
     if (argc == 1) {
-        /* Find model by rowid (which is index into g_models) */
         int idx = (int)sqlite3_value_int64(argv[0]);
-        if (idx >= 0 && idx < MAX_MODELS && g_models[idx].in_use) {
-            registry_remove(g_models[idx].name);
+        MuninnModelEntry *e = muninn_registry_at(idx);
+        if (e && e->in_use && e->type == MUNINN_MODEL_EMBED) {
+            muninn_registry_remove(e->name);
         }
         return SQLITE_OK;
     }
@@ -687,16 +492,15 @@ static int models_update(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sq
             return SQLITE_ERROR;
         }
 
-        int rc = registry_add(name, lm->model, lm->ctx, lm->n_embd, lm->n_ctx);
+        int rc = muninn_registry_add(name, lm->model, lm->ctx, lm->n_embd, lm->n_ctx, MUNINN_MODEL_EMBED);
         if (rc == -1) {
             pVtab->zErrMsg = sqlite3_mprintf("muninn_models: model '%s' already loaded", name);
             return SQLITE_ERROR;
         }
         if (rc == -2) {
-            /* Registry full — free the model since we can't store it */
             llama_free(lm->ctx);
             llama_model_free(lm->model);
-            pVtab->zErrMsg = sqlite3_mprintf("muninn_models: registry full (max %d models)", MAX_MODELS);
+            pVtab->zErrMsg = sqlite3_mprintf("muninn_models: registry full (max %d models)", cap);
             return SQLITE_ERROR;
         }
 
@@ -706,8 +510,9 @@ static int models_update(sqlite3_vtab *pVtab, int argc, sqlite3_value **argv, sq
         lm->ctx = NULL;
 
         /* Return the rowid of the newly inserted model */
-        for (int i = 0; i < MAX_MODELS; i++) {
-            if (g_models[i].in_use && strcmp(g_models[i].name, name) == 0) {
+        for (int i = 0; i < cap; i++) {
+            MuninnModelEntry *e = muninn_registry_at(i);
+            if (e && e->in_use && strcmp(e->name, name) == 0) {
                 *pRowid = i;
                 break;
             }
@@ -766,16 +571,6 @@ int embed_register_functions(sqlite3 *db) {
 
     rc = sqlite3_create_function(db, "muninn_model_dim", 1, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, fn_model_dim, NULL,
                                  NULL);
-    if (rc != SQLITE_OK)
-        return rc;
-
-    rc = sqlite3_create_function(db, "muninn_tokenize", 2, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, fn_tokenize, NULL,
-                                 NULL);
-    if (rc != SQLITE_OK)
-        return rc;
-
-    rc = sqlite3_create_function(db, "muninn_token_count", 2, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, fn_token_count,
-                                 NULL, NULL);
     if (rc != SQLITE_OK)
         return rc;
 

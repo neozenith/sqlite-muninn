@@ -71,6 +71,7 @@ CLAUDE.md
 tmp/
 docs/logo/
 .playwright-cli/
+.browser-test-snap.yml
 npm/platforms/
 npm/wasm/
 npm/README.md

@@ -139,7 +139,7 @@ def test_kg_search_with_embedding(tmp_path: pathlib.Path) -> None:
 
 
 def test_kg_search_returns_community_data(tmp_path: pathlib.Path) -> None:
-    """run_kg_search returns node_community and community_count with graph results."""
+    """run_kg_search returns node_community, community_count, labels, and resolutions."""
     conn = _make_kg_search_conn(tmp_path)
 
     mock_model = MagicMock()
@@ -150,8 +150,12 @@ def test_kg_search_returns_community_data(tmp_path: pathlib.Path) -> None:
 
     assert "node_community" in result
     assert "community_count" in result
+    assert "community_labels" in result
+    assert "available_resolutions" in result
     assert isinstance(result["node_community"], dict)
     assert isinstance(result["community_count"], int)
+    assert isinstance(result["community_labels"], dict)
+    assert isinstance(result["available_resolutions"], list)
 
     if result["graph_nodes"]:
         assert result["community_count"] >= 1
@@ -175,6 +179,8 @@ def test_kg_search_community_empty_without_graph(tmp_path: pathlib.Path) -> None
 
     assert result["node_community"] == {}
     assert result["community_count"] == 0
+    assert result["community_labels"] == {}
+    assert result["available_resolutions"] == []
     conn.close()
 
 
@@ -297,6 +303,114 @@ def test_detect_model_from_db_no_meta(tmp_path: pathlib.Path) -> None:
     conn.commit()
 
     assert _detect_model_from_db(conn) == "MiniLM"
+    conn.close()
+
+
+def test_kg_search_precomputed_communities(tmp_path: pathlib.Path) -> None:
+    """run_kg_search reads precomputed leiden_communities and community_labels."""
+    conn = _make_kg_search_conn(tmp_path)
+
+    # Add precomputed Leiden communities
+    conn.execute("""
+        CREATE TABLE leiden_communities (
+            node TEXT NOT NULL, resolution REAL NOT NULL,
+            community_id INTEGER NOT NULL, modularity REAL,
+            PRIMARY KEY (node, resolution)
+        )
+    """)
+    conn.executemany(
+        "INSERT INTO leiden_communities VALUES (?, ?, ?, ?)",
+        [
+            ("Adam Smith", 1.0, 0, 0.45),
+            ("division of labor", 1.0, 0, 0.45),
+            ("free trade", 1.0, 1, 0.45),
+        ],
+    )
+
+    # Add precomputed community labels
+    conn.execute("""
+        CREATE TABLE community_labels (
+            resolution REAL NOT NULL, community_id INTEGER NOT NULL,
+            label TEXT NOT NULL, member_count INTEGER NOT NULL,
+            model TEXT NOT NULL, generated_at TEXT NOT NULL,
+            PRIMARY KEY (resolution, community_id)
+        )
+    """)
+    conn.executemany(
+        "INSERT INTO community_labels VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (1.0, 0, "Classical Economics", 2, "test", "2026-01-01"),
+            (1.0, 1, "Trade Theory", 1, "test", "2026-01-01"),
+        ],
+    )
+    conn.commit()
+
+    mock_model = MagicMock()
+    mock_model.encode.return_value = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+
+    with patch("server.services.kg._get_embedding_model", return_value=(mock_model, "")):
+        result = run_kg_search(conn, "Adam Smith")
+
+    # Should read precomputed communities
+    assert len(result["available_resolutions"]) >= 1
+    assert 1.0 in result["available_resolutions"]
+
+    # Should include community labels for communities present in BFS subgraph
+    if result["community_count"] > 0:
+        assert isinstance(result["community_labels"], dict)
+        # At least one label should be present
+        labels = result["community_labels"]
+        assert any(v in ("Classical Economics", "Trade Theory") for v in labels.values())
+    conn.close()
+
+
+def test_kg_search_resolution_switching(tmp_path: pathlib.Path) -> None:
+    """run_kg_search returns different communities at different resolutions."""
+    conn = _make_kg_search_conn(tmp_path)
+
+    # Add precomputed Leiden communities at two resolutions
+    conn.execute("""
+        CREATE TABLE leiden_communities (
+            node TEXT NOT NULL, resolution REAL NOT NULL,
+            community_id INTEGER NOT NULL, modularity REAL,
+            PRIMARY KEY (node, resolution)
+        )
+    """)
+    # Coarse: all in one community
+    conn.executemany(
+        "INSERT INTO leiden_communities VALUES (?, ?, ?, ?)",
+        [
+            ("Adam Smith", 0.25, 0, 0.3),
+            ("division of labor", 0.25, 0, 0.3),
+            ("free trade", 0.25, 0, 0.3),
+        ],
+    )
+    # Fine: each in separate communities
+    conn.executemany(
+        "INSERT INTO leiden_communities VALUES (?, ?, ?, ?)",
+        [
+            ("Adam Smith", 3.0, 0, 0.6),
+            ("division of labor", 3.0, 1, 0.6),
+            ("free trade", 3.0, 2, 0.6),
+        ],
+    )
+    conn.commit()
+
+    mock_model = MagicMock()
+    mock_model.encode.return_value = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+
+    with patch("server.services.kg._get_embedding_model", return_value=(mock_model, "")):
+        coarse = run_kg_search(conn, "Adam Smith", resolution=0.25)
+        fine = run_kg_search(conn, "Adam Smith", resolution=3.0)
+
+    # Coarse should have fewer communities than fine
+    coarse_communities = set(coarse["node_community"].values())
+    fine_communities = set(fine["node_community"].values())
+    assert len(coarse_communities) <= len(fine_communities)
+
+    # Both should report available resolutions
+    assert 0.25 in coarse["available_resolutions"]
+    assert 3.0 in coarse["available_resolutions"]
     conn.close()
 
 

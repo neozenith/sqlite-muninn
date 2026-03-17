@@ -11,11 +11,14 @@ except ImportError:
 import pytest
 
 from server.services.db import (
-    close_connection,
     discover_edge_tables,
     discover_hnsw_indexes,
-    get_connection,
+    get_active_db_id,
+    get_active_db_path,
+    reset_state,
     sanitize_fts_query,
+    set_active_db,
+    validate_startup,
 )
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
@@ -131,52 +134,65 @@ def test_discover_skips_shadow_tables(tmp_path: pathlib.Path) -> None:
     conn.close()
 
 
-def test_get_connection_file_not_found(tmp_path: pathlib.Path) -> None:
-    """get_connection raises FileNotFoundError for missing database."""
+def test_validate_startup_file_not_found(tmp_path: pathlib.Path) -> None:
+    """validate_startup raises FileNotFoundError for missing database."""
     from server import config
     from server.services import db
 
     original_db_path = config.DB_PATH
     config.DB_PATH = str(tmp_path / "nonexistent.db")
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=config.DB_PATH)
 
     try:
         with pytest.raises(FileNotFoundError, match="Database not found"):
-            get_connection()
+            validate_startup()
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
-def test_get_connection_singleton(tmp_path: pathlib.Path) -> None:
-    """get_connection returns the same connection on repeated calls."""
+def test_per_request_connections_are_independent(tmp_path: pathlib.Path) -> None:
+    """db_session yields a new connection each time — no singleton."""
     from server import config
     from server.services import db
 
     # Create a valid test database
-    db_path = str(tmp_path / "singleton_test.db")
+    db_path = str(tmp_path / "per_req.db")
     conn_setup = sqlite3.connect(db_path)
+    conn_setup.enable_load_extension(True)
+    conn_setup.load_extension(EXTENSION_PATH)
     conn_setup.close()
 
     original_db_path = config.DB_PATH
     config.DB_PATH = db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     try:
-        conn1 = get_connection()
-        conn2 = get_connection()
-        assert conn1 is conn2
+        gen1 = db.db_session()
+        conn1 = next(gen1)
+        gen2 = db.db_session()
+        conn2 = next(gen2)
+        # Per-request: different connection objects
+        assert conn1 is not conn2
+        # Both work
+        conn1.execute("SELECT 1").fetchone()
+        conn2.execute("SELECT 1").fetchone()
+        # Clean up generators
+        try:
+            next(gen1)
+        except StopIteration:
+            pass
+        try:
+            next(gen2)
+        except StopIteration:
+            pass
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
-def test_get_connection_extension_load_failure(tmp_path: pathlib.Path) -> None:
-    """get_connection handles extension load failure gracefully."""
+def test_validate_startup_extension_load_failure(tmp_path: pathlib.Path) -> None:
+    """validate_startup raises when extension cannot be loaded."""
     from server import config
     from server.services import db
 
@@ -189,28 +205,30 @@ def test_get_connection_extension_load_failure(tmp_path: pathlib.Path) -> None:
     original_ext_path = config.EXTENSION_PATH
     config.DB_PATH = db_path
     config.EXTENSION_PATH = str(tmp_path / "nonexistent_extension")
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     try:
-        # Should not raise -- extension load failure is a warning, not an error
-        conn = get_connection()
-        assert conn is not None
+        with pytest.raises(sqlite3.OperationalError):
+            validate_startup()
     finally:
         config.DB_PATH = original_db_path
         config.EXTENSION_PATH = original_ext_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
-def test_close_connection_idempotent() -> None:
-    """close_connection is safe to call when no connection exists."""
+def test_set_active_db() -> None:
+    """set_active_db updates both path and id atomically."""
     from server.services import db
 
-    db.reset_connection()
-    # Should not raise
-    close_connection()
-    close_connection()
+    db.reset_state()
+    assert get_active_db_id() is None
+
+    set_active_db("test_db", "/tmp/test.db")
+    assert get_active_db_id() == "test_db"
+    assert get_active_db_path() == "/tmp/test.db"
+
+    db.reset_state()
+    assert get_active_db_id() is None
 
 
 def test_discover_hnsw_skips_non_hnsw_config(tmp_path: pathlib.Path) -> None:

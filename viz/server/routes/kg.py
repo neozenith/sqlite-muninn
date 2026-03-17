@@ -20,13 +20,14 @@ class KGQueryRequest(BaseModel):
 
     query: str
     k: int = 10
+    resolution: float | None = None
 
 
 @router.post("/query")
 def kg_query(request: KGQueryRequest, conn: sqlite3.Connection = Depends(db_session)) -> dict[str, Any]:
     """Execute a KG search with server-side embedding, FTS, VSS + UMAP, and CTE graph."""
     try:
-        return run_kg_search(conn, request.query, k=request.k)
+        return run_kg_search(conn, request.query, k=request.k, resolution=request.resolution)
     except Exception as e:
         log.error("KG search failed: %s", e)
         raise HTTPException(status_code=500, detail=f"KG search failed: {e}") from e

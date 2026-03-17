@@ -77,8 +77,7 @@ def test_get_subgraph_no_nodes_table(tmp_path: pathlib.Path) -> None:
 
     original_db_path = config.DB_PATH
     config.DB_PATH = db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     from server.main import app
 
@@ -96,8 +95,7 @@ def test_get_subgraph_no_nodes_table(tmp_path: pathlib.Path) -> None:
             assert "mention_count" not in node
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
 def test_bfs_traversal(client: TestClient) -> None:
@@ -192,8 +190,7 @@ def test_subgraph_with_rel_type(tmp_path: pathlib.Path) -> None:
 
     original_db_path = config.DB_PATH
     config.DB_PATH = db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     from server.main import app
 
@@ -209,8 +206,7 @@ def test_subgraph_with_rel_type(tmp_path: pathlib.Path) -> None:
         assert data["edges"][0]["rel_type"] in ("KNOWS", "WORKS_WITH")
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
 def test_subgraph_without_rel_type(client: TestClient) -> None:

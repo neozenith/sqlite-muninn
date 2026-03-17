@@ -7,13 +7,11 @@ extraction model) on 5 curated documents.
 
 Sections:
   1. GGUF model loading via muninn_chat_models virtual table
-  2. Chat completion via muninn_chat() (GGUF only)
-  3. Text summarisation via muninn_summarize() (GGUF only)
-  4. NER comparison: muninn_extract_entities() per model vs GLiNER2
-  5. RE comparison: muninn_extract_relations() per model vs GLiNER2
-  6. Combined NER+RE: muninn_extract_ner_re() per model vs GLiNER2
-  7. CTE pipeline: SQL CTE chaining NER→RE per model vs GLiNER2
-  8. Summary timing + count comparison tables
+  2. NER comparison: muninn_extract_entities() per model vs GLiNER2
+  3. RE comparison: muninn_extract_relations() per model vs GLiNER2
+  4. Combined NER+RE: muninn_extract_ner_re() per model vs GLiNER2
+  5. CTE pipeline: SQL CTE chaining NER→RE per model vs GLiNER2
+  6. Summary timing + count comparison tables
 
 Requirements:
   - muninn extension (make all)
@@ -54,16 +52,22 @@ class GgufModel:
 
 MODELS = [
     GgufModel(
+        "Qwen3.5-0.8B",
+        "Qwen3.5-0.8B-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
+        0.53,
+    ),
+    GgufModel(
+        "Qwen3.5-2B",
+        "Qwen3.5-2B-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
+        1.28,
+    ),
+    GgufModel(
         "Qwen3.5-4B",
         "Qwen3.5-4B-Q4_K_M.gguf",
         "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
         2.7,
-    ),
-    GgufModel(
-        "Qwen3.5-9B",
-        "Qwen3.5-9B-Q4_K_M.gguf",
-        "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
-        5.7,
     ),
     GgufModel(
         "Gemma-3-4B",
@@ -165,7 +169,7 @@ def _subheader(title: str) -> None:
 
 
 def load_gguf_models(db: sqlite3.Connection) -> list[str]:
-    """Load all GGUF models into the muninn_chat_models registry."""
+    """Load all GGUF chat models into the muninn_chat_models registry."""
     _header("Section 1: GGUF Model Loading")
 
     names = []
@@ -200,55 +204,7 @@ def load_gliner2() -> GLiNER2:
     return model
 
 
-# ── Section 2: Chat Completion (GGUF only) ────────────────────────
-
-
-def section_chat(db: sqlite3.Connection, model_name: str) -> None:
-    """Free-form chat completion via muninn_chat()."""
-    _header(f"Section 2: Chat Completion — {model_name}")
-    print("  (GGUF only — GLiNER2 is a span extraction model, not a generative LLM)")
-
-    prompts = [
-        "What is the capital of France? Answer in one sentence.",
-        "Explain what a knowledge graph is in two sentences.",
-    ]
-
-    for prompt in prompts:
-        t0 = time.perf_counter()
-        result = db.execute("SELECT muninn_chat(?, ?)", (model_name, prompt)).fetchone()[0]
-        elapsed = time.perf_counter() - t0
-
-        clean = result.strip()
-        print(f"\n  Prompt:   {prompt}")
-        print(f"  Response: {clean[:300]}{'...' if len(clean) > 300 else ''}")
-        print(f"  Time:     {elapsed:.2f}s")
-
-
-# ── Section 3: Summarisation (GGUF only) ──────────────────────────
-
-
-def section_summarize(db: sqlite3.Connection, model_name: str) -> None:
-    """Text summarisation via muninn_summarize()."""
-    _header(f"Section 3: Summarisation — {model_name}")
-    print("  (GGUF only — GLiNER2 does not support summarisation)")
-
-    all_text = " ".join(content for _, content in DOCUMENTS)
-
-    t0 = time.perf_counter()
-    summary = db.execute("SELECT muninn_summarize(?, ?, 64)", (model_name, all_text)).fetchone()[0]
-    elapsed = time.perf_counter() - t0
-
-    print(f"\n  Input ({len(all_text)} chars): {all_text[:100]}...")
-    print(f"  Summary: {summary.strip()}")
-    print(f"  Time:    {elapsed:.2f}s")
-
-    print("\n  Per-document summaries:")
-    for doc_id, content in DOCUMENTS:
-        s = db.execute("SELECT muninn_summarize(?, ?, 32)", (model_name, content)).fetchone()[0]
-        print(f"    Doc #{doc_id}: {s.strip()}")
-
-
-# ── Section 4: NER Comparison ─────────────────────────────────────
+# ── Section 2: NER Comparison ─────────────────────────────────────
 
 
 def section_ner_comparison(
@@ -262,7 +218,7 @@ def section_ner_comparison(
       - ner_json_by_model: raw NER JSON per GGUF model per doc (for feeding into RE)
       - gliner2_ner_results: cached GLiNER2 batch NER output (reused in later sections)
     """
-    _header("Section 4: NER Comparison — muninn_extract_entities vs GLiNER2")
+    _header("Section 2: NER Comparison — muninn_extract_entities vs GLiNER2")
 
     ner_json_by_model: dict[str, dict[int, str]] = {}
 
@@ -304,12 +260,14 @@ def section_ner_comparison(
     for i, result in enumerate(ner_results):
         doc_id = doc_ids[i]
         ents = []
-        for label, items in result.get("entities", {}).items():
+        for _label, items in result.get("entities", {}).items():
             for item in items:
                 ents.append(item["text"])
+        print(f"    Doc #{doc_id}: {len(ents)} entities")
+        for label, items in result.get("entities", {}).items():
+            for item in items:
                 print(f"      {item['text']!r} ({label}, score={_score_str(item.get('confidence'))})")
         total += len(ents)
-        print(f"    Doc #{doc_id}: {len(ents)} entities")
 
     _record_time("GLiNER2", "ner", elapsed)
     _record_entities("GLiNER2", "ner", total)
@@ -318,7 +276,7 @@ def section_ner_comparison(
     return ner_json_by_model, ner_results
 
 
-# ── Section 5: RE Comparison ──────────────────────────────────────
+# ── Section 3: RE Comparison ──────────────────────────────────────
 
 
 def section_re_comparison(
@@ -334,7 +292,7 @@ def section_re_comparison(
 
     Returns gliner2_re_results: cached GLiNER2 batch RE output (reused in later sections).
     """
-    _header("Section 5: RE Comparison — muninn_extract_relations vs GLiNER2")
+    _header("Section 3: RE Comparison — muninn_extract_relations vs GLiNER2")
     print("  Note: muninn RE requires prior NER entities as input;")
     print("        GLiNER2 RE operates directly on text (no entity dependency).")
 
@@ -378,7 +336,13 @@ def section_re_comparison(
         rels = []
         for rel_type, items in result.get("relation_extraction", {}).items():
             for item in items:
-                head, tail = item[0], item[1]
+                if isinstance(item, tuple):
+                    head, tail = item
+                elif isinstance(item, dict):
+                    head = item["head"]["text"] if isinstance(item["head"], dict) else item["head"]
+                    tail = item["tail"]["text"] if isinstance(item["tail"], dict) else item["tail"]
+                else:
+                    continue
                 rels.append(item)
                 print(f"      {head} --[{rel_type}]--> {tail}")
         total += len(rels)
@@ -391,7 +355,7 @@ def section_re_comparison(
     return re_results
 
 
-# ── Section 6: Combined NER+RE Comparison ─────────────────────────
+# ── Section 4: Combined NER+RE Comparison ─────────────────────────
 
 
 def section_combined_ner_re(
@@ -403,9 +367,9 @@ def section_combined_ner_re(
     """Compare combined NER+RE in one pass.
 
     muninn: muninn_extract_ner_re() — single LLM call per document.
-    GLiNER2: reuses cached batch results from Sections 4+5.
+    GLiNER2: reuses cached batch results from Sections 2+3.
     """
-    _header("Section 6: Combined NER+RE — muninn_extract_ner_re vs GLiNER2")
+    _header("Section 4: Combined NER+RE — muninn_extract_ner_re vs GLiNER2")
 
     # ── GGUF models: single LLM call per document ──
     for model_name in gguf_models:
@@ -422,7 +386,7 @@ def section_combined_ner_re(
 
         total_e = 0
         total_r = 0
-        for doc_id, content, kg_json in results:
+        for doc_id, _content, kg_json in results:
             parsed = json.loads(kg_json)
             ents = parsed.get("entities", [])
             rels = parsed.get("relations", [])
@@ -439,8 +403,8 @@ def section_combined_ner_re(
         _record_relations(model_name, "combined", total_r)
         print(f"    Total: {total_e} entities + {total_r} relations in {elapsed:.2f}s")
 
-    # ── GLiNER2: reuse cached results from Sections 4+5 ──
-    _subheader("GLiNER2 NER+RE (cached from Sections 4+5)")
+    # ── GLiNER2: reuse cached results from Sections 2+3 ──
+    _subheader("GLiNER2 NER+RE (cached from Sections 2+3)")
     doc_ids = [doc_id for doc_id, _ in DOCUMENTS]
     elapsed = timings["GLiNER2"]["ner"] + timings["GLiNER2"]["re"]
 
@@ -455,7 +419,14 @@ def section_combined_ner_re(
         rels = []
         for rel_type, items in gliner2_re_results[i].get("relation_extraction", {}).items():
             for item in items:
-                rels.append({"head": item[0], "rel": rel_type, "tail": item[1]})
+                if isinstance(item, tuple):
+                    head, tail = item
+                elif isinstance(item, dict):
+                    head = item["head"]["text"] if isinstance(item["head"], dict) else item["head"]
+                    tail = item["tail"]["text"] if isinstance(item["tail"], dict) else item["tail"]
+                else:
+                    continue
+                rels.append({"head": head, "rel": rel_type, "tail": tail})
         total_e += len(ents)
         total_r += len(rels)
         print(f"    Doc #{doc_id}: {len(ents)} entities, {len(rels)} relations")
@@ -470,7 +441,7 @@ def section_combined_ner_re(
     print(f"    Total: {total_e} entities + {total_r} relations in {elapsed:.2f}s (cached)")
 
 
-# ── Section 7: CTE Pipeline vs GLiNER2 ───────────────────────────
+# ── Section 5: CTE Pipeline vs GLiNER2 ───────────────────────────
 
 
 def section_cte_pipeline(
@@ -482,9 +453,9 @@ def section_cte_pipeline(
     """Compare SQL CTE two-pass pipeline (NER→RE chained) vs GLiNER2 combined.
 
     CTE: 2 LLM calls per document (NER then RE), chained in pure SQL.
-    GLiNER2: reuses cached batch results from Sections 4+5.
+    GLiNER2: reuses cached batch results from Sections 2+3.
     """
-    _header("Section 7: CTE Pipeline (NER→RE in SQL) vs GLiNER2")
+    _header("Section 5: CTE Pipeline (NER→RE in SQL) vs GLiNER2")
     print("  CTE: 2 LLM calls per doc, chained in pure SQL via WITH clause.")
     print("  GLiNER2: 2 batch calls total over all documents.")
 
@@ -508,7 +479,7 @@ def section_cte_pipeline(
 
         total_e = 0
         total_r = 0
-        for doc_id, content, ents_json, rels_json in results:
+        for doc_id, _content, ents_json, rels_json in results:
             ents = json.loads(ents_json).get("entities", [])
             rels = json.loads(rels_json).get("relations", [])
             total_e += len(ents)
@@ -522,8 +493,8 @@ def section_cte_pipeline(
         _record_relations(model_name, "cte", total_r)
         print(f"    Total: {total_e} entities + {total_r} relations in {elapsed:.2f}s")
 
-    # ── GLiNER2: reuse cached results from Sections 4+5 ──
-    _subheader("GLiNER2 NER+RE (cached from Sections 4+5)")
+    # ── GLiNER2: reuse cached results from Sections 2+3 ──
+    _subheader("GLiNER2 NER+RE (cached from Sections 2+3)")
     doc_ids = [doc_id for doc_id, _ in DOCUMENTS]
     elapsed = timings["GLiNER2"]["ner"] + timings["GLiNER2"]["re"]
 
@@ -543,7 +514,7 @@ def section_cte_pipeline(
     print(f"    Total: {total_e} entities + {total_r} relations in {elapsed:.2f}s (cached)")
 
 
-# ── Section 8: Summary Tables ─────────────────────────────────────
+# ── Section 6: Summary Tables ─────────────────────────────────────
 
 METRICS = [
     ("ner", "NER only"),
@@ -569,7 +540,7 @@ def _print_table(title: str, backends: list[str], rows: list[tuple[str, list[str
 
 def print_summary_tables() -> None:
     """Print timing, per-doc, speedup, and extraction count tables."""
-    _header("Section 8: Summary Comparison Tables")
+    _header("Section 6: Summary Comparison Tables")
 
     backends = list(timings.keys())
     n = len(DOCUMENTS)
@@ -631,10 +602,6 @@ def print_summary_tables() -> None:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    # Ensure all GGUF models are available
-    for model in MODELS:
-        ensure_model(model)
-
     # Setup SQLite with muninn
     db = sqlite3.connect(":memory:")
     db.enable_load_extension(True)
@@ -646,17 +613,13 @@ def main() -> None:
     gguf_names = load_gguf_models(db)
     gliner2 = load_gliner2()
 
-    # Section 2-3: GGUF-only features (use first model)
-    section_chat(db, gguf_names[0])
-    section_summarize(db, gguf_names[0])
-
-    # Section 4-7: Comparative benchmarks (GLiNER2 results cached from 4+5, reused in 6+7)
+    # Section 2-5: Comparative benchmarks (GLiNER2 results cached from 2+3, reused in 4+5)
     ner_json, gliner2_ner = section_ner_comparison(db, gguf_names, gliner2)
     gliner2_re = section_re_comparison(db, gguf_names, gliner2, ner_json)
     section_combined_ner_re(db, gguf_names, gliner2_ner, gliner2_re)
     section_cte_pipeline(db, gguf_names, gliner2_ner, gliner2_re)
 
-    # Section 8: Summary tables
+    # Section 6: Summary tables
     print_summary_tables()
 
 

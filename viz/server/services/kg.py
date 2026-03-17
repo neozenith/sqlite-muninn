@@ -53,6 +53,19 @@ def set_active_embedding_model(model_slug: str) -> None:
     log.info("Active embedding model: %s (from slug: %s)", config_key, model_slug)
 
 
+def warm_embedding_model(conn: sqlite3.Connection) -> None:
+    """Eagerly load the embedding model at startup so first query is fast.
+
+    Called during server lifespan startup. Detects the model from the DB
+    meta table and pre-loads it into the cache.
+    """
+    try:
+        _get_embedding_model(conn)
+        log.info("Embedding model warmed up")
+    except Exception as e:
+        log.warning("Could not warm embedding model: %s", e)
+
+
 def _detect_model_from_db(conn: sqlite3.Connection) -> str:
     """Read embedding_model from the meta table and map to a config key."""
     try:
@@ -140,7 +153,14 @@ scored AS (
     LEFT JOIN vss_entities v ON v.name = b.node
 )
 SELECT node AS name, depth, similarity FROM scored
+ORDER BY depth ASC, similarity DESC
+LIMIT ?
 """
+
+# Maximum graph nodes to return — keeps Cytoscape fCose layout responsive.
+# Hub entities at BFS depth 2-3 can fan out to 700-1800+ nodes in dense
+# graphs like the 3300_NomicEmbed dataset (4840 edges, 2000+ entities).
+_MAX_GRAPH_NODES = 150
 
 
 def run_kg_search(
@@ -148,6 +168,7 @@ def run_kg_search(
     query_text: str,
     *,
     k: int = 10,
+    resolution: float | None = None,
 ) -> dict[str, Any]:
     """Run a KG search with server-side embedding, FTS, VSS + UMAP, and CTE graph query."""
     result: dict[str, Any] = {"query": query_text}
@@ -235,7 +256,7 @@ def run_kg_search(
             # Query 1: Get nodes via CTE (references virtual tables once)
             rows = conn.execute(
                 _CTE_NODES_SQL,
-                (query_blob, 50, 3),
+                (query_blob, 50, 2, _MAX_GRAPH_NODES),
             ).fetchall()
             node_names: list[str] = []
             for row in rows:
@@ -270,20 +291,74 @@ def run_kg_search(
     result["graph_nodes"] = graph_nodes
     result["graph_edges"] = graph_edges
 
-    # 4. Leiden community detection scoped to BFS nodes
+    # 4. Community assignments — prefer precomputed leiden_communities table,
+    #    fall back to live graph_leiden() for databases without the precomputed table.
     node_community: dict[str, int] = {}
-    if graph_nodes and _table_exists(conn, "relations"):
-        try:
-            node_set = {n["name"] for n in graph_nodes}
-            leiden_rows = conn.execute(
-                "SELECT node, community_id FROM graph_leiden(  'relations', 'src', 'dst', 'both', 1.0)"
-            ).fetchall()
-            for row in leiden_rows:
-                if row["node"] in node_set:
-                    node_community[row["node"]] = row["community_id"]
-        except Exception as e:
-            log.warning("Leiden community detection failed: %s", e)
+    community_labels: dict[str, str] = {}
+    available_resolutions: list[float] = []
+
+    if graph_nodes:
+        node_set = {n["name"] for n in graph_nodes}
+
+        if _table_exists(conn, "leiden_communities"):
+            # Read precomputed communities (fast — indexed SELECT)
+            try:
+                available_resolutions = [
+                    r["resolution"]
+                    for r in conn.execute(
+                        "SELECT DISTINCT resolution FROM leiden_communities ORDER BY resolution"
+                    ).fetchall()
+                ]
+
+                # Use caller-specified resolution, or 1.0 by default (or nearest available)
+                target_res = resolution if resolution is not None else 1.0
+                if available_resolutions and target_res not in available_resolutions:
+                    target_res = min(available_resolutions, key=lambda r: abs(r - target_res))
+
+                leiden_rows = conn.execute(
+                    "SELECT node, community_id FROM leiden_communities WHERE resolution = ?",
+                    (target_res,),
+                ).fetchall()
+                for row in leiden_rows:
+                    if row["node"] in node_set:
+                        node_community[row["node"]] = row["community_id"]
+
+                # Read community labels if available
+                if _table_exists(conn, "community_labels"):
+                    label_rows = conn.execute(
+                        "SELECT community_id, label FROM community_labels WHERE resolution = ?",
+                        (target_res,),
+                    ).fetchall()
+                    # Only include labels for communities present in the BFS subgraph
+                    active_comms = set(node_community.values())
+                    for row in label_rows:
+                        if row["community_id"] in active_comms:
+                            community_labels[str(row["community_id"])] = row["label"]
+            except Exception as e:
+                log.warning("Precomputed community read failed: %s", e)
+
+        elif _table_exists(conn, "relations"):
+            # Fallback: live Leiden (only for small graphs without precomputed data)
+            _MAX_LEIDEN_EDGES = 2000
+            try:
+                edge_count = conn.execute("SELECT count(*) FROM relations").fetchone()[0]
+                if edge_count <= _MAX_LEIDEN_EDGES:
+                    leiden_rows = conn.execute(
+                        "SELECT node, community_id FROM graph_leiden "
+                        "WHERE edge_table = 'relations' AND src_col = 'src' AND dst_col = 'dst' "
+                        "  AND direction = 'both' AND resolution = 1.0"
+                    ).fetchall()
+                    for row in leiden_rows:
+                        if row["node"] in node_set:
+                            node_community[row["node"]] = row["community_id"]
+                else:
+                    log.info("Skipping live Leiden: %d edges exceeds threshold %d", edge_count, _MAX_LEIDEN_EDGES)
+            except Exception as e:
+                log.warning("Live Leiden community detection failed: %s", e)
+
     result["node_community"] = node_community
+    result["community_labels"] = community_labels
     result["community_count"] = len(set(node_community.values())) if node_community else 0
+    result["available_resolutions"] = available_resolutions
 
     return result

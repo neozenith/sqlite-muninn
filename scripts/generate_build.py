@@ -48,6 +48,7 @@ TEST_LINK_SOURCES = [
     "src/graph_csr.c",
     "src/graph_selector_parse.c",
     "src/graph_selector_eval.c",
+    "src/llama_common.c",
     "src/llama_embed.c",
     "src/llama_chat.c",
 ]

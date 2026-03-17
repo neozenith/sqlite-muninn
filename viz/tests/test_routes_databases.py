@@ -26,7 +26,7 @@ def client_with_demos(test_db: str, demos_dir: pathlib.Path) -> TestClient:
     original_demos_dir = config.DEMOS_DIR
     config.DB_PATH = test_db
     config.DEMOS_DIR = demos_dir
-    db.reset_connection()
+    db.reset_state(db_path=test_db)
 
     from server.main import app
 
@@ -35,8 +35,7 @@ def client_with_demos(test_db: str, demos_dir: pathlib.Path) -> TestClient:
 
     config.DB_PATH = original_db_path
     config.DEMOS_DIR = original_demos_dir
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state()
 
 
 def test_list_databases_empty(client_with_demos: TestClient) -> None:
@@ -90,7 +89,7 @@ def test_select_database_success(
     test_db: str,
 ) -> None:
     """POST /api/databases/select with valid id switches the connection."""
-    # Copy test DB to demos dir so reconnect() finds it
+    # Copy test DB to demos dir so select_database() finds it
     db_name = "3300_MiniLM.db"
     shutil.copy2(test_db, str(demos_dir / db_name))
 

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Bug Fixes
-- Address CI memory leak not unloading models. Address CI build issues needing to propagate from main build to windows build script.- Demo db builder fully functional- Remove FTS5Adapter from kg benchmarks- Removed FTS5Adapater from KG benchmarks
+- Address CI memory leak not unloading models. Address CI build issues needing to propagate from main build to windows build script.- Demo db builder fully functional- Remove FTS5Adapter from kg benchmarks- Removed FTS5Adapater from KG benchmarks- Llm_extract example compares a few models performing the NER and RE benchmarked against GLiNER2 models and the honest speed comparrisons- Refactored viz demo
 
 ### CI
 - Set concurrency groups to cancel in flight builds when a newer commit is available and set timeouts to cap jobs that are hanging in CMake.- Refactor sources and build targets into one centralised spot- Refactor wasm build pipeline and rebuild the kg-demo database for wasm/ and viz/
@@ -16,14 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update docs with benchmark results for VSS for 50k and 100K embeddings- Update planning documents- Huge refactor of benchmarking pipeline to consolidate duplicated code across benchmarking and analysis tasks- Update the text embedding example README- Start the embedding benchmark docs pages- Ran all the ag-news benchmarks for embed category- Update graph benchmakrs- Update feature list in README and mkdocs index- Update feature list again to include dbt-syntax graph selection- Refactor mermaid diagrams to hires pngs. clean out old specs- Finalised the kg-demo.db builder script- Update demo builder plan- Update plan for wasm+viz merger and demo_builder- Add documentation about the logo tooling to remove the background
 
 ### Features
-- Full refactor of benchmarking prep tasks- Adding llama.cpp integration- Refactored the vss benchmark pipeline to use GGUF models for embeddings to be consistent with the impending embed category of benchmarks- Updated demo_builder and session_demo for narrowest context window for kg pipelines- Benchmarks.sessions_demo to build incremental knowledge graph from claude code sessions files. Lots of speed tuning splitting tasks into fine grained steps to find bottlenecks, making models work offline without needing constant internet checks or unnecessary redownloads of models.- Refactor sessions_demo and demo_builder to add GLiNER2 backend, and incremental UMAP for demo pipelines
+- Full refactor of benchmarking prep tasks- Adding llama.cpp integration- Refactored the vss benchmark pipeline to use GGUF models for embeddings to be consistent with the impending embed category of benchmarks- Updated demo_builder and session_demo for narrowest context window for kg pipelines- Benchmarks.sessions_demo to build incremental knowledge graph from claude code sessions files. Lots of speed tuning splitting tasks into fine grained steps to find bottlenecks, making models work offline without needing constant internet checks or unnecessary redownloads of models.- Refactor sessions_demo and demo_builder to add GLiNER2 backend, and incremental UMAP for demo pipelines- Added llama.cpp chat and enhanced the NER and RE tasks- Improve demo builder build subcommands.
 
 ### Other
 - Update dev tooling script for logo image processing to spit out full sequential step explanation.- Huge refactor of demo builder- Add Claude Code GitHub Workflow (#1)
 
 * "Claude PR Assistant workflow"
 
-* "Claude Code Review workflow"- Updated plan docs
+* "Claude Code Review workflow"- Updated plan docs- Use qwen3.5 in example
 
 ### Refactor
 - Refactor benchmarks cli usage docs, add updated plannign docs for next phases.

@@ -9,8 +9,9 @@
  * - graph_adjacency virtual table (persistent CSR adjacency cache)
  * - graph_select TVF (dbt-style node selection)
  * - node2vec_train() scalar function
- * - muninn_embed, muninn_tokenize, muninn_model_dim, muninn_embed_model (GGUF via llama.cpp)
- * - muninn_models eponymous virtual table (model lifecycle management)
+ * - muninn_tokenize, muninn_tokenize_text, muninn_token_count (shared tokenizer, any model)
+ * - muninn_embed, muninn_model_dim, muninn_embed_model (GGUF via llama.cpp)
+ * - muninn_models eponymous virtual table (embed model lifecycle)
  * - muninn_chat, muninn_chat_model, muninn_extract_entities, muninn_extract_relations, muninn_summarize
  * - muninn_chat_models eponymous virtual table (chat model lifecycle)
  */
@@ -26,6 +27,7 @@ SQLITE_EXTENSION_INIT1
 #include "graph_select_tvf.h"
 #include "node2vec.h"
 #ifndef MUNINN_NO_LLAMA
+#include "llama_common.h"
 #include "llama_embed.h"
 #include "llama_chat.h"
 #endif
@@ -80,6 +82,12 @@ int sqlite3_muninn_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines
     }
 
 #ifndef MUNINN_NO_LLAMA
+    rc = common_register_functions(db);
+    if (rc != SQLITE_OK) {
+        *pzErrMsg = sqlite3_mprintf("muninn: failed to register common tokenizer functions");
+        return rc;
+    }
+
     rc = embed_register_functions(db);
     if (rc != SQLITE_OK) {
         *pzErrMsg = sqlite3_mprintf("muninn: failed to register embed functions");

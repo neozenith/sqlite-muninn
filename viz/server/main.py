@@ -8,18 +8,26 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.routes import databases, graph, health, kg, vss
-from server.services.db import close_connection
+from server.services.db import validate_startup
+from server.services.kg import warm_embedding_model
 
 log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Manage application lifecycle — close DB on shutdown."""
+    """Manage application lifecycle — validate DB + warm model on startup."""
     log.info("Starting muninn-viz server")
+    # Open a temporary connection to validate the DB exists and extension loads.
+    # This surfaces failures at startup rather than on first request.
+    conn = validate_startup()
+    log.info("Database and extension validated")
+    # Pre-load the sentence-transformers embedding model so the first KG query
+    # doesn't take 5-15 seconds downloading/validating model files.
+    warm_embedding_model(conn)
+    conn.close()
     yield
     log.info("Shutting down muninn-viz server")
-    close_connection()
 
 
 app = FastAPI(

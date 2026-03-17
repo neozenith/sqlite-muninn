@@ -5,6 +5,7 @@ import * as kgService from '@/lib/services/kg-service'
 
 export function useKGSearch() {
   return useMutation({
-    mutationFn: ({ query, k }: { query: string; k?: number }) => kgService.queryKGSearch(query, k),
+    mutationFn: ({ query, k, resolution }: { query: string; k?: number; resolution?: number }) =>
+      kgService.queryKGSearch(query, k, resolution),
   })
 }

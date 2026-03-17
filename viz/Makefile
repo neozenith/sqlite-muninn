@@ -41,13 +41,13 @@ dev: install wasm                                       ## Start dev servers (hu
 	@echo "http://localhost:$(FRONTEND_PORT)/kg/query/"
 	npx --prefix frontend concurrently --kill-others \
 		--names "backend,frontend" --prefix-colors "blue,green" \
-		"uv run --directory . python -m server --port $(BACKEND_PORT)" \
+		"uv run --directory . python -m server --port $(BACKEND_PORT) --reload" \
 		"VITE_API_PORT=$(BACKEND_PORT) npm --prefix frontend run dev -- --port $(FRONTEND_PORT)"
 
 dev-agentic: install wasm                               ## Start dev servers (agentic ports)
 	npx --prefix frontend concurrently --kill-others \
 		--names "backend,frontend" --prefix-colors "blue,green" \
-		"uv run --directory . python -m server --port $(AGENTIC_BACKEND_PORT)" \
+		"uv run --directory . python -m server --port $(AGENTIC_BACKEND_PORT) --reload" \
 		"VITE_API_PORT=$(AGENTIC_BACKEND_PORT) npm --prefix frontend run dev -- --port $(AGENTIC_FRONTEND_PORT)"
 
 test: test-api test-frontend                       ## Run all tests

@@ -5,6 +5,8 @@ from __future__ import annotations
 from benchmarks.demo_builder.phases.base import Phase
 from benchmarks.demo_builder.phases.chunks import PhaseChunks
 from benchmarks.demo_builder.phases.chunks_embeddings import PhaseChunksEmbeddings
+from benchmarks.demo_builder.phases.communities import PhaseCommunities
+from benchmarks.demo_builder.phases.community_naming import PhaseCommunityNaming
 from benchmarks.demo_builder.phases.entity_embeddings import PhaseEntityEmbeddings
 from benchmarks.demo_builder.phases.entity_resolution import PhaseEntityResolution
 from benchmarks.demo_builder.phases.metadata import PhaseMetadata
@@ -18,6 +20,8 @@ __all__ = [
     "PhaseChunks",
     "PhaseChunksEmbeddings",
     "PhaseChunksUMAP",
+    "PhaseCommunities",
+    "PhaseCommunityNaming",
     "PhaseEntitiesUMAP",
     "PhaseEntityEmbeddings",
     "PhaseEntityResolution",
@@ -45,13 +49,13 @@ def default_phases(
 
     Order is a topological sort of the true data dependency DAG:
 
-        chunks ──┬──→ chunks_embeddings ──→ chunks_umap ──────────────────┐
-                 │                                                          │
-                 └──→ ner ──┬──→ relations ────────────────────────┐        │
-                            │                                       ↓        ↓
-                            └──→ entity_embeddings ──┬──→ entities_umap ──→ metadata
-                                                     │                      ↑
-                                                     └──→ entity_resolution → node2vec ─┘
+        chunks ──┬──→ chunks_embeddings ──→ chunks_umap ──────────────────────────┐
+                 │                                                                  │
+                 └──→ ner ──┬──→ relations ──────────────────────┐                  │
+                            │                                     ↓                  ↓
+                            └──→ entity_embeddings ──┬──→ entity_resolution ──→ communities ──→ community_naming ──→ metadata
+                                                     │                    ↓                                          ↑
+                                                     └──→ entities_umap   └──→ node2vec ─────────────────────────────┘
 
     For parallel execution use `manifest --makefile` to generate a Make-managed build.
     """
@@ -74,5 +78,7 @@ def default_phases(
         PhaseEntitiesUMAP(),
         PhaseEntityResolution(),
         PhaseNode2Vec(),
+        PhaseCommunities(),
+        PhaseCommunityNaming(),
         PhaseMetadata(book_id, model_name),
     ]

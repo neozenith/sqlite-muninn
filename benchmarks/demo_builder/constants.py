@@ -132,8 +132,8 @@ GLINER2_RE_LABELS = [
 
 # ── Default GGUF chat model for muninn NER/RE backend ──────────────
 
-MUNINN_CHAT_MODEL_NAME = "Qwen3-4B"
-MUNINN_CHAT_MODEL_FILE = "Qwen3-4B-Q4_K_M.gguf"
+MUNINN_CHAT_MODEL_NAME = "Qwen3.5-4B"
+MUNINN_CHAT_MODEL_FILE = "Qwen3.5-4B-Q4_K_M.gguf"
 MUNINN_CHAT_MODELS_DIR = PROJECT_ROOT / "models"
 
 # ── Phase names (for _build_progress table and manifest display) ─
@@ -148,5 +148,7 @@ PHASE_NAMES = [
     "entities_umap",  # UMAP on entities_vec_nodes
     "entity_resolution",  # HNSW blocking + Jaro-Winkler + Leiden
     "node2vec",  # Node2Vec structural embeddings
+    "communities",  # Leiden at multiple resolutions → leiden_communities
+    "community_naming",  # LLM labels for entity clusters + Leiden communities
     "metadata",  # meta table + validation (terminal)
 ]

@@ -7,6 +7,21 @@
 
     <!-- Tailwind CSS (Play CDN) -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              // Match the React app's dark theme (oklch neutral grays)
+              surface: {
+                DEFAULT: '#171717',  // neutral-900
+                deep: '#0a0a0a',     // neutral-950
+              },
+            },
+          },
+        },
+      }
+    </script>
 
     <!-- Deck.GL + luma.gl for 3D embedding visualization -->
     <script src="https://unpkg.com/deck.gl@8.9.35/dist.min.js"></script>
@@ -29,17 +44,20 @@
     <!-- Custom styles -->
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col">
+  <body class="bg-surface-deep text-neutral-100 min-h-screen flex flex-col">
     <!-- Header -->
-    <header class="border-b border-gray-800 px-6 py-4">
+    <header class="border-b border-white/10 px-6 py-4">
       <div class="flex items-center justify-between max-w-screen-2xl mx-auto">
         <div class="flex items-center gap-3 flex-wrap">
+          <a href="/kg/query/" class="flex items-center gap-2 text-neutral-400 hover:text-neutral-100 transition-colors" title="Back to React app">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+          </a>
           <h1 class="text-xl font-bold tracking-tight">
             muninn <span class="text-indigo-400 font-normal">WASM Demo</span>
           </h1>
           <!-- DB selector injected here by script.js -->
           <div id="db-selector-container" class="flex items-center gap-2 ml-2">
-            <span class="text-xs text-gray-600">Loading databases...</span>
+            <span class="text-xs text-neutral-500">Loading databases...</span>
           </div>
         </div>
         <div id="status-indicators" class="flex items-center gap-4 text-sm">
@@ -52,21 +70,21 @@
     </header>
 
     <!-- Search Bar -->
-    <div class="px-6 py-4 border-b border-gray-800">
+    <div class="px-6 py-4 border-b border-white/10">
       <div class="max-w-screen-2xl mx-auto">
         <div class="relative">
           <input
             id="search-input"
             type="text"
             placeholder="Select a database to begin searching..."
-            class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+            class="w-full bg-surface border border-white/15 rounded-lg px-4 py-3 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             disabled
           />
           <div id="search-spinner" class="absolute right-3 top-3.5 hidden">
             <div class="spinner"></div>
           </div>
         </div>
-        <p id="search-hint" class="mt-2 text-sm text-gray-500">
+        <p id="search-hint" class="mt-2 text-sm text-neutral-500">
           Loading libraries... please wait.
         </p>
       </div>
@@ -80,13 +98,13 @@
       >
         <!-- Left: FTS Search Results -->
         <div
-          class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden flex flex-col"
+          class="bg-surface rounded-lg border border-white/10 overflow-hidden flex flex-col"
         >
           <div
-            class="px-4 py-2 border-b border-gray-800 flex items-center justify-between"
+            class="px-4 py-2 border-b border-white/10 flex items-center justify-between"
           >
-            <h2 class="text-sm font-medium text-gray-400">FTS Results</h2>
-            <span id="results-count" class="text-xs text-gray-600">0 results</span>
+            <h2 class="text-sm font-medium text-neutral-400">FTS Results</h2>
+            <span id="results-count" class="text-xs text-neutral-500">0 results</span>
           </div>
           <div
             id="results-list"
@@ -94,7 +112,7 @@
           >
             <div
               id="results-placeholder"
-              class="flex items-center justify-center h-full text-gray-600 text-sm"
+              class="flex items-center justify-center h-full text-neutral-500 text-sm"
             >
               Search to see text matches
             </div>
@@ -103,48 +121,48 @@
 
         <!-- Center: Deck.GL 3D Embedding Visualization + Results List -->
         <div
-          class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden flex flex-col"
+          class="bg-surface rounded-lg border border-white/10 overflow-hidden flex flex-col"
         >
           <div
-            class="px-4 py-2 border-b border-gray-800 flex items-center justify-between"
+            class="px-4 py-2 border-b border-white/10 flex items-center justify-between"
           >
-            <h2 class="text-sm font-medium text-gray-400">
+            <h2 class="text-sm font-medium text-neutral-400">
               Embedding Space (3D)
             </h2>
-            <span id="deckgl-count" class="text-xs text-gray-600">0 points</span>
+            <span id="deckgl-count" class="text-xs text-neutral-500">0 points</span>
           </div>
           <div id="deckgl-container" class="relative" style="flex: 6">
             <div
               id="deckgl-placeholder"
-              class="absolute inset-0 flex items-center justify-center text-gray-600 text-sm"
+              class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm"
             >
               Search to visualize embeddings in 3D
             </div>
           </div>
           <div
             id="embedding-results"
-            class="overflow-y-auto thin-scrollbar border-t border-gray-800 p-2 space-y-1 hidden"
+            class="overflow-y-auto thin-scrollbar border-t border-white/10 p-2 space-y-1 hidden"
             style="flex: 4"
           ></div>
         </div>
 
         <!-- Right: Cytoscape Graph Visualization -->
         <div
-          class="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden flex flex-col"
+          class="bg-surface rounded-lg border border-white/10 overflow-hidden flex flex-col"
         >
           <div
-            class="px-4 py-2 border-b border-gray-800 flex items-center justify-between"
+            class="px-4 py-2 border-b border-white/10 flex items-center justify-between"
           >
-            <h2 class="text-sm font-medium text-gray-400">Knowledge Graph</h2>
-            <span id="cytoscape-count" class="text-xs text-gray-600">0 nodes</span>
+            <h2 class="text-sm font-medium text-neutral-400">Knowledge Graph</h2>
+            <span id="cytoscape-count" class="text-xs text-neutral-500">0 nodes</span>
           </div>
           <div id="cy" class="flex-1 min-h-0"></div>
           <div
             id="graph-controls"
-            class="px-3 py-2 border-t border-gray-800 space-y-1 hidden"
+            class="px-3 py-2 border-t border-white/10 space-y-1 hidden"
           >
             <label
-              class="flex items-center justify-between text-xs text-gray-400"
+              class="flex items-center justify-between text-xs text-neutral-400"
             >
               <span>Node repulsion</span>
               <span id="repulsion-val" class="font-mono">4500</span>
@@ -159,7 +177,7 @@
               class="w-full h-1"
             />
             <label
-              class="flex items-center justify-between text-xs text-gray-400"
+              class="flex items-center justify-between text-xs text-neutral-400"
             >
               <span>Edge length</span>
               <span id="edge-length-val" class="font-mono">50</span>
@@ -174,7 +192,7 @@
               class="w-full h-1"
             />
             <label
-              class="flex items-center justify-between text-xs text-gray-400"
+              class="flex items-center justify-between text-xs text-neutral-400"
             >
               <span>Gravity</span>
               <span id="gravity-val" class="font-mono">0.25</span>
@@ -190,7 +208,7 @@
             />
             <button
               id="run-layout-btn"
-              class="w-full text-xs py-1 mt-1 border border-gray-700 rounded hover:bg-gray-800 text-gray-300"
+              class="w-full text-xs py-1 mt-1 border border-white/15 rounded hover:bg-white/5 text-neutral-300"
             >
               Re-run Layout
             </button>
@@ -200,12 +218,14 @@
     </main>
 
     <!-- Footer / Status Bar -->
-    <footer class="border-t border-gray-800 px-6 py-2">
+    <footer class="border-t border-white/10 px-6 py-2">
       <div
-        class="max-w-screen-2xl mx-auto flex items-center justify-between text-xs text-gray-600"
+        class="max-w-screen-2xl mx-auto flex items-center justify-between text-xs text-neutral-500"
       >
         <span id="db-status">Database: not loaded</span>
-        <span>muninn SQLite extension &mdash; WASM build</span>
+        <a href="/kg/query/" class="hover:text-neutral-300 transition-colors">
+          muninn SQLite extension &mdash; open in React app
+        </a>
       </div>
     </footer>
 

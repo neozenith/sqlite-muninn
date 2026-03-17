@@ -130,7 +130,6 @@ test.describe('Database Switcher', () => {
       expect(count, 'Default DB edges graph should have nodes > 0').toBeGreaterThan(0);
     }).toPass({ timeout: 30_000 });
 
-    const defaultNodes = Number(await page.getByTestId('graph-stats').getAttribute('data-node-count'));
     await checkpoint(page, 'db-switch-graph-01-default-loaded');
 
     // ─── THE CRITICAL SWITCH ───

@@ -226,7 +226,7 @@ test: build/test_runner                        ## Run C unit tests + coverage
 
 build/test_runner: $(TEST_SRC) $(TEST_LINK_SRC) $(VENDOR_SRC) $(LLAMA_LIBS)
 	@mkdir -p build
-	$(CC) $(CFLAGS_BASE) $(CFLAGS_EXTRA) --coverage -DLLAMA_CHAT_TESTING -Isrc $(VENDOR_INCLUDE) $(LLAMA_INCLUDE) -o $@ \
+	$(CC) $(CFLAGS_BASE) $(CFLAGS_EXTRA) --coverage -DMUNINN_TESTING -Isrc $(VENDOR_INCLUDE) $(LLAMA_INCLUDE) -o $@ \
 		$(TEST_SRC) $(TEST_LINK_SRC) $(VENDOR_SRC) $(LLAMA_LIBS) $(LDFLAGS_TEST)
 
 test-python: build/muninn$(EXT)                ## Run Python integration tests + coverage

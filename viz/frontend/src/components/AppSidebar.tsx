@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { Boxes, Network, Workflow, PanelLeftClose, PanelLeftOpen, Moon, Sun } from 'lucide-react'
+import { Boxes, Network, Workflow, Globe, PanelLeftClose, PanelLeftOpen, Moon, Sun } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTheme } from '@/components/ThemeProvider'
 
@@ -52,7 +52,14 @@ export function AppSidebar() {
         ))}
       </nav>
 
-      <div className="p-1.5 border-t border-sidebar-border">
+      <div className="p-1.5 border-t border-sidebar-border space-y-0.5">
+        <a
+          href="/wasm/index.html"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+        >
+          <Globe className="size-4 shrink-0" />
+          {!collapsed && <span>WASM Demo</span>}
+        </a>
         <Button
           variant="ghost"
           size="icon-xs"

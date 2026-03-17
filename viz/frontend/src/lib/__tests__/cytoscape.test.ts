@@ -155,4 +155,36 @@ describe('applyCommunityGrouping', () => {
     const carolEl = grouped.find((e) => e.data.id === 'c')! as any
     expect(carolEl.data.parent).toBeUndefined()
   })
+
+  it('uses precomputed labels when provided', () => {
+    const elements = toCytoscapeElements(nodes, edges)
+    const labels = { '0': 'Classical Economics', '1': 'Trade Theory' }
+    const grouped = applyCommunityGrouping(elements, { a: 0, b: 1, c: 0 }, labels)
+
+    const parentNodes = grouped.filter((e) => e.data.id.startsWith('community-'))
+    const labelMap = new Map(parentNodes.map((p) => [p.data.id, p.data.label]))
+    expect(labelMap.get('community-0')).toBe('Classical Economics')
+    expect(labelMap.get('community-1')).toBe('Trade Theory')
+  })
+
+  it('falls back to generic labels when no labels provided', () => {
+    const elements = toCytoscapeElements(nodes, edges)
+    const grouped = applyCommunityGrouping(elements, { a: 0, b: 1 })
+
+    const parentNodes = grouped.filter((e) => e.data.id.startsWith('community-'))
+    const labelMap = new Map(parentNodes.map((p) => [p.data.id, p.data.label]))
+    expect(labelMap.get('community-0')).toBe('Community 0')
+    expect(labelMap.get('community-1')).toBe('Community 1')
+  })
+
+  it('falls back for communities missing from labels map', () => {
+    const elements = toCytoscapeElements(nodes, edges)
+    const labels = { '0': 'Classical Economics' } // community 1 has no label
+    const grouped = applyCommunityGrouping(elements, { a: 0, b: 1 }, labels)
+
+    const parentNodes = grouped.filter((e) => e.data.id.startsWith('community-'))
+    const labelMap = new Map(parentNodes.map((p) => [p.data.id, p.data.label]))
+    expect(labelMap.get('community-0')).toBe('Classical Economics')
+    expect(labelMap.get('community-1')).toBe('Community 1')
+  })
 })

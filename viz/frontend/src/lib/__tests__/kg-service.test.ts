@@ -52,6 +52,36 @@ describe('queryKGSearch', () => {
     )
   })
 
+  it('sends resolution when provided', async () => {
+    mockOk({
+      query: 'test',
+      fts_results: [],
+      vss_results: [],
+      graph_nodes: [],
+      graph_edges: [],
+    })
+    await queryKGSearch('test', 10, 0.25)
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/kg/query',
+      expect.objectContaining({
+        body: JSON.stringify({ query: 'test', k: 10, resolution: 0.25 }),
+      }),
+    )
+  })
+
+  it('omits resolution when not provided', async () => {
+    mockOk({
+      query: 'test',
+      fts_results: [],
+      vss_results: [],
+      graph_nodes: [],
+      graph_edges: [],
+    })
+    await queryKGSearch('test')
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(body).not.toHaveProperty('resolution')
+  })
+
   it('propagates API errors', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,

@@ -182,6 +182,8 @@ export interface KGSearchResult {
   graph_edges: KGSearchGraphEdge[]
   node_community?: Record<string, number>
   community_count?: number
+  community_labels?: Record<string, string>
+  available_resolutions?: number[]
 }
 
 // ── UI State ────────────────────────────────────────────────────────

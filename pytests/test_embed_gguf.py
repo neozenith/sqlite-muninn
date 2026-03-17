@@ -199,6 +199,52 @@ class TestTokenization:
             conn_no_model.execute("SELECT muninn_tokenize('nonexistent', 'hello')")
 
 
+# ─── Tokenize Text Tests ─────────────────────────────────────
+
+
+@pytest.mark.gguf
+class TestTokenizeText:
+    def test_tokenize_text_returns_json_strings(self, conn: sqlite3.Connection) -> None:
+        """muninn_tokenize_text should return a JSON array of strings."""
+        (result,) = conn.execute("SELECT muninn_tokenize_text('MiniLM', 'hello world')").fetchone()
+        pieces = json.loads(result)
+        assert isinstance(pieces, list)
+        assert len(pieces) > 0
+        assert all(isinstance(p, str) for p in pieces)
+
+    def test_tokenize_text_matches_tokenize_length(self, conn: sqlite3.Connection) -> None:
+        """Token text pieces should have same count as token IDs."""
+        text = "the quick brown fox jumps over the lazy dog"
+        (ids_json,) = conn.execute("SELECT muninn_tokenize('MiniLM', ?)", (text,)).fetchone()
+        (text_json,) = conn.execute("SELECT muninn_tokenize_text('MiniLM', ?)", (text,)).fetchone()
+        ids = json.loads(ids_json)
+        pieces = json.loads(text_json)
+        assert len(pieces) == len(ids)
+
+    def test_tokenize_text_pieces_reconstruct(self, conn: sqlite3.Connection) -> None:
+        """Joining token text pieces should approximately reconstruct the input."""
+        text = "hello world"
+        (result,) = conn.execute("SELECT muninn_tokenize_text('MiniLM', ?)", (text,)).fetchone()
+        pieces = json.loads(result)
+        # Filter out special tokens (BOS/EOS) which are typically [CLS], [SEP], etc.
+        non_special = [p for p in pieces if not p.startswith("[")]
+        reconstructed = "".join(non_special).strip()
+        assert text in reconstructed or reconstructed in text or reconstructed.lower() == text.lower()
+
+    def test_tokenize_text_unloaded_model(self, conn_no_model: sqlite3.Connection) -> None:
+        """Tokenize text with an unloaded model should raise an error."""
+        with pytest.raises(sqlite3.OperationalError, match="not loaded"):
+            conn_no_model.execute("SELECT muninn_tokenize_text('nonexistent', 'hello')")
+
+    def test_tokenize_text_json_each_compat(self, conn: sqlite3.Connection) -> None:
+        """Result should work with json_each() for per-token SQL queries."""
+        rows = conn.execute(
+            "SELECT value FROM json_each(muninn_tokenize_text('MiniLM', 'hello world'))"
+        ).fetchall()
+        assert len(rows) > 0
+        assert all(isinstance(row[0], str) for row in rows)
+
+
 # ─── End-to-End HNSW Integration ─────────────────────────────
 
 

@@ -14,6 +14,7 @@ import { useKGSearch } from '@/hooks/useKGPipeline'
 import type { KGSearchResult, EmbeddingPoint } from '@/lib/types'
 import { applyCommunityColors, applyCommunityGrouping } from '@/lib/transforms/cytoscape'
 import type { CytoscapeElement } from '@/lib/transforms/cytoscape'
+import { communityColor } from '@/lib/constants'
 
 /**
  * Rank-based color gradient: red (top) → orange → purple (lowest).
@@ -82,6 +83,7 @@ function toCytoscapeElements(result: KGSearchResult): CytoscapeElement[] {
 
 export function KGQueryPage() {
   const [queryText, setQueryText] = useState('')
+  const [resolution, setResolution] = useState<number | undefined>(undefined)
   const kgSearch = useKGSearch()
 
   const [fcoseParams, setFcoseParams] = useState<FcoseParams>(DEFAULT_FCOSE_PARAMS)
@@ -102,18 +104,24 @@ export function KGQueryPage() {
 
   const handleQuery = useCallback(() => {
     if (queryText.trim()) {
-      kgSearch.mutate({ query: queryText.trim() })
+      kgSearch.mutate({ query: queryText.trim(), resolution })
     }
-  }, [queryText, kgSearch])
+  }, [queryText, kgSearch, resolution])
 
   // Debounced search-as-you-type (300ms)
   useEffect(() => {
     if (!queryText.trim()) return
     const timer = setTimeout(() => {
-      kgSearch.mutate({ query: queryText.trim() })
+      kgSearch.mutate({ query: queryText.trim(), resolution })
     }, 300)
     return () => clearTimeout(timer)
   }, [queryText]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-query when resolution changes (community grouping only — no need to re-type)
+  useEffect(() => {
+    if (!queryText.trim() || resolution === undefined) return
+    kgSearch.mutate({ query: queryText.trim(), resolution })
+  }, [resolution]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derived data from search results
   const embeddingPoints = useMemo(() => (kgSearch.data ? toEmbeddingPoints(kgSearch.data) : []), [kgSearch.data])
@@ -124,10 +132,33 @@ export function KGQueryPage() {
     const nc = kgSearch.data.node_community
     if (nc && Object.keys(nc).length > 0) {
       elements = applyCommunityColors(elements, nc)
-      elements = applyCommunityGrouping(elements, nc)
+      elements = applyCommunityGrouping(elements, nc, kgSearch.data.community_labels)
     }
     return elements
   }, [kgSearch.data])
+
+  // Build community legend: [{id, label, color, memberCount}]
+  const communityLegend = useMemo(() => {
+    const nc = kgSearch.data?.node_community
+    if (!nc || Object.keys(nc).length === 0) return []
+    const labels = kgSearch.data?.community_labels ?? {}
+    // Count members per community
+    const counts = new Map<number, number>()
+    for (const cid of Object.values(nc)) {
+      counts.set(cid, (counts.get(cid) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([id, count]) => ({
+        id,
+        label: labels[String(id)] ?? `Community ${id}`,
+        color: communityColor(id),
+        memberCount: count,
+      }))
+  }, [kgSearch.data])
+
+  // Available resolutions from the server (only populated with precomputed communities)
+  const availableResolutions = kgSearch.data?.available_resolutions ?? []
 
   const hasResults = kgSearch.data != null
 
@@ -142,6 +173,21 @@ export function KGQueryPage() {
           onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => e.key === 'Enter' && handleQuery()}
           className="flex-1"
         />
+        {availableResolutions.length > 1 && (
+          <select
+            value={resolution ?? ''}
+            onChange={(e) => setResolution(e.target.value ? Number(e.target.value) : undefined)}
+            className="rounded border border-input bg-background px-2 py-1 text-xs"
+            data-testid="resolution-selector"
+          >
+            <option value="">Resolution: auto</option>
+            {availableResolutions.map((r) => (
+              <option key={r} value={r}>
+                {r === 0.25 ? 'Coarse' : r === 1.0 ? 'Medium' : r === 3.0 ? 'Fine' : `\u03B3=${r}`} ({r})
+              </option>
+            ))}
+          </select>
+        )}
         <Button onClick={handleQuery} disabled={kgSearch.isPending || !queryText.trim()}>
           {kgSearch.isPending ? 'Searching...' : 'Search'}
         </Button>
@@ -239,6 +285,9 @@ export function KGQueryPage() {
               {kgSearch.data && (
                 <span className="text-xs text-muted-foreground font-normal">
                   {kgSearch.data.graph_nodes.length} nodes
+                  {(kgSearch.data.community_count ?? 0) > 0 && (
+                    <> · {kgSearch.data.community_count} communities</>
+                  )}
                 </span>
               )}
             </CardTitle>
@@ -255,6 +304,27 @@ export function KGQueryPage() {
                   className="h-[350px]"
                 />
                 <GraphControls params={fcoseParams} onChange={setFcoseParams} onRunLayout={runLayout} />
+                {communityLegend.length > 0 && (
+                  <div className="mt-2 border-t pt-2 space-y-1" data-testid="community-legend">
+                    <div className="text-xs font-medium text-muted-foreground">
+                      Communities ({communityLegend.length})
+                    </div>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      {communityLegend.map((c) => (
+                        <div key={c.id} className="flex items-center gap-1 text-xs">
+                          <span
+                            className="inline-block w-2.5 h-2.5 rounded-full shrink-0"
+                            style={{ backgroundColor: c.color }}
+                          />
+                          <span className="truncate max-w-[140px]" title={c.label}>
+                            {c.label}
+                          </span>
+                          <span className="text-muted-foreground">({c.memberCount})</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <div className="h-[400px] flex items-center justify-center text-muted-foreground text-xs">

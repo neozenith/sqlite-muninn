@@ -115,8 +115,7 @@ def test_get_embeddings_empty_index(tmp_path: pathlib.Path) -> None:
 
     original_db_path = config.DB_PATH
     config.DB_PATH = db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     from server.main import app
 
@@ -130,8 +129,7 @@ def test_get_embeddings_empty_index(tmp_path: pathlib.Path) -> None:
         assert data["points"] == []
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
 def test_get_metadata_entities_vec(tmp_path: pathlib.Path) -> None:
@@ -183,8 +181,7 @@ def test_get_metadata_entities_vec(tmp_path: pathlib.Path) -> None:
 
     original_db_path = config.DB_PATH
     config.DB_PATH = db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     from server.main import app
 
@@ -204,8 +201,7 @@ def test_get_metadata_entities_vec(tmp_path: pathlib.Path) -> None:
             assert point["metadata"]["type"] == "entity"
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
 def test_get_metadata_node2vec_emb(tmp_path: pathlib.Path) -> None:
@@ -253,8 +249,7 @@ def test_get_metadata_node2vec_emb(tmp_path: pathlib.Path) -> None:
 
     original_db_path = config.DB_PATH
     config.DB_PATH = db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     from server.main import app
 
@@ -279,8 +274,7 @@ def test_get_metadata_node2vec_emb(tmp_path: pathlib.Path) -> None:
         assert "Alice" in names
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
 def test_search_text_no_fts_table(client: TestClient) -> None:
@@ -330,8 +324,7 @@ def test_search_text_with_fts(tmp_path: pathlib.Path) -> None:
 
     original_db_path = config.DB_PATH
     config.DB_PATH = db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     from server.main import app
 
@@ -346,8 +339,7 @@ def test_search_text_with_fts(tmp_path: pathlib.Path) -> None:
         assert data["count"] > 0
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
 def test_search_text_no_matches(tmp_path: pathlib.Path) -> None:
@@ -377,8 +369,7 @@ def test_search_text_no_matches(tmp_path: pathlib.Path) -> None:
 
     original_db_path = config.DB_PATH
     config.DB_PATH = db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     from server.main import app
 
@@ -391,8 +382,7 @@ def test_search_text_no_matches(tmp_path: pathlib.Path) -> None:
         assert data["neighbors"] == []
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()
 
 
 def test_get_metadata_chunks_vec(tmp_path: pathlib.Path) -> None:
@@ -444,8 +434,7 @@ def test_get_metadata_chunks_vec(tmp_path: pathlib.Path) -> None:
 
     original_db_path = config.DB_PATH
     config.DB_PATH = db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state(db_path=db_path)
 
     from server.main import app
 
@@ -462,5 +451,4 @@ def test_get_metadata_chunks_vec(tmp_path: pathlib.Path) -> None:
             assert "text" in point["metadata"]
     finally:
         config.DB_PATH = original_db_path
-        db.close_connection()
-        db.reset_connection()
+        db.reset_state()

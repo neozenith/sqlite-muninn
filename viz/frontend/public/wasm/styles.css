@@ -13,7 +13,7 @@
   height: 100%;
 }
 
-/* Loading spinner */
+/* Loading spinner — matches React app's indigo accent */
 .spinner {
   width: 20px;
   height: 20px;
@@ -51,16 +51,16 @@
 }
 
 .status-pill[data-status="loading"] {
-  color: #9ca3af;
-  background: rgba(156, 163, 175, 0.1);
+  color: #a3a3a3; /* neutral-400 */
+  background: rgba(163, 163, 163, 0.1);
 }
 .status-pill[data-status="loading"]::before {
-  background-color: #9ca3af;
+  background-color: #a3a3a3;
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
 
 .status-pill[data-status="ready"] {
-  color: #34d399;
+  color: #34d399; /* emerald-400 */
   background: rgba(52, 211, 153, 0.1);
 }
 .status-pill[data-status="ready"]::before {
@@ -68,7 +68,7 @@
 }
 
 .status-pill[data-status="error"] {
-  color: #f87171;
+  color: #f87171; /* red-400 */
   background: rgba(248, 113, 113, 0.1);
 }
 .status-pill[data-status="error"]::before {
@@ -85,17 +85,17 @@
   }
 }
 
-/* Result cards */
+/* Result cards — matches React app's card background (neutral-900) with white/10 border */
 .result-card {
-  background: rgba(30, 30, 46, 0.8);
-  border: 1px solid rgba(75, 85, 99, 0.4);
+  background: rgba(23, 23, 23, 0.8); /* neutral-900 at 80% */
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 0.5rem;
   padding: 0.75rem;
   transition: border-color 0.2s ease;
 }
 
 .result-card:hover {
-  border-color: rgba(129, 140, 248, 0.5);
+  border-color: rgba(129, 140, 248, 0.5); /* indigo-400 at 50% */
 }
 
 .result-card .similarity-bar {
@@ -113,13 +113,13 @@
   background: transparent;
 }
 .thin-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(75, 85, 99, 0.5);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 2px;
 }
 .thin-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(107, 114, 128, 0.7);
+  background: rgba(255, 255, 255, 0.2);
 }
 .thin-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: rgba(75, 85, 99, 0.5) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
 }

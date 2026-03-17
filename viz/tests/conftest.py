@@ -98,13 +98,13 @@ def test_db(tmp_path: pathlib.Path) -> str:
 @pytest.fixture
 def client(test_db: str) -> TestClient:
     """Create a TestClient with the server configured to use the test database."""
-    # Patch config before importing the app
     from server import config
     from server.services import db
 
     original_db_path = config.DB_PATH
     config.DB_PATH = test_db
-    db.reset_connection()
+    # Point the per-request connection factory at the test DB
+    db.reset_state(db_path=test_db)
 
     from server.main import app
 
@@ -113,5 +113,4 @@ def client(test_db: str) -> TestClient:
 
     # Restore
     config.DB_PATH = original_db_path
-    db.close_connection()
-    db.reset_connection()
+    db.reset_state()

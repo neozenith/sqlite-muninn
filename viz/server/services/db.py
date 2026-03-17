@@ -1,4 +1,10 @@
-"""Database connection and discovery services."""
+"""Database connection management — per-request connections.
+
+Each request opens its own sqlite3.Connection, uses it, and closes it.
+No global lock. SQLite WAL mode handles concurrent readers natively.
+Database switching is an atomic path swap — in-flight requests finish
+on the old DB, new requests use the new path.
+"""
 
 import logging
 import re
@@ -12,16 +18,10 @@ from server import config as _config
 
 log = logging.getLogger(__name__)
 
-# Module-level connection singleton
-_connection: sqlite3.Connection | None = None
-
-# Tracks the currently active demo database id (e.g. "3300_MiniLM")
+# ── Shared state (protected by _state_lock) ────────────────────────
+_state_lock = threading.Lock()
+_active_db_path: str = _config.DB_PATH
 _active_db_id: str | None = None
-
-# Lock to serialize database access across FastAPI's thread pool.
-# muninn TVFs (Leiden, centrality) create internal sub-queries that
-# cause re-entrancy issues when multiple requests use the same connection.
-_db_lock = threading.Lock()
 
 
 def sanitize_fts_query(text: str) -> str:
@@ -35,104 +35,92 @@ def sanitize_fts_query(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
-def get_connection(db_path: str | None = None, extension_path: str | None = None) -> sqlite3.Connection:
-    """Get or create a singleton database connection with the muninn extension loaded."""
-    global _connection
-    if _connection is not None:
-        return _connection
+# ── Per-request connection factory ─────────────────────────────────
 
-    path = db_path or _config.DB_PATH
+def _open_connection(db_path: str, extension_path: str | None = None) -> sqlite3.Connection:
+    """Open a new connection with muninn loaded and pragmas set."""
     ext = extension_path or _config.EXTENSION_PATH
-
-    log.info("Connecting to database: %s", path)
-
-    if not Path(path).exists():
-        msg = f"Database not found: {path}"
-        raise FileNotFoundError(msg)
-
-    conn = sqlite3.connect(path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-
-    # Load muninn extension
-    try:
-        conn.enable_load_extension(True)
-        conn.load_extension(ext)
-        log.info("Loaded muninn extension from: %s", ext)
-    except sqlite3.OperationalError:
-        log.warning("Could not load muninn extension from: %s", ext)
-
-    _connection = conn
-    return conn
-
-
-def close_connection() -> None:
-    """Close the singleton connection."""
-    global _connection
-    if _connection is not None:
-        _connection.close()
-        _connection = None
-
-
-def reset_connection() -> None:
-    """Reset singleton for testing."""
-    global _connection, _active_db_id
-    _connection = None
-    _active_db_id = None
-
-
-def reconnect(db_path: str, extension_path: str | None = None) -> sqlite3.Connection:
-    """Close existing connection and open a new one at db_path.
-
-    Must be called while holding _db_lock (i.e. from within a db_session context).
-    """
-    global _connection, _active_db_id
-
-    if _connection is not None:
-        _connection.close()
-        _connection = None
-
-    ext = extension_path or _config.EXTENSION_PATH
-
-    log.info("Reconnecting to database: %s", db_path)
 
     if not Path(db_path).exists():
         msg = f"Database not found: {db_path}"
         raise FileNotFoundError(msg)
 
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA query_only = ON")
 
-    try:
-        conn.enable_load_extension(True)
-        conn.load_extension(ext)
-        log.info("Loaded muninn extension from: %s", ext)
-    except sqlite3.OperationalError:
-        log.warning("Could not load muninn extension from: %s", ext)
-
-    _connection = conn
+    # Load muninn extension — fail loudly if missing
+    conn.enable_load_extension(True)
+    conn.load_extension(ext)
     return conn
+
+
+def db_session() -> Generator[sqlite3.Connection, None, None]:
+    """FastAPI dependency: one connection per request, closed after response.
+
+    No lock — SQLite WAL mode allows concurrent readers. Each request
+    gets its own connection object so there is no shared mutable state.
+    """
+    db_path = get_active_db_path()
+    conn = _open_connection(db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+# ── Active database state ──────────────────────────────────────────
+
+def get_active_db_path() -> str:
+    """Return the currently active database path (thread-safe)."""
+    with _state_lock:
+        return _active_db_path
+
+
+def set_active_db(db_id: str, db_path: str) -> None:
+    """Atomically switch the active database.
+
+    Only updates the path/id. Each subsequent request will open a fresh
+    connection to the new path. In-flight requests finish on the old DB.
+    """
+    global _active_db_path, _active_db_id
+    with _state_lock:
+        _active_db_path = db_path
+        _active_db_id = db_id
+    log.info("Active database set to: %s (%s)", db_id, db_path)
 
 
 def get_active_db_id() -> str | None:
     """Return the currently active demo database id."""
-    return _active_db_id
+    with _state_lock:
+        return _active_db_id
 
 
-def set_active_db_id(db_id: str | None) -> None:
-    """Set the currently active demo database id."""
-    global _active_db_id
-    _active_db_id = db_id
+def reset_state(db_path: str | None = None) -> None:
+    """Reset state for testing or reinitialisation."""
+    global _active_db_path, _active_db_id
+    with _state_lock:
+        _active_db_path = db_path or _config.DB_PATH
+        _active_db_id = None
 
 
-def db_session() -> Generator[sqlite3.Connection, None, None]:
-    """FastAPI dependency that serializes database access.
+# ── Startup validation ─────────────────────────────────────────────
 
-    Acquires a threading lock before yielding the connection,
-    ensuring only one route handler accesses the database at a time.
+def validate_startup(db_path: str | None = None, extension_path: str | None = None) -> sqlite3.Connection:
+    """Open a test connection at startup to validate the DB and extension load.
+
+    Returns the connection (caller can use it for warm-up, then close it).
+    Raises immediately if the DB or extension can't be loaded.
     """
-    with _db_lock:
-        yield get_connection()
+    path = db_path or get_active_db_path()
+    conn = _open_connection(path, extension_path)
+    log.info("Startup validation OK: %s", path)
+    return conn
 
+
+# ── Discovery helpers (take conn as parameter) ────────────────────
 
 def discover_hnsw_indexes(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Discover all HNSW virtual tables by finding their _config shadow tables.

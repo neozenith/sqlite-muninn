@@ -20,14 +20,17 @@ extern int chat_register_functions(sqlite3 *db);
 
 /* Exposed helpers from llama_chat.c */
 extern const char *strip_think_block(const char *text);
-extern const char *find_json_object(const char *text, int *out_len);
 
-/* Test-only helpers (compiled with -DLLAMA_CHAT_TESTING) */
-extern void chat_test_reset_backend(void);
-extern int chat_test_inject_dummy(const char *name);
-extern void chat_test_remove_dummy(const char *name);
-extern void chat_test_clear_all_dummies(void);
-extern int chat_test_max_models(void);
+/* Unified test helpers from llama_common.c (compiled with -DMUNINN_TESTING) */
+typedef enum {
+    MUNINN_MODEL_EMBED = 1,
+    MUNINN_MODEL_CHAT = 2,
+} MuninnModelType;
+extern void muninn_test_reset_backend(void);
+extern int muninn_test_inject_dummy(const char *name, MuninnModelType type);
+extern void muninn_test_remove_dummy(const char *name);
+extern void muninn_test_clear_all_dummies(void);
+extern int muninn_registry_capacity(void);
 
 /* ── Model discovery ─────────────────────────────────────────────
  * Check for GGUF models in models/ at suite start. Integration
@@ -121,81 +124,19 @@ TEST(test_strip_think_block_empty) {
     ASSERT(result == input);
 }
 
-TEST(test_strip_think_block_partial) {
-    /* Open tag without close → returns original */
-    const char *input = "<think>open without close";
+TEST(test_strip_think_block_truncated) {
+    /* Open <think> without </think> → truncated reasoning, return empty */
+    const char *input = "<think>open without close due to max_tokens";
+    const char *result = strip_think_block(input);
+    ASSERT(result != input);
+    ASSERT(strlen(result) == 0);
+}
+
+TEST(test_strip_think_block_not_at_start) {
+    /* <think> not at start → not a think block prefix, return original */
+    const char *input = "prefix <think>reasoning";
     const char *result = strip_think_block(input);
     ASSERT(result == input);
-}
-
-/* ═══════════════════════════════════════════════════════════════
- * UNIT TESTS: find_json_object
- * ═══════════════════════════════════════════════════════════════ */
-
-TEST(test_find_json_simple) {
-    int len = 0;
-    const char *result = find_json_object("{\"key\":\"value\"}", &len);
-    ASSERT(result != NULL);
-    ASSERT_EQ_INT(15, len);
-}
-
-TEST(test_find_json_with_preamble) {
-    /* JSON preceded by text */
-    int len = 0;
-    const char *input = "Here is the JSON: {\"entities\":[]}";
-    const char *result = find_json_object(input, &len);
-    ASSERT(result != NULL);
-    ASSERT(result == input + 18);
-    ASSERT_EQ_INT(15, len); /* {"entities":[]} = 15 chars */
-}
-
-TEST(test_find_json_nested) {
-    /* Nested braces */
-    int len = 0;
-    const char *input = "{\"a\":{\"b\":1}}";
-    const char *result = find_json_object(input, &len);
-    ASSERT(result != NULL);
-    ASSERT_EQ_INT(13, len);
-}
-
-TEST(test_find_json_with_strings) {
-    /* Braces inside strings should not affect depth tracking */
-    int len = 0;
-    const char *input = "{\"text\":\"a { b } c\"}";
-    const char *result = find_json_object(input, &len);
-    ASSERT(result != NULL);
-    ASSERT_EQ_INT(20, len);
-}
-
-TEST(test_find_json_with_escaped_quotes) {
-    /* Escaped quotes inside strings */
-    int len = 0;
-    const char *input = "{\"text\":\"she said \\\"hello\\\"\"}";
-    const char *result = find_json_object(input, &len);
-    ASSERT(result != NULL);
-    ASSERT(result[0] == '{');
-    ASSERT(result[len - 1] == '}');
-}
-
-TEST(test_find_json_no_json) {
-    /* No JSON at all */
-    int len = 0;
-    const char *result = find_json_object("no json here at all", &len);
-    ASSERT(result == NULL);
-}
-
-TEST(test_find_json_unbalanced) {
-    /* Unbalanced braces → should return NULL */
-    int len = 0;
-    const char *result = find_json_object("{\"key\":\"value\"", &len);
-    ASSERT(result == NULL);
-}
-
-TEST(test_find_json_empty_object) {
-    int len = 0;
-    const char *result = find_json_object("{}", &len);
-    ASSERT(result != NULL);
-    ASSERT_EQ_INT(2, len);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -540,7 +481,7 @@ TEST(test_summarize_null_args) {
  * ═══════════════════════════════════════════════════════════════ */
 
 TEST(test_log_level_verbose) {
-    chat_test_reset_backend();
+    muninn_test_reset_backend();
     setenv("MUNINN_LOG_LEVEL", "verbose", 1);
 
     sqlite3 *db = open_test_db();
@@ -555,7 +496,7 @@ TEST(test_log_level_verbose) {
 }
 
 TEST(test_log_level_warn) {
-    chat_test_reset_backend();
+    muninn_test_reset_backend();
     setenv("MUNINN_LOG_LEVEL", "warn", 1);
 
     sqlite3 *db = open_test_db();
@@ -569,7 +510,7 @@ TEST(test_log_level_warn) {
 }
 
 TEST(test_log_level_error) {
-    chat_test_reset_backend();
+    muninn_test_reset_backend();
     setenv("MUNINN_LOG_LEVEL", "error", 1);
 
     sqlite3 *db = open_test_db();
@@ -580,7 +521,7 @@ TEST(test_log_level_error) {
     sqlite3_close(db);
 
     /* Clean up: reset to default (no logging) */
-    chat_test_reset_backend();
+    muninn_test_reset_backend();
     unsetenv("MUNINN_LOG_LEVEL");
 }
 
@@ -590,29 +531,29 @@ TEST(test_log_level_error) {
 
 TEST(test_registry_duplicate) {
     /* Injecting a dummy with the same name should fail */
-    int rc = chat_test_inject_dummy("__dup_test__");
+    int rc = muninn_test_inject_dummy("__dup_test__", MUNINN_MODEL_CHAT);
     ASSERT_EQ_INT(0, rc);
 
-    rc = chat_test_inject_dummy("__dup_test__");
+    rc = muninn_test_inject_dummy("__dup_test__", MUNINN_MODEL_CHAT);
     ASSERT_EQ_INT(-1, rc);
 
-    chat_test_remove_dummy("__dup_test__");
+    muninn_test_remove_dummy("__dup_test__");
 }
 
 TEST(test_registry_full) {
     /* Fill registry to max capacity, then verify overflow returns -2 */
-    int max = chat_test_max_models();
+    int max = muninn_registry_capacity();
     char name[64];
 
     for (int i = 0; i < max; i++) {
         snprintf(name, sizeof(name), "__full_test_%d__", i);
-        chat_test_inject_dummy(name);
+        muninn_test_inject_dummy(name, MUNINN_MODEL_CHAT);
     }
 
-    int rc = chat_test_inject_dummy("__overflow__");
+    int rc = muninn_test_inject_dummy("__overflow__", MUNINN_MODEL_CHAT);
     ASSERT_EQ_INT(-2, rc);
 
-    chat_test_clear_all_dummies();
+    muninn_test_clear_all_dummies();
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -624,7 +565,7 @@ TEST(test_vtab_select_hidden_column) {
     sqlite3 *db = open_test_db();
 
     /* Add a dummy to have a row to select */
-    chat_test_inject_dummy("__hidden_test__");
+    muninn_test_inject_dummy("__hidden_test__", MUNINN_MODEL_CHAT);
 
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(db, "SELECT name, model, n_ctx FROM muninn_chat_models", -1, &stmt, NULL);
@@ -643,7 +584,7 @@ TEST(test_vtab_select_hidden_column) {
 
     sqlite3_finalize(stmt);
     sqlite3_close(db);
-    chat_test_remove_dummy("__hidden_test__");
+    muninn_test_remove_dummy("__hidden_test__");
 }
 
 TEST(test_vtab_update_unsupported) {
@@ -651,7 +592,7 @@ TEST(test_vtab_update_unsupported) {
     sqlite3 *db = open_test_db();
 
     /* Need a row to UPDATE */
-    chat_test_inject_dummy("__update_test__");
+    muninn_test_inject_dummy("__update_test__", MUNINN_MODEL_CHAT);
 
     char *errmsg = NULL;
     int rc = sqlite3_exec(db, "UPDATE muninn_chat_models SET name = 'new' WHERE name = '__update_test__'", NULL, NULL,
@@ -662,7 +603,7 @@ TEST(test_vtab_update_unsupported) {
         sqlite3_free(errmsg);
 
     sqlite3_close(db);
-    chat_test_remove_dummy("__update_test__");
+    muninn_test_remove_dummy("__update_test__");
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1053,11 +994,11 @@ static void integ_vtab_registry_full(const char *name, const char *path) {
     sqlite3 *db = open_test_db();
 
     /* Fill remaining slots with dummies */
-    int max = chat_test_max_models();
+    int max = muninn_registry_capacity();
     for (int i = 0; i < max; i++) {
         char dname[64];
         snprintf(dname, sizeof(dname), "__full_%d__", i);
-        chat_test_inject_dummy(dname);
+        muninn_test_inject_dummy(dname, MUNINN_MODEL_CHAT);
     }
 
     /* INSERT should fail with "registry full" */
@@ -1076,7 +1017,7 @@ static void integ_vtab_registry_full(const char *name, const char *path) {
     }
 
     /* Clean up dummies (keep real models) */
-    chat_test_clear_all_dummies();
+    muninn_test_clear_all_dummies();
 
     sqlite3_close(db);
 }
@@ -1185,16 +1126,8 @@ void test_llama_chat(void) {
     RUN_TEST(test_strip_think_block_with_whitespace);
     RUN_TEST(test_strip_think_block_no_tag);
     RUN_TEST(test_strip_think_block_empty);
-    RUN_TEST(test_strip_think_block_partial);
-
-    RUN_TEST(test_find_json_simple);
-    RUN_TEST(test_find_json_with_preamble);
-    RUN_TEST(test_find_json_nested);
-    RUN_TEST(test_find_json_with_strings);
-    RUN_TEST(test_find_json_with_escaped_quotes);
-    RUN_TEST(test_find_json_no_json);
-    RUN_TEST(test_find_json_unbalanced);
-    RUN_TEST(test_find_json_empty_object);
+    RUN_TEST(test_strip_think_block_truncated);
+    RUN_TEST(test_strip_think_block_not_at_start);
 
     /* ── Logging env var tests ─────────────────────────────── */
     RUN_TEST(test_log_level_verbose);

@@ -373,11 +373,39 @@ static double run_leiden(const GraphData *g, int *community, double resolution, 
         if (moves == 0)
             break;
 
-        /* Phase 2: Refinement */
+        /* Phase 2: Refinement — sub-partition within Phase 1 communities.
+         * Only adopt the refined partition if it merges at least as many
+         * nodes as Phase 1 did.  The refinement gain formula uses global m,
+         * which makes the penalty term dominate for small/medium graphs,
+         * causing refinement to produce all-singletons.  Falling back to
+         * the Phase 1 result in that case preserves correct community
+         * structure. */
         leiden_refinement(g, community, refined, k, m, resolution, use_both);
 
-        /* Use refined partition as the community assignment */
-        memcpy(community, refined, (size_t)N * sizeof(int));
+        /* Count distinct communities in Phase 1 vs refinement */
+        int p1_comms = 0, ref_comms = 0;
+        {
+            /* Use a simple counting approach */
+            int *p1_seen = (int *)calloc((size_t)N, sizeof(int));
+            int *ref_seen = (int *)calloc((size_t)N, sizeof(int));
+            for (int i = 0; i < N; i++) {
+                if (!p1_seen[community[i]]) {
+                    p1_seen[community[i]] = 1;
+                    p1_comms++;
+                }
+                if (!ref_seen[refined[i]]) {
+                    ref_seen[refined[i]] = 1;
+                    ref_comms++;
+                }
+            }
+            free(p1_seen);
+            free(ref_seen);
+        }
+
+        /* Only use refinement if it didn't regress to more communities */
+        if (ref_comms <= p1_comms) {
+            memcpy(community, refined, (size_t)N * sizeof(int));
+        }
 
         /* Renumber and recompute sum_tot */
         int K = renumber_communities(community, N);

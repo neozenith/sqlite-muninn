@@ -11,11 +11,11 @@
  */
 
 #include "llama_chat.h"
+#include "llama_common.h"
 
 SQLITE_EXTENSION_INIT3
 
 #include <llama.h>
-#include <ggml.h>
 #include <yyjson.h>
 
 #include <stdlib.h>
@@ -26,10 +26,7 @@ SQLITE_EXTENSION_INIT3
  * Configuration
  * ────────────────────────────────────────────────────────────── */
 
-#define MAX_CHAT_MODELS 8
-#define MAX_CHAT_NAME 64
 #define DEFAULT_N_CTX 8192
-#define DEFAULT_MAX_TOKENS 512
 #define MAX_BATCH_SEQS 8
 #define DEFAULT_BATCH_SIZE 4
 
@@ -82,85 +79,6 @@ static const char *GBNF_NER_RE =
     "\"\\\"score\\\"\" ws \":\" ws number ws \"}\"\n" GBNF_COMMON_RULES;
 
 /* ──────────────────────────────────────────────────────────────────
- * Logging (mirrors llama_embed.c — safe to call llama_log_set twice)
- * ────────────────────────────────────────────────────────────── */
-
-static enum ggml_log_level g_chat_log_level = GGML_LOG_LEVEL_NONE;
-static int g_chat_backend_init = 0;
-
-static void chat_log_callback(enum ggml_log_level level, const char *text, void *user_data) {
-    (void)user_data;
-    if (level >= g_chat_log_level && g_chat_log_level != GGML_LOG_LEVEL_NONE) {
-        fputs(text, stderr);
-    }
-}
-
-static void ensure_backend_chat(void) {
-    if (!g_chat_backend_init) {
-        const char *env = getenv("MUNINN_LOG_LEVEL");
-        if (env && strcmp(env, "verbose") == 0) {
-            g_chat_log_level = GGML_LOG_LEVEL_DEBUG;
-        } else if (env && strcmp(env, "warn") == 0) {
-            g_chat_log_level = GGML_LOG_LEVEL_WARN;
-        } else if (env && strcmp(env, "error") == 0) {
-            g_chat_log_level = GGML_LOG_LEVEL_ERROR;
-        }
-        llama_log_set(chat_log_callback, NULL);
-        llama_backend_init();
-        g_chat_backend_init = 1;
-    }
-}
-
-/* ──────────────────────────────────────────────────────────────────
- * Chat Model Registry
- * ────────────────────────────────────────────────────────────── */
-
-typedef struct {
-    struct llama_model *model;
-    struct llama_context *ctx;
-    int n_ctx;
-    int in_use;
-    char name[MAX_CHAT_NAME];
-} ChatModelEntry;
-
-static ChatModelEntry g_chat_models[MAX_CHAT_MODELS];
-
-static ChatModelEntry *chat_registry_find(const char *name) {
-    for (int i = 0; i < MAX_CHAT_MODELS; i++) {
-        if (g_chat_models[i].in_use && strcmp(g_chat_models[i].name, name) == 0)
-            return &g_chat_models[i];
-    }
-    return NULL;
-}
-
-static int chat_registry_add(const char *name, struct llama_model *model, struct llama_context *ctx, int n_ctx) {
-    if (chat_registry_find(name))
-        return -1; /* duplicate name */
-    for (int i = 0; i < MAX_CHAT_MODELS; i++) {
-        if (!g_chat_models[i].in_use) {
-            g_chat_models[i].model = model;
-            g_chat_models[i].ctx = ctx;
-            g_chat_models[i].n_ctx = n_ctx;
-            g_chat_models[i].in_use = 1;
-            snprintf(g_chat_models[i].name, MAX_CHAT_NAME, "%s", name);
-            return 0;
-        }
-    }
-    return -2; /* registry full */
-}
-
-static void chat_registry_remove(const char *name) {
-    for (int i = 0; i < MAX_CHAT_MODELS; i++) {
-        if (g_chat_models[i].in_use && strcmp(g_chat_models[i].name, name) == 0) {
-            llama_free(g_chat_models[i].ctx);
-            llama_model_free(g_chat_models[i].model);
-            memset(&g_chat_models[i], 0, sizeof(ChatModelEntry));
-            return;
-        }
-    }
-}
-
-/* ──────────────────────────────────────────────────────────────────
  * Model Loading
  * ────────────────────────────────────────────────────────────── */
 
@@ -173,7 +91,7 @@ typedef struct {
 static const char *CHAT_MODEL_PTR_TYPE = "muninn_chat_model";
 
 static int load_chat_model(const char *path, int n_ctx, LoadedChatModel *out, char *errbuf, int errbuf_sz) {
-    ensure_backend_chat();
+    muninn_ensure_backend();
 
     struct llama_model_params mparams = llama_model_default_params();
 #ifndef MUNINN_DEFAULT_GPU_LAYERS
@@ -233,7 +151,7 @@ static int load_chat_model(const char *path, int n_ctx, LoadedChatModel *out, ch
  * batch, then runs autoregressive sampling until EOG or max_tokens.
  * ────────────────────────────────────────────────────────────── */
 
-static int chat_generate(ChatModelEntry *me, const char *prompt, const char *grammar_gbnf, int max_tokens,
+static int chat_generate(MuninnModelEntry *me, const char *prompt, const char *grammar_gbnf, int max_tokens,
                          char **out_text, int *out_len, char *errbuf, int errbuf_sz) {
     const struct llama_vocab *vocab = llama_model_get_vocab(me->model);
 
@@ -353,7 +271,7 @@ typedef struct {
     int done;   /* 1 = finished (EOG, error, or skipped) */
 } BatchSlot;
 
-static int chat_generate_batch(ChatModelEntry *me, const char **prompts, int n_prompts, const char *grammar_gbnf,
+static int chat_generate_batch(MuninnModelEntry *me, const char **prompts, int n_prompts, const char *grammar_gbnf,
                                int max_tokens, BatchSlot *slots, char *errbuf, int errbuf_sz) {
     if (n_prompts <= 0 || n_prompts > MAX_BATCH_SEQS) {
         snprintf(errbuf, errbuf_sz, "batch size %d out of range [1,%d]", n_prompts, MAX_BATCH_SEQS);
@@ -547,7 +465,7 @@ static int chat_generate_batch(ChatModelEntry *me, const char **prompts, int n_p
  * For convenience functions, builds system+user message pairs.
  * ────────────────────────────────────────────────────────────── */
 
-static char *format_chat_messages(ChatModelEntry *me, const char *system_msg, const char *user_msg, int *out_len) {
+static char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const char *user_msg, int *out_len) {
     struct llama_chat_message msgs[2];
     int n_msg = 0;
 
@@ -585,9 +503,14 @@ static char *format_chat_messages(ChatModelEntry *me, const char *system_msg, co
 /* ──────────────────────────────────────────────────────────────────
  * Qwen3 <think> block stripping
  *
- * Qwen3 models may emit <think>...</think> blocks before JSON output
- * even with /no_think in the system prompt. Strip everything up to
+ * Qwen3/3.5 models may emit <think>...</think> blocks before output
+ * even with /no_think in the user prompt. Strip everything up to
  * and including the closing </think> tag.
+ *
+ * Also handles truncated think blocks: when max_tokens is exhausted
+ * mid-reasoning, the output starts with <think> but never closes.
+ * In that case, the entire output is reasoning with no response —
+ * return pointer to end of string (empty result).
  * ────────────────────────────────────────────────────────────── */
 
 const char *strip_think_block(const char *text) {
@@ -599,49 +522,15 @@ const char *strip_think_block(const char *text) {
             after++;
         return after;
     }
+    /* Truncated think block: <think> opened but never closed.
+     * The model exhausted tokens on reasoning. Return empty.
+     * Skip leading whitespace — some models emit \n before <think>. */
+    const char *t = text;
+    while (*t == ' ' || *t == '\n' || *t == '\r' || *t == '\t')
+        t++;
+    if (strncmp(t, "<think>", 7) == 0)
+        return text + strlen(text);
     return text;
-}
-
-/* ──────────────────────────────────────────────────────────────────
- * JSON Object Extraction
- *
- * Find the first top-level JSON object `{...}` in free-form model
- * output. Handles preamble text, string literals, and nested braces.
- * Returns pointer to opening '{' and sets *out_len. NULL if not found.
- * ────────────────────────────────────────────────────────────── */
-
-const char *find_json_object(const char *text, int *out_len) {
-    const char *start = strchr(text, '{');
-    if (!start)
-        return NULL;
-
-    int depth = 0;
-    int in_string = 0;
-    for (const char *p = start; *p; p++) {
-        if (in_string) {
-            if (*p == '\\' && *(p + 1)) {
-                p++;
-                continue;
-            }
-            if (*p == '"')
-                in_string = 0;
-            continue;
-        }
-        if (*p == '"') {
-            in_string = 1;
-            continue;
-        }
-        if (*p == '{')
-            depth++;
-        if (*p == '}') {
-            depth--;
-            if (depth == 0) {
-                *out_len = (int)(p - start + 1);
-                return start;
-            }
-        }
-    }
-    return NULL; /* unbalanced braces */
 }
 
 /* ──────────────────────────────────────────────────────────────────
@@ -720,7 +609,7 @@ static void fn_chat(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
         return;
     }
 
-    ChatModelEntry *me = chat_registry_find(name);
+    MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
     if (!me) {
         char err[128];
         snprintf(err, sizeof(err), "muninn_chat: model '%s' not loaded", name);
@@ -732,7 +621,7 @@ static void fn_chat(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc >= 3 && sqlite3_value_type(argv[2]) == SQLITE_TEXT) {
         grammar = (const char *)sqlite3_value_text(argv[2]);
     }
-    int max_tokens = DEFAULT_MAX_TOKENS;
+    int max_tokens = me->n_ctx;
     if (argc >= 4 && sqlite3_value_type(argv[3]) == SQLITE_INTEGER) {
         max_tokens = sqlite3_value_int(argv[3]);
     }
@@ -775,7 +664,7 @@ static void fn_extract_entities(sqlite3_context *ctx, int argc, sqlite3_value **
         return;
     }
 
-    ChatModelEntry *me = chat_registry_find(name);
+    MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
     if (!me) {
         char err[128];
         snprintf(err, sizeof(err), "muninn_extract_entities: model '%s' not loaded", name);
@@ -791,8 +680,7 @@ static void fn_extract_entities(sqlite3_context *ctx, int argc, sqlite3_value **
         "Use the full range: 1.0 = definite, 0.7-0.9 = high confidence, "
         "0.4-0.6 = moderate, below 0.4 = uncertain. "
         "Respond ONLY with a JSON object in this format: "
-        "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} "
-        "/no_think";
+        "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} ";
 
     int user_len = (int)strlen(text) + (int)strlen(labels) + 128;
     char *user_prompt = (char *)malloc((size_t)user_len);
@@ -812,7 +700,7 @@ static void fn_extract_entities(sqlite3_context *ctx, int argc, sqlite3_value **
     char errbuf[256];
     char *output = NULL;
     int output_len = 0;
-    int rc = chat_generate(me, formatted, GBNF_NER, DEFAULT_MAX_TOKENS, &output, &output_len, errbuf, sizeof(errbuf));
+    int rc = chat_generate(me, formatted, GBNF_NER, me->n_ctx, &output, &output_len, errbuf, sizeof(errbuf));
     free(formatted);
     if (rc != 0) {
         sqlite3_result_error(ctx, errbuf, -1);
@@ -838,7 +726,7 @@ static void fn_extract_relations(sqlite3_context *ctx, int argc, sqlite3_value *
         return;
     }
 
-    ChatModelEntry *me = chat_registry_find(name);
+    MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
     if (!me) {
         char err[128];
         snprintf(err, sizeof(err), "muninn_extract_relations: model '%s' not loaded", name);
@@ -855,8 +743,7 @@ static void fn_extract_relations(sqlite3_context *ctx, int argc, sqlite3_value *
         "Use the full range: 1.0 = explicitly stated, 0.7-0.9 = strongly implied, "
         "0.4-0.6 = inferred, below 0.4 = speculative. "
         "Respond ONLY with a JSON object in this format: "
-        "{\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} "
-        "/no_think";
+        "{\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} ";
 
     int user_len = (int)strlen(text) + (int)strlen(ents) + 128;
     char *user_prompt = (char *)malloc((size_t)user_len);
@@ -876,7 +763,7 @@ static void fn_extract_relations(sqlite3_context *ctx, int argc, sqlite3_value *
     char errbuf[256];
     char *output = NULL;
     int output_len = 0;
-    int rc = chat_generate(me, formatted, GBNF_RE, DEFAULT_MAX_TOKENS, &output, &output_len, errbuf, sizeof(errbuf));
+    int rc = chat_generate(me, formatted, GBNF_RE, me->n_ctx, &output, &output_len, errbuf, sizeof(errbuf));
     free(formatted);
     if (rc != 0) {
         sqlite3_result_error(ctx, errbuf, -1);
@@ -907,7 +794,7 @@ static void fn_extract_ner_re(sqlite3_context *ctx, int argc, sqlite3_value **ar
         return;
     }
 
-    ChatModelEntry *me = chat_registry_find(name);
+    MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
     if (!me) {
         char err[128];
         snprintf(err, sizeof(err), "muninn_extract_ner_re: model '%s' not loaded", name);
@@ -925,8 +812,7 @@ static void fn_extract_ner_re(sqlite3_context *ctx, int argc, sqlite3_value **ar
         "0.4-0.6 = inferred, below 0.4 = speculative. "
         "Respond ONLY with a JSON object in this format: "
         "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...], "
-        "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} "
-        "/no_think";
+        "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} ";
 
     int user_len = (int)strlen(text) + (int)strlen(entity_labels) + (int)strlen(relation_labels) + 192;
     char *user_prompt = (char *)malloc((size_t)user_len);
@@ -949,7 +835,7 @@ static void fn_extract_ner_re(sqlite3_context *ctx, int argc, sqlite3_value **ar
     int output_len = 0;
     /* Use 2x default max tokens since combined output is larger */
     int rc =
-        chat_generate(me, formatted, GBNF_NER_RE, DEFAULT_MAX_TOKENS * 2, &output, &output_len, errbuf, sizeof(errbuf));
+        chat_generate(me, formatted, GBNF_NER_RE, me->n_ctx, &output, &output_len, errbuf, sizeof(errbuf));
     free(formatted);
     if (rc != 0) {
         sqlite3_result_error(ctx, errbuf, -1);
@@ -964,7 +850,7 @@ static void fn_extract_ner_re(sqlite3_context *ctx, int argc, sqlite3_value **ar
  * GBNF grammar, build output JSON array from grammar-guaranteed results.
  * ────────────────────────────────────────────────────────────── */
 
-static void batch_extract_core(sqlite3_context *ctx, ChatModelEntry *me, yyjson_doc *in_doc, yyjson_val *in_arr,
+static void batch_extract_core(sqlite3_context *ctx, MuninnModelEntry *me, yyjson_doc *in_doc, yyjson_val *in_arr,
                                const char *sys_prompt, const char *grammar_gbnf, const char *fallback_json,
                                int max_tokens, int batch_size,
                                void (*build_user_prompt)(char *buf, int buf_sz, const char *text, const void *extra),
@@ -1060,7 +946,8 @@ typedef struct {
 
 static void build_ner_re_prompt(char *buf, int buf_sz, const char *text, const void *extra) {
     const NerRePromptExtra *e = (const NerRePromptExtra *)extra;
-    snprintf(buf, (size_t)buf_sz, "Extract entities of types: %s\nExtract relations of types: %s\nText: %s",
+    snprintf(buf, (size_t)buf_sz,
+             "Extract entities of types: %s\nExtract relations of types: %s\nText: %s",
              e->entity_labels, e->relation_labels, text);
 }
 
@@ -1089,7 +976,7 @@ static void fn_extract_entities_batch(sqlite3_context *ctx, int argc, sqlite3_va
             batch_size = MAX_BATCH_SEQS;
     }
 
-    ChatModelEntry *me = chat_registry_find(name);
+    MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
     if (!me) {
         char err[128];
         snprintf(err, sizeof(err), "muninn_extract_entities_batch: model '%s' not loaded", name);
@@ -1123,11 +1010,10 @@ static void fn_extract_entities_batch(sqlite3_context *ctx, int argc, sqlite3_va
         "Use the full range: 1.0 = definite, 0.7-0.9 = high confidence, "
         "0.4-0.6 = moderate, below 0.4 = uncertain. "
         "Respond ONLY with a JSON object in this format: "
-        "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} "
-        "/no_think";
+        "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} ";
 
     NerPromptExtra extra = {.labels = labels};
-    batch_extract_core(ctx, me, in_doc, in_arr, sys_prompt, GBNF_NER, "{\"entities\":[]}", DEFAULT_MAX_TOKENS,
+    batch_extract_core(ctx, me, in_doc, in_arr, sys_prompt, GBNF_NER, "{\"entities\":[]}", me->n_ctx,
                        batch_size, build_ner_prompt, &extra);
 }
 
@@ -1160,7 +1046,7 @@ static void fn_extract_ner_re_batch(sqlite3_context *ctx, int argc, sqlite3_valu
             batch_size = MAX_BATCH_SEQS;
     }
 
-    ChatModelEntry *me = chat_registry_find(name);
+    MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
     if (!me) {
         char err[128];
         snprintf(err, sizeof(err), "muninn_extract_ner_re_batch: model '%s' not loaded", name);
@@ -1196,12 +1082,11 @@ static void fn_extract_ner_re_batch(sqlite3_context *ctx, int argc, sqlite3_valu
         "0.4-0.6 = inferred, below 0.4 = speculative. "
         "Respond ONLY with a JSON object in this format: "
         "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...], "
-        "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} "
-        "/no_think";
+        "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} ";
 
     NerRePromptExtra extra = {.entity_labels = entity_labels, .relation_labels = relation_labels};
     batch_extract_core(ctx, me, in_doc, in_arr, sys_prompt, GBNF_NER_RE, "{\"entities\":[],\"relations\":[]}",
-                       DEFAULT_MAX_TOKENS * 2, batch_size, build_ner_re_prompt, &extra);
+                       me->n_ctx, batch_size, build_ner_re_prompt, &extra);
 }
 
 /* ──────────────────────────────────────────────────────────────────
@@ -1216,7 +1101,7 @@ static void fn_summarize(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
         return;
     }
 
-    ChatModelEntry *me = chat_registry_find(name);
+    MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
     if (!me) {
         char err[128];
         snprintf(err, sizeof(err), "muninn_summarize: model '%s' not loaded", name);
@@ -1224,23 +1109,25 @@ static void fn_summarize(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
         return;
     }
 
-    int max_tokens = 128;
+    /* Default: let the model generate until EOG (end-of-generation) token.
+     * n_ctx is the hard ceiling. Thinking models use part of the budget for
+     * internal reasoning; strip_think_block() removes it from the result. */
+    int max_tokens = me->n_ctx;
     if (argc >= 3 && sqlite3_value_type(argv[2]) == SQLITE_INTEGER) {
         max_tokens = sqlite3_value_int(argv[2]);
     }
 
-    static const char *sys_prompt = "You are a concise summarization system. "
-                                    "Produce a brief, accurate summary of the given text. /no_think";
-
-    int user_len = (int)strlen(text) + 64;
+    int user_len = (int)strlen(text) + 256;
     char *user_prompt = (char *)malloc((size_t)user_len);
     if (!user_prompt) {
         sqlite3_result_error_nomem(ctx);
         return;
     }
-    snprintf(user_prompt, user_len, "Summarize:\n%s", text);
+    snprintf(user_prompt, user_len,
+             "Produce a one-sentence summary of this text:\n\n%s",
+             text);
 
-    char *formatted = format_chat_messages(me, sys_prompt, user_prompt, NULL);
+    char *formatted = format_chat_messages(me, NULL, user_prompt, NULL);
     free(user_prompt);
     if (!formatted) {
         sqlite3_result_error(ctx, "muninn_summarize: template formatting failed", -1);
@@ -1325,8 +1212,13 @@ static int chat_models_close(sqlite3_vtab_cursor *pCursor) {
 }
 
 static void chat_models_advance(ChatModelsCursor *cur) {
-    while (cur->current < MAX_CHAT_MODELS && !g_chat_models[cur->current].in_use)
+    int cap = muninn_registry_capacity();
+    while (cur->current < cap) {
+        MuninnModelEntry *e = muninn_registry_at(cur->current);
+        if (e && e->in_use && e->type == MUNINN_MODEL_CHAT)
+            break;
         cur->current++;
+    }
 }
 
 static int chat_models_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr, int argc,
@@ -1349,12 +1241,12 @@ static int chat_models_next(sqlite3_vtab_cursor *pCursor) {
 }
 
 static int chat_models_eof(sqlite3_vtab_cursor *pCursor) {
-    return ((ChatModelsCursor *)pCursor)->current >= MAX_CHAT_MODELS;
+    return ((ChatModelsCursor *)pCursor)->current >= muninn_registry_capacity();
 }
 
 static int chat_models_column(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int col) {
     ChatModelsCursor *cur = (ChatModelsCursor *)pCursor;
-    ChatModelEntry *me = &g_chat_models[cur->current];
+    MuninnModelEntry *me = muninn_registry_at(cur->current);
     switch (col) {
     case 0:
         sqlite3_result_text(ctx, me->name, -1, SQLITE_TRANSIENT);
@@ -1380,7 +1272,7 @@ static int chat_models_rowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid
 static int chat_models_best_index(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo) {
     (void)pVtab;
     pInfo->estimatedCost = 10.0;
-    pInfo->estimatedRows = MAX_CHAT_MODELS;
+    pInfo->estimatedRows = muninn_registry_capacity();
     return SQLITE_OK;
 }
 
@@ -1390,8 +1282,9 @@ static int chat_models_update(sqlite3_vtab *pVtab, int argc, sqlite3_value **arg
     if (argc == 1) {
         /* DELETE: argv[0] = rowid */
         int idx = (int)sqlite3_value_int64(argv[0]);
-        if (idx >= 0 && idx < MAX_CHAT_MODELS && g_chat_models[idx].in_use) {
-            chat_registry_remove(g_chat_models[idx].name);
+        MuninnModelEntry *me = muninn_registry_at(idx);
+        if (me && me->in_use && me->type == MUNINN_MODEL_CHAT) {
+            muninn_registry_remove(me->name);
         }
         return SQLITE_OK;
     }
@@ -1410,13 +1303,13 @@ static int chat_models_update(sqlite3_vtab *pVtab, int argc, sqlite3_value **arg
             return SQLITE_ERROR;
         }
 
-        int rc = chat_registry_add(name, lm->model, lm->ctx, lm->n_ctx);
+        int rc = muninn_registry_add(name, lm->model, lm->ctx, 0, lm->n_ctx, MUNINN_MODEL_CHAT);
         if (rc == -1) {
             pVtab->zErrMsg = sqlite3_mprintf("muninn_chat_models: model '%s' already loaded", name);
             return SQLITE_ERROR;
         }
         if (rc == -2) {
-            pVtab->zErrMsg = sqlite3_mprintf("muninn_chat_models: registry full (max %d)", MAX_CHAT_MODELS);
+            pVtab->zErrMsg = sqlite3_mprintf("muninn_chat_models: registry full (max %d)", muninn_registry_capacity());
             return SQLITE_ERROR;
         }
 
@@ -1508,40 +1401,3 @@ int chat_register_functions(sqlite3 *db) {
     return SQLITE_OK;
 }
 
-/* ──────────────────────────────────────────────────────────────────
- * Test Helpers (compiled only for test_runner)
- * ────────────────────────────────────────────────────────────── */
-
-#ifdef LLAMA_CHAT_TESTING
-
-void chat_test_reset_backend(void) {
-    g_chat_backend_init = 0;
-    g_chat_log_level = GGML_LOG_LEVEL_NONE;
-}
-
-int chat_test_inject_dummy(const char *name) {
-    return chat_registry_add(name, NULL, NULL, 0);
-}
-
-void chat_test_remove_dummy(const char *name) {
-    for (int i = 0; i < MAX_CHAT_MODELS; i++) {
-        if (g_chat_models[i].in_use && strcmp(g_chat_models[i].name, name) == 0 && !g_chat_models[i].model) {
-            memset(&g_chat_models[i], 0, sizeof(ChatModelEntry));
-            return;
-        }
-    }
-}
-
-void chat_test_clear_all_dummies(void) {
-    for (int i = 0; i < MAX_CHAT_MODELS; i++) {
-        if (g_chat_models[i].in_use && !g_chat_models[i].model) {
-            memset(&g_chat_models[i], 0, sizeof(ChatModelEntry));
-        }
-    }
-}
-
-int chat_test_max_models(void) {
-    return MAX_CHAT_MODELS;
-}
-
-#endif /* LLAMA_CHAT_TESTING */

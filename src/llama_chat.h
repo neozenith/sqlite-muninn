@@ -28,14 +28,5 @@ int chat_register_functions(sqlite3 *db);
 
 /* Exposed for direct testing — pure string operations, no side effects */
 const char *strip_think_block(const char *text);
-const char *find_json_object(const char *text, int *out_len);
-
-#ifdef LLAMA_CHAT_TESTING
-void chat_test_reset_backend(void);
-int chat_test_inject_dummy(const char *name);
-void chat_test_remove_dummy(const char *name);
-void chat_test_clear_all_dummies(void);
-int chat_test_max_models(void);
-#endif
 
 #endif /* LLAMA_CHAT_H */
