@@ -19,6 +19,7 @@ Screenshots saved to examples/e2e_screenshots/
 import logging
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -41,9 +42,12 @@ def discover_examples() -> list[str]:
     )
 
 
-def colab_url(name: str) -> str:
+def colab_url(name: str, *, cache_bust: bool = False) -> str:
     """Construct the Colab badge URL for an example."""
-    return f"{COLAB_BASE}/{GITHUB_OWNER}/{GITHUB_REPO}/blob/{GITHUB_BRANCH}/examples/{name}/{name}.ipynb"
+    url = f"{COLAB_BASE}/{GITHUB_OWNER}/{GITHUB_REPO}/blob/{GITHUB_BRANCH}/examples/{name}/{name}.ipynb"
+    if cache_bust:
+        url += f"?_cb={int(time.time())}"
+    return url
 
 
 def run_cli(*args: str, timeout: int = 60) -> str:
@@ -128,6 +132,7 @@ def main() -> None:
 
     # Parse args
     check_code = "--check-code" in sys.argv
+    cache_bust = "--cache-bust" in sys.argv
     filter_names = [a for a in sys.argv[1:] if not a.startswith("--")]
 
     all_examples = discover_examples()
@@ -146,13 +151,13 @@ def main() -> None:
     run_cli("close-all")
 
     # Open browser with first URL
-    first_url = colab_url(examples[0])
+    first_url = colab_url(examples[0], cache_bust=cache_bust)
     run_cli("open", first_url, timeout=90)
 
     results = []
     for i, name in enumerate(examples):
         if i > 0:
-            run_cli("goto", colab_url(name), timeout=60)
+            run_cli("goto", colab_url(name, cache_bust=cache_bust), timeout=60)
 
         result = test_example(name, check_code=check_code)
         results.append(result)
