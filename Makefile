@@ -316,10 +316,10 @@ EXAMPLES_GGUF := text_embeddings llm_chat llm_summarize llm_tokenize llm_extract
 examples-test: examples-test-fast examples-test-gguf  ## Run all example notebooks as tests
 
 examples-test-fast: examples-colab-jupytext build/muninn$(EXT)  ## Run fast examples (no model downloads)
-	uv run pytest --nbmake $(foreach e,$(EXAMPLES_FAST),examples/$(e)/$(e).ipynb)
+	uv run pytest --no-cov --nbmake $(foreach e,$(EXAMPLES_FAST),examples/$(e)/$(e).ipynb)
 
 examples-test-gguf: examples-colab-jupytext build/muninn$(EXT)  ## Run GGUF examples (downloads models)
-	uv run pytest --nbmake --nbmake-timeout=600 $(foreach e,$(EXAMPLES_GGUF),examples/$(e)/$(e).ipynb)
+	uv run pytest --no-cov --nbmake --nbmake-timeout=600 $(foreach e,$(EXAMPLES_GGUF),examples/$(e)/$(e).ipynb)
 
 dist: examples-colab-jupytext dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
 	@echo ""

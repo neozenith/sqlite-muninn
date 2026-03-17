@@ -10,9 +10,11 @@ direction='both' traverses undirected edges stored in one direction.
 import sqlite3
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent.parent
-EXTENSION_PATH = str(PROJECT_ROOT / "muninn")
+try:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+except NameError:
+    PROJECT_ROOT = Path.cwd().parent.parent  # notebook kernel CWD is examples/{name}/
+EXTENSION_PATH = str(PROJECT_ROOT / "build" / "muninn")
 
 # ── Data: Two friend clusters with a bridge ──────────────────────────
 # Cluster 1: Alice, Bob, Carol, Dave (tightly connected)

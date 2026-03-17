@@ -10,9 +10,11 @@ edges with hub papers that accumulate high PageRank from many citations.
 import sqlite3
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent.parent
-EXTENSION_PATH = str(PROJECT_ROOT / "muninn")
+try:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+except NameError:
+    PROJECT_ROOT = Path.cwd().parent.parent  # notebook kernel CWD is examples/{name}/
+EXTENSION_PATH = str(PROJECT_ROOT / "build" / "muninn")
 
 # ── Data: 12 papers in 3 clusters ───────────────────────────────────
 # ML cluster (5 papers): ML-Survey is heavily cited hub
