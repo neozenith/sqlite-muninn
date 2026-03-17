@@ -1,5 +1,7 @@
 # Social Network — Friends of Friends
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/social_network/example.ipynb)
+
 Explore social connections using BFS and DFS graph traversal.
 
 ## What This Demonstrates

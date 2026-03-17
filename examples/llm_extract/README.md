@@ -1,5 +1,7 @@
 # LLM Extract — Comparing muninn GGUF vs GLiNER2
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/llm_extract/example.ipynb)
+
 Consolidated benchmark comparing structured information extraction across
 multiple GGUF chat models (via muninn SQL functions) and GLiNER2 (205M span
 extraction model) on 5 curated documents.
@@ -10,8 +12,9 @@ extraction model) on 5 curated documents.
 
 | Model | Params | Quant | Size | Context | License |
 |-------|--------|-------|------|---------|---------|
-| **Qwen3-4B** | 4B | Q4_K_M | ~2.5 GB | 32K | Apache 2.0 |
-| **Qwen3-8B** | 8B | Q4_K_M | ~5.0 GB | 32K | Apache 2.0 |
+| **Qwen3.5-0.8B** | 0.8B | Q4_K_M | ~0.5 GB | 8K | Apache 2.0 |
+| **Qwen3.5-2B** | 2B | Q4_K_M | ~1.3 GB | 8K | Apache 2.0 |
+| **Qwen3.5-4B** | 4B | Q4_K_M | ~2.7 GB | 8K | Apache 2.0 |
 | **Gemma-3-4B** | 3.8B | Q4_K_M | ~2.5 GB | 8K | Gemma |
 
 ### Comparison Baseline
@@ -43,7 +46,7 @@ uv add gliner2      # Install GLiNER2 for comparison baseline
 ## Run
 
 ```bash
-# Models auto-download on first run (~10 GB total for all 3 GGUF models)
+# Models auto-download on first run (~7 GB total for all 4 GGUF models)
 uv run examples/llm_extract/example.py
 ```
 
@@ -111,33 +114,34 @@ MUNINN_CHAT_MODEL=models/Qwen3-4B-Q4_K_M.gguf uv run -m pytest pytests/test_chat
 
 ```text
   Absolute Timings (5 documents)
-  ---------------------------------------------------------------------------------
-                       Qwen3.5-4B      Qwen3.5-9B      Gemma-3-4B         GLiNER2
-  ---------------------------------------------------------------------------------
-         NER only          18.57s          34.78s          19.08s           0.39s
-          RE only          23.20s          34.72s          21.22s           0.42s
-  Combined NER+RE          38.71s          54.17s          40.82s           0.81s
-     CTE Pipeline          61.57s          93.81s          54.85s           0.81s
-  ---------------------------------------------------------------------------------
+  -------------------------------------------------------------------------------------------------
+                     Qwen3.5-0.8B      Qwen3.5-2B      Qwen3.5-4B      Gemma-3-4B         GLiNER2
+  -------------------------------------------------------------------------------------------------
+         NER only         705.60s          17.14s          21.34s          21.03s           0.32s
+          RE only          13.32s          19.87s          23.86s          22.22s           0.44s
+  Combined NER+RE        1866.08s          66.62s          41.32s          40.38s           0.76s
+     CTE Pipeline        1450.48s          53.35s          67.57s          60.35s           0.76s
+  -------------------------------------------------------------------------------------------------
 
   Per-Document Timings
-  ---------------------------------------------------------------------------------
-                       Qwen3.5-4B      Qwen3.5-9B      Gemma-3-4B         GLiNER2
-  ---------------------------------------------------------------------------------
-         NER only      3.714s/doc      6.956s/doc      3.815s/doc      0.078s/doc
-          RE only      4.639s/doc      6.945s/doc      4.244s/doc      0.084s/doc
-  Combined NER+RE      7.741s/doc     10.835s/doc      8.165s/doc      0.161s/doc
-     CTE Pipeline     12.314s/doc     18.762s/doc     10.970s/doc      0.161s/doc
-  ---------------------------------------------------------------------------------
+  -------------------------------------------------------------------------------------------------
+                     Qwen3.5-0.8B      Qwen3.5-2B      Qwen3.5-4B      Gemma-3-4B         GLiNER2
+  -------------------------------------------------------------------------------------------------
+         NER only    141.121s/doc      3.428s/doc      4.268s/doc      4.205s/doc      0.064s/doc
+          RE only      2.664s/doc      3.974s/doc      4.773s/doc      4.444s/doc      0.088s/doc
+  Combined NER+RE    373.216s/doc     13.324s/doc      8.264s/doc      8.076s/doc      0.153s/doc
+     CTE Pipeline    290.095s/doc     10.669s/doc     13.514s/doc     12.071s/doc      0.153s/doc
+  -------------------------------------------------------------------------------------------------
 
   Speedup (vs slowest per metric)
-  ---------------------------------------------------------------------------------
-                       Qwen3.5-4B      Qwen3.5-9B      Gemma-3-4B         GLiNER2
-  ---------------------------------------------------------------------------------
-         NER only            1.9x            1.0x            1.8x           89.6x
-          RE only            1.5x            1.0x            1.6x           82.9x
-  Combined NER+RE            1.4x            1.0x            1.3x           67.1x
-     CTE Pipeline            1.5x            1.0x            1.7x          116.3x
+  -------------------------------------------------------------------------------------------------
+                     Qwen3.5-0.8B      Qwen3.5-2B      Qwen3.5-4B      Gemma-3-4B         GLiNER2
+  -------------------------------------------------------------------------------------------------
+         NER only            1.0x           41.2x           33.1x           33.6x         2195.9x
+          RE only            1.8x            1.2x            1.0x            1.1x           54.0x
+  Combined NER+RE            1.0x           28.0x           45.2x           46.2x         2445.0x
+     CTE Pipeline            1.0x           27.2x           21.5x           24.0x         1900.5x
+  -------------------------------------------------------------------------------------------------
 ```
 
-So whilst the `muninn_extract_entities` and `muninn_extract_relations` is available, there are smaller task focused models that perform better and faster than throwing a whole LLM at the task.
+The Qwen3.5-0.8B model is pathologically slow for structured extraction — the grammar constraint prevents malformed JSON but can't stop the tiny model from generating excessive repetitive tokens, ballooning NER to ~141s/doc. The 2B+ models are ~3-5s/doc which is reasonable for LLM extraction but still 50-80x slower than GLiNER2 on these short documents. So whilst `muninn_extract_entities` and `muninn_extract_relations` are available, there are smaller task-focused models that perform better and faster than throwing a whole LLM at the task.

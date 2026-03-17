@@ -1,5 +1,7 @@
 # Semantic Search — Document Similarity with HNSW
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/semantic_search/example.ipynb)
+
 Find similar documents using vector embeddings and cosine similarity.
 
 ## What This Demonstrates

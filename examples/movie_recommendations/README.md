@@ -1,5 +1,7 @@
 # Movie Recommendations — Full Pipeline
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/movie_recommendations/example.ipynb)
+
 Learn movie embeddings from co-viewing patterns and find similar movies.
 
 ## What This Demonstrates

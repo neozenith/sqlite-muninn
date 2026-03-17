@@ -300,7 +300,13 @@ version-stamp:                                 ## Stamp VERSION into skill files
 generate-windows:                              ## Generate build_windows.bat from centralised config
 	uv run scripts/generate_build.py windows
 
-dist: dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
+examples-colab-jupytext:                       ## Generate Colab notebooks + enforce README badges
+	uv run scripts/generate_build.py examples
+
+examples-colab-check:                          ## Check notebooks + README badges are up to date
+	uv run scripts/generate_build.py examples --status
+
+dist: examples-colab-jupytext dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
 	@echo ""
 	@echo "All artifacts in dist/:"
 	@ls -lh dist/ dist/python/ dist/nodejs/ 2>/dev/null

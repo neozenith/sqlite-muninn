@@ -1,5 +1,7 @@
 # Research Papers — Citation Analysis
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/research_papers/example.ipynb)
+
 Discover research communities and influential papers using graph algorithms.
 
 ## What This Demonstrates

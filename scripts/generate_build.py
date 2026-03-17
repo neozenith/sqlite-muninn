@@ -11,6 +11,7 @@ Subcommands:
     amalgamate    Generate dist/muninn.c + dist/muninn.h
     npm           Generate npm platform sub-packages
     version       Stamp VERSION into target files
+    examples      Generate Colab notebooks + enforce README badges
 
 Usage:
     python3 scripts/generate_build.py query SRC
@@ -24,6 +25,8 @@ import logging
 import platform
 import re
 import shutil
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -754,6 +757,170 @@ def cmd_version(args: argparse.Namespace) -> int:
 
 
 # ======================================================================
+# SUBCOMMAND: examples
+# ======================================================================
+
+# ── GitHub / Colab ────────────────────────────────────────────────────
+GITHUB_OWNER = "neozenith"
+GITHUB_REPO = "sqlite-muninn"
+GITHUB_BRANCH = "main"
+_COLAB_BADGE_IMG = "https://colab.research.google.com/assets/colab-badge.svg"
+_COLAB_BASE_URL = "https://colab.research.google.com/github"
+
+
+def _colab_badge_md(example_name: str) -> str:
+    """Markdown for the 'Open in Colab' badge linking to an example's notebook."""
+    nb_path = f"examples/{example_name}/example.ipynb"
+    url = f"{_COLAB_BASE_URL}/{GITHUB_OWNER}/{GITHUB_REPO}/blob/{GITHUB_BRANCH}/{nb_path}"
+    return f"[![Open In Colab]({_COLAB_BADGE_IMG})]({url})"
+
+
+def _discover_examples() -> list[str]:
+    """Return sorted list of example directory names containing example.py."""
+    examples_dir = PROJECT_ROOT / "examples"
+    return sorted(d.name for d in examples_dir.iterdir() if d.is_dir() and (d / "example.py").exists())
+
+
+def _readme_has_colab_badge(readme_path: Path, example_name: str) -> bool:
+    """True if README already contains the correct Colab badge."""
+    return _colab_badge_md(example_name) in readme_path.read_text()
+
+
+def _enforce_readme_badge(readme_path: Path, example_name: str, *, dry_run: bool = False) -> bool:
+    """Insert or update the Colab badge after the H1 heading.
+
+    Returns True if the file was (or would be) modified.
+    Raises ValueError if no H1 heading is found.
+    """
+    content = readme_path.read_text()
+    badge = _colab_badge_md(example_name)
+
+    if badge in content:
+        return False
+
+    lines = content.split("\n")
+
+    # Find H1 line
+    h1_idx = None
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            h1_idx = i
+            break
+
+    if h1_idx is None:
+        raise ValueError(f"{readme_path.relative_to(PROJECT_ROOT)}: no H1 heading found")
+
+    # Find end of header block (H1 + blank lines + any stale Colab badge)
+    end_idx = h1_idx + 1
+    while end_idx < len(lines):
+        stripped = lines[end_idx].strip()
+        if stripped == "":
+            end_idx += 1
+        elif "colab.research.google.com" in stripped and "colab-badge.svg" in stripped:
+            end_idx += 1  # skip stale badge
+        else:
+            break
+
+    # Reconstruct: H1 → blank → badge → blank → rest
+    new_lines = lines[: h1_idx + 1] + ["", badge, ""] + lines[end_idx:]
+    new_content = "\n".join(new_lines)
+
+    if not dry_run:
+        readme_path.write_text(new_content)
+
+    return True
+
+
+def cmd_examples(args: argparse.Namespace) -> int:
+    """Generate Colab notebooks and enforce README badges for all examples."""
+    examples = _discover_examples()
+    examples_dir = PROJECT_ROOT / "examples"
+
+    input_paths = [examples_dir / name / "example.py" for name in examples]
+    output_ipynb = [examples_dir / name / "example.ipynb" for name in examples]
+    readme_paths = [(name, examples_dir / name / "README.md") for name in examples]
+
+    if args.list_inputs:
+        for p in input_paths:
+            print(p.relative_to(PROJECT_ROOT))
+        for name, r in readme_paths:
+            if r.exists():
+                print(r.relative_to(PROJECT_ROOT))
+        return 0
+
+    if args.list_outputs:
+        for p in output_ipynb:
+            print(p.relative_to(PROJECT_ROOT))
+        return 0
+
+    if args.status:
+        all_ok = True
+        for name in examples:
+            readme = examples_dir / name / "README.md"
+            ipynb = examples_dir / name / "example.ipynb"
+            py = examples_dir / name / "example.py"
+
+            if not readme.exists():
+                log.error("missing: examples/%s/README.md", name)
+                all_ok = False
+            elif not _readme_has_colab_badge(readme, name):
+                log.error("missing badge: examples/%s/README.md", name)
+                all_ok = False
+
+            if dirty(ipynb, py):
+                log.error("stale: examples/%s/example.ipynb", name)
+                all_ok = False
+
+        return 0 if all_ok else 1
+
+    # ── Generate ──────────────────────────────────────────────────────
+    errors: list[str] = []
+
+    # 1. Enforce README badges
+    for name, readme in readme_paths:
+        if not readme.exists():
+            errors.append(f"examples/{name}/README.md does not exist — create it with an H1 heading")
+            continue
+        try:
+            modified = _enforce_readme_badge(readme, name, dry_run=args.dry_run)
+            if modified:
+                log.info("badge: examples/%s/README.md (updated)", name)
+            else:
+                log.info("badge: examples/%s/README.md (ok)", name)
+        except ValueError as e:
+            errors.append(str(e))
+
+    # 2. Generate .ipynb via jupytext
+    for name in examples:
+        py = examples_dir / name / "example.py"
+        ipynb = examples_dir / name / "example.ipynb"
+
+        if not args.force and not dirty(ipynb, py):
+            log.info("notebook: examples/%s/example.ipynb (up to date)", name)
+            continue
+
+        if args.dry_run:
+            log.info("DRY RUN: would generate examples/%s/example.ipynb", name)
+            continue
+
+        log.info("notebook: examples/%s/example.ipynb (generating)", name)
+        result = subprocess.run(
+            [sys.executable, "-m", "jupytext", "--to", "notebook", str(py)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            errors.append(f"jupytext failed for examples/{name}/example.py: {result.stderr.strip()}")
+
+    if errors:
+        for err in errors:
+            log.error(err)
+        return 1
+
+    return 0
+
+
+# ======================================================================
 # CLI
 # ======================================================================
 
@@ -797,6 +964,10 @@ def main() -> int:
     p_ver = sub.add_parser("version", help="Stamp VERSION into target files")
     p_ver.add_argument("--check", action="store_true", help="Exit 1 if any file is out of date (don't modify)")
 
+    # examples
+    p_ex = sub.add_parser("examples", help="Generate Colab notebooks + enforce README badges")
+    _add_file_gen_args(p_ex)
+
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -810,6 +981,7 @@ def main() -> int:
         "amalgamate": cmd_amalgamate,
         "npm": cmd_npm,
         "version": cmd_version,
+        "examples": cmd_examples,
     }
     return dispatch[args.command](args)
 

@@ -1,5 +1,7 @@
 # Transit Routes — Shortest Paths
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/transit_routes/example.ipynb)
+
 Compare fewest-stops (BFS) vs fastest-time (Dijkstra) routing.
 
 ## What This Demonstrates

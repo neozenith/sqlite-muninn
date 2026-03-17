@@ -1,5 +1,7 @@
 # Text Embeddings — Semantic Search with muninn
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/neozenith/sqlite-muninn/blob/main/examples/text_embeddings/example.ipynb)
+
 Zero-dependency end-to-end example: load GGUF embedding models, embed documents,
 build HNSW indices, and perform semantic similarity search — all inside a single
 SQLite extension. Compares three models side-by-side.
