@@ -232,7 +232,7 @@ jobs:
 
       - name: Build and test with ${{ matrix.sanitizer.name }}
         run: |
-          CCACHE_DISABLE=1 CC=clang make test \
+          CCACHE_DISABLE=1 GCOV_EXECUTABLE="llvm-cov gcov" CC=clang make test \
             CFLAGS_EXTRA="${{ matrix.sanitizer.flags }} -g -O1 -fno-omit-frame-pointer"
 
   # ── Amalgamation ─────────────────────────────────────────
