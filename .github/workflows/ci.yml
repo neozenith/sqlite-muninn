@@ -296,23 +296,25 @@ jobs:
           "$SQLITE3" :memory: ".load ./build/muninn" "SELECT 1"
 
       # ── Python integration tests ─────────────────────────
-      - name: Install pysqlite3 (from source against Homebrew SQLite)
-        run: |
-          CFLAGS="-I$(brew --prefix sqlite)/include" LDFLAGS="-L$(brew --prefix sqlite)/lib" \
-            uv pip install --system pysqlite3 --no-binary pysqlite3
+      - name: Cache .venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-macos-${{ hashFiles('uv.lock') }}
 
-      - name: Install Python test dependencies
-        run: |
-          uv pip install --system pytest pytest-cov
-          uv pip install --system -e .
+      - name: Sync Python environment
+        run: uv sync --group dev
 
       - uses: actions/cache@v5
         with:
           path: models
           key: gguf-test-models
 
+      - name: Verify sqlite3 has extension loading
+        run: uv run python -c "import sqlite3; c=sqlite3.connect(':memory:'); c.enable_load_extension(True); print('OK: enable_load_extension works')"
+
       - name: Python integration tests
-        run: python -m pytest pytests/ -v
+        run: uv run pytest pytests/ -v
 
       # ── Node.js tests ────────────────────────────────────
       - uses: actions/setup-node@v4
