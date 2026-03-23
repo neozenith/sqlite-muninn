@@ -425,7 +425,8 @@ cl.exe /O2 /MT /W4 /LD /Isrc ^
 {include_flags} ^
 {source_files} ^
 {lib_files} ^
-    /Fe:build\\muninn.dll
+    /Fe:build\\muninn.dll ^
+    /link kernel32.lib advapi32.lib
 
 if %ERRORLEVEL% neq 0 (
     echo Build failed with error %ERRORLEVEL%
