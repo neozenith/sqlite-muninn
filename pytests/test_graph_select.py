@@ -5,7 +5,6 @@ Tests the full pipeline: SQL → graph_select TVF → parser → evaluator → r
 """
 
 import pysqlite3 as sqlite3
-
 import pytest
 
 

@@ -5,7 +5,6 @@ dirty tracking, full and incremental rebuilds, and administrative commands.
 """
 
 import pysqlite3 as sqlite3
-
 import pytest
 
 

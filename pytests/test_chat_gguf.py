@@ -10,7 +10,6 @@ import json
 import os
 
 import pysqlite3 as sqlite3
-
 import pytest
 
 # ── Fixtures ──────────────────────────────────────────────────────────
