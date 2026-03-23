@@ -34,9 +34,7 @@ class PhaseCommunities(Phase):
     def is_stale(self, conn: sqlite3.Connection) -> bool:
         """Return True if leiden_communities is missing or has fewer resolutions than expected."""
         try:
-            n_resolutions: int = conn.execute(
-                "SELECT count(DISTINCT resolution) FROM leiden_communities"
-            ).fetchone()[0]
+            n_resolutions: int = conn.execute("SELECT count(DISTINCT resolution) FROM leiden_communities").fetchone()[0]
             return n_resolutions < len(LEIDEN_RESOLUTIONS)
         except sqlite3.OperationalError:
             return True
@@ -92,12 +90,11 @@ class PhaseCommunities(Phase):
                 (resolution,),
             ).fetchall()
 
-            n_communities = len(set(r[1] for r in rows))
+            n_communities = len({r[1] for r in rows})
             modularity = rows[0][2] if rows else 0.0
 
             conn.executemany(
-                "INSERT INTO leiden_communities (node, resolution, community_id, modularity) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO leiden_communities (node, resolution, community_id, modularity) VALUES (?, ?, ?, ?)",
                 [(r[0], resolution, r[1], r[2]) for r in rows],
             )
 
@@ -116,4 +113,8 @@ class PhaseCommunities(Phase):
             "ON leiden_communities (resolution, community_id)"
         )
 
-        log.info("  Leiden communities complete: %d total assignments across %d resolutions", total_rows, len(LEIDEN_RESOLUTIONS))
+        log.info(
+            "  Leiden communities complete: %d total assignments across %d resolutions",
+            total_rows,
+            len(LEIDEN_RESOLUTIONS),
+        )

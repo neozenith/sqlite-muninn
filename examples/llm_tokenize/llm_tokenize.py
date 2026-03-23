@@ -202,7 +202,7 @@ def main() -> None:
         print(f"  {pos:>4}  {token_id:>8}  {piece!r}")
 
     # Count how many tokens are subword fragments (don't start with a space or special char)
-    subword = [r for r in rows if r[2] and r[2][0] not in (' ', '.', ',', "'", '"')]
+    subword = [r for r in rows if r[2] and r[2][0] not in (" ", ".", ",", "'", '"')]
     print(f"\n  {len(subword)} of {len(rows)} tokens are subword fragments (no leading space).")
 
     # ── 4. Token efficiency comparison ────────────────────────────

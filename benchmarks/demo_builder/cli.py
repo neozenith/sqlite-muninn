@@ -116,11 +116,11 @@ def _cmd_run_phase(args: argparse.Namespace) -> None:
     from benchmarks.demo_builder.build import DemoBuild, PhaseContext  # deferred for ML deps
     from benchmarks.demo_builder.common import load_muninn  # noqa: E402 — deferred (common.py imports numpy/spacy)
     from benchmarks.demo_builder.phases import (  # noqa: E402 — deferred for ML deps
-        PhaseCommunities,
-        PhaseCommunityNaming,
         PhaseChunks,
         PhaseChunksEmbeddings,
         PhaseChunksUMAP,
+        PhaseCommunities,
+        PhaseCommunityNaming,
         PhaseEntitiesUMAP,
         PhaseEntityEmbeddings,
         PhaseEntityResolution,

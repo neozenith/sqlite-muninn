@@ -6,7 +6,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from server.services.db import db_session, discover_edge_tables, discover_hnsw_indexes, get_active_db_id, get_active_db_path
+from server.services.db import (
+    db_session,
+    discover_edge_tables,
+    discover_hnsw_indexes,
+    get_active_db_id,
+    get_active_db_path,
+)
 
 log = logging.getLogger(__name__)
 

@@ -405,8 +405,7 @@ static int models_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *i
         if (name) {
             for (int i = 0; i < cap; i++) {
                 MuninnModelEntry *e = muninn_registry_at(i);
-                if (e && e->in_use && e->type == MUNINN_MODEL_EMBED &&
-                    strcmp(e->name, name) == 0) {
+                if (e && e->in_use && e->type == MUNINN_MODEL_EMBED && strcmp(e->name, name) == 0) {
                     cur->current = i;
                     break;
                 }

@@ -152,20 +152,18 @@ static const char *SYS_NER_SUP =
     "Use the full range: 1.0 = definite, 0.7-0.9 = high confidence, "
     "0.4-0.6 = moderate, below 0.4 = uncertain. "
     "Respond ONLY with a JSON object in this format: "
-    "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} "
-    FEW_SHOT_NER;
+    "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} " FEW_SHOT_NER;
 
-static const char *SYS_RE_SUP =
-    "You are a precise relation extraction system. "
-    "Given text and a list of entities, extract relations between them. "
-    "Only emit relations between the provided entities. "
-    "For each relation, assign a confidence score between 0.0 and 1.0 reflecting "
-    "how certain you are that this relation is explicitly supported by the text. "
-    "Use the full range: 1.0 = explicitly stated, 0.7-0.9 = strongly implied, "
-    "0.4-0.6 = inferred, below 0.4 = speculative. "
-    "Respond ONLY with a JSON object in this format: "
-    "{\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} "
-    FEW_SHOT_RE;
+static const char *SYS_RE_SUP = "You are a precise relation extraction system. "
+                                "Given text and a list of entities, extract relations between them. "
+                                "Only emit relations between the provided entities. "
+                                "For each relation, assign a confidence score between 0.0 and 1.0 reflecting "
+                                "how certain you are that this relation is explicitly supported by the text. "
+                                "Use the full range: 1.0 = explicitly stated, 0.7-0.9 = strongly implied, "
+                                "0.4-0.6 = inferred, below 0.4 = speculative. "
+                                "Respond ONLY with a JSON object in this format: "
+                                "{\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\","
+                                "\"score\":0.75},...]} " FEW_SHOT_RE;
 
 static const char *SYS_NER_RE_SUP =
     "You are a precise knowledge extraction system. "
@@ -177,8 +175,8 @@ static const char *SYS_NER_RE_SUP =
     "0.4-0.6 = inferred, below 0.4 = speculative. "
     "Respond ONLY with a JSON object in this format: "
     "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...], "
-    "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} "
-    FEW_SHOT_NER_RE;
+    "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]}"
+    " " FEW_SHOT_NER_RE;
 
 /* ──────────────────────────────────────────────────────────────────
  * System Prompts — Unsupervised (open extraction, no labels)
@@ -194,20 +192,18 @@ static const char *SYS_NER_UNSUP =
     "Use the full range: 1.0 = definite, 0.7-0.9 = high confidence, "
     "0.4-0.6 = moderate, below 0.4 = uncertain. "
     "Respond ONLY with a JSON object in this format: "
-    "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} "
-    FEW_SHOT_NER;
+    "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} " FEW_SHOT_NER;
 
-static const char *SYS_RE_UNSUP =
-    "You are a precise relation extraction system. "
-    "Given the text, identify ALL notable entities and extract relations between them. "
-    "Discover the relationship types from the text itself. "
-    "For each relation, assign a confidence score between 0.0 and 1.0 reflecting "
-    "how certain you are that this relation is explicitly supported by the text. "
-    "Use the full range: 1.0 = explicitly stated, 0.7-0.9 = strongly implied, "
-    "0.4-0.6 = inferred, below 0.4 = speculative. "
-    "Respond ONLY with a JSON object in this format: "
-    "{\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} "
-    FEW_SHOT_RE;
+static const char *SYS_RE_UNSUP = "You are a precise relation extraction system. "
+                                  "Given the text, identify ALL notable entities and extract relations between them. "
+                                  "Discover the relationship types from the text itself. "
+                                  "For each relation, assign a confidence score between 0.0 and 1.0 reflecting "
+                                  "how certain you are that this relation is explicitly supported by the text. "
+                                  "Use the full range: 1.0 = explicitly stated, 0.7-0.9 = strongly implied, "
+                                  "0.4-0.6 = inferred, below 0.4 = speculative. "
+                                  "Respond ONLY with a JSON object in this format: "
+                                  "{\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\","
+                                  "\"score\":0.75},...]} " FEW_SHOT_RE;
 
 static const char *SYS_NER_RE_UNSUP =
     "You are a precise knowledge extraction system. "
@@ -220,7 +216,7 @@ static const char *SYS_NER_RE_UNSUP =
     "0.4-0.6 = inferred, below 0.4 = speculative. "
     "Respond ONLY with a JSON object in this format: "
     "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...], "
-    "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} "
-    FEW_SHOT_NER_RE;
+    "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]}"
+    " " FEW_SHOT_NER_RE;
 
 #endif /* LLAMA_CONSTANTS_H */

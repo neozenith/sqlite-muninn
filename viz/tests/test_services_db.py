@@ -15,7 +15,6 @@ from server.services.db import (
     discover_hnsw_indexes,
     get_active_db_id,
     get_active_db_path,
-    reset_state,
     sanitize_fts_query,
     set_active_db,
     validate_startup,

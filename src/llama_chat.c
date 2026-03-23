@@ -691,7 +691,8 @@ static void fn_chat(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
 
 static void fn_extract_entities(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc < 2) {
-        sqlite3_result_error(ctx, "muninn_extract_entities: requires (model, text [, labels [, inject_skip_think]])", -1);
+        sqlite3_result_error(ctx, "muninn_extract_entities: requires (model, text [, labels [, inject_skip_think]])",
+                             -1);
         return;
     }
     const char *name = (const char *)sqlite3_value_text(argv[0]);
@@ -755,9 +756,8 @@ static void fn_extract_entities(sqlite3_context *ctx, int argc, sqlite3_value **
 
 static void fn_extract_relations(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc < 2) {
-        sqlite3_result_error(ctx,
-                             "muninn_extract_relations: requires (model, text [, entities_json [, inject_skip_think]])",
-                             -1);
+        sqlite3_result_error(
+            ctx, "muninn_extract_relations: requires (model, text [, entities_json [, inject_skip_think]])", -1);
         return;
     }
     const char *name = (const char *)sqlite3_value_text(argv[0]);
@@ -852,8 +852,8 @@ static void fn_extract_ner_re(sqlite3_context *ctx, int argc, sqlite3_value **ar
             if (argc > 4 && sqlite3_value_type(argv[4]) == SQLITE_INTEGER)
                 inject_skip_think = sqlite3_value_int(argv[4]) ? 1 : 0;
         } else {
-            sqlite3_result_error(ctx,
-                                 "muninn_extract_ner_re: supervised mode requires both ent_labels and rel_labels", -1);
+            sqlite3_result_error(ctx, "muninn_extract_ner_re: supervised mode requires both ent_labels and rel_labels",
+                                 -1);
             return;
         }
     } else if (argc > 2 && sqlite3_value_type(argv[2]) == SQLITE_INTEGER) {
@@ -1035,8 +1035,8 @@ static void build_ner_re_prompt(char *buf, int buf_sz, const char *text, const v
 
 static void fn_extract_entities_batch(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc < 2) {
-        sqlite3_result_error(ctx, "muninn_extract_entities_batch: requires (model, texts_json [, labels [, batch_size]])",
-                             -1);
+        sqlite3_result_error(
+            ctx, "muninn_extract_entities_batch: requires (model, texts_json [, labels [, batch_size]])", -1);
         return;
     }
     const char *name = (const char *)sqlite3_value_text(argv[0]);
@@ -1112,8 +1112,8 @@ static void fn_extract_entities_batch(sqlite3_context *ctx, int argc, sqlite3_va
 static void fn_extract_ner_re_batch(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc < 2) {
         sqlite3_result_error(
-            ctx,
-            "muninn_extract_ner_re_batch: requires (model, texts_json [, ent_labels, rel_labels [, batch_size]])", -1);
+            ctx, "muninn_extract_ner_re_batch: requires (model, texts_json [, ent_labels, rel_labels [, batch_size]])",
+            -1);
         return;
     }
     const char *name = (const char *)sqlite3_value_text(argv[0]);
@@ -1178,8 +1178,8 @@ static void fn_extract_ner_re_batch(sqlite3_context *ctx, int argc, sqlite3_valu
     const char *sys_prompt = entity_labels ? SYS_NER_RE_SUP : SYS_NER_RE_UNSUP;
 
     NerRePromptExtra extra = {.entity_labels = entity_labels, .relation_labels = relation_labels};
-    batch_extract_core(ctx, me, in_doc, in_arr, sys_prompt, GBNF_NER_RE, "{\"entities\":[],\"relations\":[]}",
-                       NULL, me->n_ctx, batch_size, build_ner_re_prompt, &extra);
+    batch_extract_core(ctx, me, in_doc, in_arr, sys_prompt, GBNF_NER_RE, "{\"entities\":[],\"relations\":[]}", NULL,
+                       me->n_ctx, batch_size, build_ner_re_prompt, &extra);
 }
 
 /* ──────────────────────────────────────────────────────────────────
@@ -1216,9 +1216,7 @@ static void fn_summarize(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
         sqlite3_result_error_nomem(ctx);
         return;
     }
-    snprintf(user_prompt, user_len,
-             "Produce a one-sentence summary of this text:\n\n%s",
-             text);
+    snprintf(user_prompt, user_len, "Produce a one-sentence summary of this text:\n\n%s", text);
 
     char *formatted = format_chat_messages(me, NULL, user_prompt, 0, NULL);
     free(user_prompt);
@@ -1493,4 +1491,3 @@ int chat_register_functions(sqlite3 *db) {
 
     return SQLITE_OK;
 }
-

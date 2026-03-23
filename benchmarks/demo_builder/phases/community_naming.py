@@ -23,10 +23,7 @@ MIN_COMMUNITY_SIZE = 3
 MAX_MEMBERS_IN_PROMPT = 10
 
 # Model registration SQL — loads the GGUF into muninn's chat model registry.
-_REGISTER_MODEL_SQL = (
-    "INSERT INTO temp.muninn_chat_models(name, model) "
-    "SELECT ?, muninn_chat_model(?)"
-)
+_REGISTER_MODEL_SQL = "INSERT INTO temp.muninn_chat_models(name, model) SELECT ?, muninn_chat_model(?)"
 
 
 class PhaseCommunityNaming(Phase):
@@ -110,9 +107,7 @@ class PhaseCommunityNaming(Phase):
         generated = 0
         for canonical, members in sorted(eligible.items()):
             prompt = _build_cluster_prompt(canonical, members)
-            label = conn.execute(
-                "SELECT muninn_summarize(?, ?)", (model_name, prompt)
-            ).fetchone()[0]
+            label = conn.execute("SELECT muninn_summarize(?, ?)", (model_name, prompt)).fetchone()[0]
 
             # Strip surrounding quotes if the model wrapped the label
             label = label.strip()
@@ -179,7 +174,7 @@ class PhaseCommunityNaming(Phase):
                 communities.setdefault(comm_id, []).append(node)
 
             # Build node → community map for edge filtering
-            node_to_comm = {node: comm_id for node, comm_id in rows}
+            node_to_comm = dict(rows)
 
             # Index intra-community edges
             comm_edges: dict[int, list[tuple[str, str, str]]] = {}
@@ -204,9 +199,7 @@ class PhaseCommunityNaming(Phase):
             for comm_id, members in sorted(eligible.items()):
                 edges = comm_edges.get(comm_id, [])
                 prompt = _build_community_prompt(members, edges)
-                label = conn.execute(
-                    "SELECT muninn_summarize(?, ?)", (model_name, prompt)
-                ).fetchone()[0]
+                label = conn.execute("SELECT muninn_summarize(?, ?)", (model_name, prompt)).fetchone()[0]
 
                 label = label.strip()
                 if len(label) >= 2 and label[0] == label[-1] and label[0] in ('"', "'"):

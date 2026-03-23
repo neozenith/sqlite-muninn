@@ -35,11 +35,7 @@ SCREENSHOTS_DIR = EXAMPLES_DIR / "e2e_screenshots"
 
 def discover_examples() -> list[str]:
     """Find all example directories that have a matching .py file."""
-    return sorted(
-        d.name
-        for d in EXAMPLES_DIR.iterdir()
-        if d.is_dir() and (d / f"{d.name}.py").exists()
-    )
+    return sorted(d.name for d in EXAMPLES_DIR.iterdir() if d.is_dir() and (d / f"{d.name}.py").exists())
 
 
 def colab_url(name: str, *, cache_bust: bool = False) -> str:

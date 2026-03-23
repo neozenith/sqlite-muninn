@@ -501,7 +501,8 @@ TEST(test_entities_unsupervised_with_skip_think) {
     sqlite3 *db = open_test_db();
 
     sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(db, "SELECT muninn_extract_entities('nope', 'Alice works at ACME', 1)", -1, &stmt, NULL);
+    int rc =
+        sqlite3_prepare_v2(db, "SELECT muninn_extract_entities('nope', 'Alice works at ACME', 1)", -1, &stmt, NULL);
     ASSERT_EQ_INT(SQLITE_OK, rc);
     rc = sqlite3_step(stmt);
     ASSERT_EQ_INT(SQLITE_ERROR, rc);
@@ -592,8 +593,8 @@ TEST(test_entities_batch_unsupervised) {
     sqlite3 *db = open_test_db();
 
     sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(
-        db, "SELECT muninn_extract_entities_batch('nope', '[\"Alice works at ACME\"]')", -1, &stmt, NULL);
+    int rc = sqlite3_prepare_v2(db, "SELECT muninn_extract_entities_batch('nope', '[\"Alice works at ACME\"]')", -1,
+                                &stmt, NULL);
     ASSERT_EQ_INT(SQLITE_OK, rc);
     rc = sqlite3_step(stmt);
     ASSERT_EQ_INT(SQLITE_ERROR, rc);
@@ -608,8 +609,8 @@ TEST(test_ner_re_batch_unsupervised) {
     sqlite3 *db = open_test_db();
 
     sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(
-        db, "SELECT muninn_extract_ner_re_batch('nope', '[\"Alice founded ACME\"]')", -1, &stmt, NULL);
+    int rc = sqlite3_prepare_v2(db, "SELECT muninn_extract_ner_re_batch('nope', '[\"Alice founded ACME\"]')", -1, &stmt,
+                                NULL);
     ASSERT_EQ_INT(SQLITE_OK, rc);
     rc = sqlite3_step(stmt);
     ASSERT_EQ_INT(SQLITE_ERROR, rc);
@@ -624,8 +625,8 @@ TEST(test_ner_re_batch_mixed_labels_error) {
     sqlite3 *db = open_test_db();
 
     sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(
-        db, "SELECT muninn_extract_ner_re_batch('nope', '[\"text\"]', 'person')", -1, &stmt, NULL);
+    int rc =
+        sqlite3_prepare_v2(db, "SELECT muninn_extract_ner_re_batch('nope', '[\"text\"]', 'person')", -1, &stmt, NULL);
     ASSERT_EQ_INT(SQLITE_OK, rc);
     rc = sqlite3_step(stmt);
     ASSERT_EQ_INT(SQLITE_ERROR, rc);

@@ -69,15 +69,13 @@ MuninnModelEntry *muninn_registry_find(const char *name) {
 
 MuninnModelEntry *muninn_registry_find_type(const char *name, MuninnModelType type) {
     for (int i = 0; i < MUNINN_MAX_MODELS; i++) {
-        if (g_models[i].in_use && g_models[i].type == type &&
-            strcmp(g_models[i].name, name) == 0)
+        if (g_models[i].in_use && g_models[i].type == type && strcmp(g_models[i].name, name) == 0)
             return &g_models[i];
     }
     return NULL;
 }
 
-int muninn_registry_add(const char *name, struct llama_model *model,
-                        struct llama_context *ctx, int n_embd, int n_ctx,
+int muninn_registry_add(const char *name, struct llama_model *model, struct llama_context *ctx, int n_embd, int n_ctx,
                         MuninnModelType type) {
     if (muninn_registry_find(name) != NULL)
         return -1; /* duplicate name */
@@ -303,8 +301,8 @@ int common_register_functions(sqlite3 *db) {
     if (rc != SQLITE_OK)
         return rc;
 
-    rc = sqlite3_create_function(db, "muninn_tokenize_text", 2, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
-                                 fn_tokenize_text, NULL, NULL);
+    rc = sqlite3_create_function(db, "muninn_tokenize_text", 2, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL, fn_tokenize_text,
+                                 NULL, NULL);
     if (rc != SQLITE_OK)
         return rc;
 

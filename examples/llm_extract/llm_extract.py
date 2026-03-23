@@ -84,18 +84,18 @@ MODELS = [
         "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
         1.28,
     ),
-    # GgufModel(
-    #     "Qwen3.5-4B",
-    #     "Qwen3.5-4B-Q4_K_M.gguf",
-    #     "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
-    #     2.7,
-    # ),
-    # GgufModel(
-    #     "Gemma-3-4B",
-    #     "google_gemma-3-4b-it-Q4_K_M.gguf",
-    #     "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
-    #     2.5,
-    # ),
+    GgufModel(
+        "Qwen3.5-4B",
+        "Qwen3.5-4B-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+        2.7,
+    ),
+    GgufModel(
+        "Gemma-3-4B",
+        "google_gemma-3-4b-it-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
+        2.5,
+    ),
 ]
 
 
@@ -112,8 +112,17 @@ DOCUMENTS = [
 ENTITY_LABELS = ["person", "organization", "location", "date", "monetary_value"]
 ENTITY_LABELS_CSV = ",".join(ENTITY_LABELS)
 RELATION_LABELS = [
-    "founded", "acquired", "partner_of", "located_in", "ceo_of",
-    "works_for", "discovered", "announced", "founded_in", "discovered_in", "acquired_for",
+    "founded",
+    "acquired",
+    "partner_of",
+    "located_in",
+    "ceo_of",
+    "works_for",
+    "discovered",
+    "announced",
+    "founded_in",
+    "discovered_in",
+    "acquired_for",
 ]
 RELATION_LABELS_CSV = ",".join(RELATION_LABELS)
 
@@ -232,7 +241,8 @@ def score_relations(predicted: list[dict], ground_truth: list[dict]) -> dict:
     gt_triples = [(r["head"].lower(), r["rel"].lower(), r["tail"].lower()) for r in ground_truth]
     pred_triples = [
         (r["head"].lower(), r["rel"].lower(), r["tail"].lower())
-        for r in predicted if "head" in r and "rel" in r and "tail" in r
+        for r in predicted
+        if "head" in r and "rel" in r and "tail" in r
     ]
     pred_unique = list(dict.fromkeys(pred_triples))
     matched_gt: set[int] = set()

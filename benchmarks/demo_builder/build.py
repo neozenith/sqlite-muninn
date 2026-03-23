@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 from benchmarks.demo_builder.common import _fmt_elapsed, load_muninn
-from benchmarks.demo_builder.constants import PHASE_NAMES
 from benchmarks.demo_builder.phases import Phase, default_phases
 
 
@@ -279,9 +278,7 @@ def get_build_status(db_path: Path) -> dict[str, Any]:
         # This table exists during build and is dropped after successful finalization.
         # Missing table → build completed (all phases done).
         try:
-            rows = conn.execute(
-                "SELECT phase, name, completed_at FROM _build_progress ORDER BY phase"
-            ).fetchall()
+            rows = conn.execute("SELECT phase, name, completed_at FROM _build_progress ORDER BY phase").fetchall()
             status["completed_phases"] = {name: (phase, ts) for phase, name, ts in rows}
             status["build_finalized"] = False
         except sqlite3.OperationalError:

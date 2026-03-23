@@ -34,8 +34,8 @@ typedef enum {
 typedef struct {
     struct llama_model *model;
     struct llama_context *ctx;
-    int n_embd;   /* embedding dimension (0 for chat models) */
-    int n_ctx;    /* context window size */
+    int n_embd; /* embedding dimension (0 for chat models) */
+    int n_ctx;  /* context window size */
     MuninnModelType type;
     char name[MUNINN_MAX_MODEL_NAME];
     int in_use;
@@ -56,8 +56,7 @@ MuninnModelEntry *muninn_registry_find(const char *name);
 MuninnModelEntry *muninn_registry_find_type(const char *name, MuninnModelType type);
 
 /* Add a model to the registry. Returns 0 on success, -1 duplicate, -2 full. */
-int muninn_registry_add(const char *name, struct llama_model *model,
-                        struct llama_context *ctx, int n_embd, int n_ctx,
+int muninn_registry_add(const char *name, struct llama_model *model, struct llama_context *ctx, int n_embd, int n_ctx,
                         MuninnModelType type);
 
 /* Remove a model by name (frees model + context). */

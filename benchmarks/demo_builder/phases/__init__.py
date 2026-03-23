@@ -49,13 +49,15 @@ def default_phases(
 
     Order is a topological sort of the true data dependency DAG:
 
-        chunks ──┬──→ chunks_embeddings ──→ chunks_umap ──────────────────────────┐
-                 │                                                                  │
-                 └──→ ner ──┬──→ relations ──────────────────────┐                  │
-                            │                                     ↓                  ↓
-                            └──→ entity_embeddings ──┬──→ entity_resolution ──→ communities ──→ community_naming ──→ metadata
-                                                     │                    ↓                                          ↑
-                                                     └──→ entities_umap   └──→ node2vec ─────────────────────────────┘
+        chunks ─┬─→ chunks_embeddings ─→ chunks_umap ─────────────────────────┐
+                │                                                              │
+                └─→ ner ─┬─→ relations ────────────────────┐                  │
+                         │                                  ↓                  ↓
+                         └─→ entity_embeddings ─┬─→ entity_resolution ─→ communities
+                                                │               ↓          ↓
+                                                └─→ entities_umap   node2vec
+                                                                         ↓
+                                               community_naming ←────────┘ ─→ metadata
 
     For parallel execution use `manifest --makefile` to generate a Make-managed build.
     """

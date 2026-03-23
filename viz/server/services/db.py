@@ -37,6 +37,7 @@ def sanitize_fts_query(text: str) -> str:
 
 # ── Per-request connection factory ─────────────────────────────────
 
+
 def _open_connection(db_path: str, extension_path: str | None = None) -> sqlite3.Connection:
     """Open a new connection with muninn loaded and pragmas set."""
     ext = extension_path or _config.EXTENSION_PATH
@@ -73,6 +74,7 @@ def db_session() -> Generator[sqlite3.Connection, None, None]:
 
 # ── Active database state ──────────────────────────────────────────
 
+
 def get_active_db_path() -> str:
     """Return the currently active database path (thread-safe)."""
     with _state_lock:
@@ -108,6 +110,7 @@ def reset_state(db_path: str | None = None) -> None:
 
 # ── Startup validation ─────────────────────────────────────────────
 
+
 def validate_startup(db_path: str | None = None, extension_path: str | None = None) -> sqlite3.Connection:
     """Open a test connection at startup to validate the DB and extension load.
 
@@ -121,6 +124,7 @@ def validate_startup(db_path: str | None = None, extension_path: str | None = No
 
 
 # ── Discovery helpers (take conn as parameter) ────────────────────
+
 
 def discover_hnsw_indexes(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Discover all HNSW virtual tables by finding their _config shadow tables.

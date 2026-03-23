@@ -238,9 +238,7 @@ class TestTokenizeText:
 
     def test_tokenize_text_json_each_compat(self, conn: sqlite3.Connection) -> None:
         """Result should work with json_each() for per-token SQL queries."""
-        rows = conn.execute(
-            "SELECT value FROM json_each(muninn_tokenize_text('MiniLM', 'hello world'))"
-        ).fetchall()
+        rows = conn.execute("SELECT value FROM json_each(muninn_tokenize_text('MiniLM', 'hello world'))").fetchall()
         assert len(rows) > 0
         assert all(isinstance(row[0], str) for row in rows)
 

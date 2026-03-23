@@ -843,7 +843,7 @@ def cmd_examples(args: argparse.Namespace) -> int:
     if args.list_inputs:
         for p in input_paths:
             print(p.relative_to(PROJECT_ROOT))
-        for name, r in readme_paths:
+        for _name, r in readme_paths:
             if r.exists():
                 print(r.relative_to(PROJECT_ROOT))
         return 0

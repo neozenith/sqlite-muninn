@@ -168,7 +168,7 @@ def main() -> None:
     print(f"\n{'=' * 60}")
     print("  2. Grammar-Constrained Chat (GBNF → JSON)")
     print(f"{'=' * 60}")
-    print("  GBNF forces output to match: {\"answer\": \"...\", \"confidence\": 0.95}")
+    print('  GBNF forces output to match: {"answer": "...", "confidence": 0.95}')
 
     structured_prompts = [
         "What is the capital of France?",
