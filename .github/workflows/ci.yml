@@ -143,6 +143,7 @@ jobs:
         run: |
           pip install pytest pytest-cov
           pip install pysqlite3-binary 2>/dev/null || pip install pysqlite3
+          pip install -e .
           python -m pytest pytests/ -v
 
       # ── Node.js tests ──────────────────────────────────
