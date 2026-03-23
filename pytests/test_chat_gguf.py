@@ -8,7 +8,8 @@ a real GGUF model are gated behind the MUNINN_CHAT_MODEL env var:
 
 import json
 import os
-import sqlite3
+
+import pysqlite3 as sqlite3
 
 import pytest
 

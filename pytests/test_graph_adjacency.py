@@ -4,7 +4,7 @@ Tests the persistent CSR adjacency index: creation, querying, trigger-based
 dirty tracking, full and incremental rebuilds, and administrative commands.
 """
 
-import sqlite3
+import pysqlite3 as sqlite3
 
 import pytest
 

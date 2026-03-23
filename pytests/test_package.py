@@ -1,6 +1,6 @@
 """Tests for the sqlite_muninn Python package public API."""
 
-import sqlite3
+import pysqlite3 as sqlite3
 
 import sqlite_muninn
 

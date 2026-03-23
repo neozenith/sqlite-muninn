@@ -5,10 +5,10 @@ with the extension loaded.
 """
 
 import pathlib
-import sqlite3
 import subprocess
 from collections.abc import Generator
 
+import pysqlite3 as sqlite3
 import pytest
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
