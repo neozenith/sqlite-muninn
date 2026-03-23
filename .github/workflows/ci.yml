@@ -142,7 +142,13 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           pip install pytest pytest-cov
-          pip install pysqlite3-binary 2>/dev/null || pip install pysqlite3
+          if [ "$(uname -s)" = "Darwin" ]; then
+            # macOS: pysqlite3-binary not available; build pysqlite3 against Homebrew SQLite
+            CFLAGS="-I$(brew --prefix sqlite)/include" LDFLAGS="-L$(brew --prefix sqlite)/lib" \
+              pip install pysqlite3
+          else
+            pip install pysqlite3-binary 2>/dev/null || pip install pysqlite3
+          fi
           pip install -e .
           python -m pytest pytests/ -v
 
@@ -227,8 +233,8 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       # No ccache here: --coverage needs real compilation to produce .gcno files
-      - name: Install SQLite dev headers
-        run: sudo apt-get install -y libsqlite3-dev
+      - name: Install build dependencies
+        run: sudo apt-get install -y libsqlite3-dev llvm
 
       - name: Build and test with ${{ matrix.sanitizer.name }}
         run: |
