@@ -302,8 +302,11 @@ jobs:
           path: .venv
           key: venv-macos-${{ hashFiles('uv.lock') }}
 
-      - name: Sync Python environment (use Homebrew Python for sqlite3 extension loading)
-        run: uv sync --group dev --python $(brew --prefix python3)/libexec/bin/python
+      - name: Install Homebrew Python 3.13 (uv's Python lacks sqlite3 extension loading)
+        run: brew install python@3.13
+
+      - name: Sync Python environment
+        run: uv sync --group dev --python $(brew --prefix python@3.13)/bin/python3.13
 
       - uses: actions/cache@v5
         with:
