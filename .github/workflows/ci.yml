@@ -263,7 +263,7 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: macos-universal
+          key: macos-15
           evict-old-files: 1d
 
       - name: Build arm64 (llama.cpp + muninn)
