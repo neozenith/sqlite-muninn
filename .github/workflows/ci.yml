@@ -249,7 +249,7 @@ jobs:
   build-macos-universal:
     runs-on: macos-15
     name: Build (macOS Universal Binary)
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
