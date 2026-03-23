@@ -226,18 +226,13 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: sanitize-${{ matrix.sanitizer.name }}
-          evict-old-files: 1d
-
+      # No ccache here: --coverage needs real compilation to produce .gcno files
       - name: Install SQLite dev headers
         run: sudo apt-get install -y libsqlite3-dev
 
       - name: Build and test with ${{ matrix.sanitizer.name }}
         run: |
-          CC=clang make test \
+          CCACHE_DISABLE=1 CC=clang make test \
             CFLAGS_EXTRA="${{ matrix.sanitizer.flags }} -g -O1 -fno-omit-frame-pointer"
 
   # ── Amalgamation ─────────────────────────────────────────
