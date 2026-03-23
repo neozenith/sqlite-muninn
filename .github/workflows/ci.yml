@@ -323,11 +323,16 @@ jobs:
   wasm:
     runs-on: ubuntu-22.04
     name: WASM Build
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - uses: actions/cache@v5
         with:
@@ -337,12 +342,12 @@ jobs:
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
 
-      - name: Build WASM
-        run: make -C wasm dist
+      - name: Build WASM (lite, no llama.cpp)
+        run: make build-wasm-lite
 
       - uses: actions/upload-artifact@v4
         with:
           name: wasm
           path: |
-            dist/nodejs/platforms/wasm/muninn_sqlite3.js
-            dist/nodejs/platforms/wasm/muninn_sqlite3.wasm
+            build/wasm/muninn_sqlite3.js
+            build/wasm/muninn_sqlite3.wasm
