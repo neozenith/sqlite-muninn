@@ -304,10 +304,9 @@ jobs:
 
       - name: Sync Python environment (pysqlite3 from source against Homebrew SQLite)
         run: |
-          UV_NO_BINARY=pysqlite3 \
           CFLAGS="-I$(brew --prefix sqlite)/include" \
           LDFLAGS="-L$(brew --prefix sqlite)/lib" \
-            uv sync --group dev
+            uv sync --group dev --no-binary-package pysqlite3
 
       - uses: actions/cache@v5
         with:
