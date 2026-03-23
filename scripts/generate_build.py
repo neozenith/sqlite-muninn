@@ -183,7 +183,9 @@ _HEADERS_EXCLUDE = {"sqlite3.h", "sqlite3ext.h"}
 def _discover(directory: str, pattern: str, exclude: set[str]) -> list[str]:
     """Discover files matching pattern in directory, minus exclusions."""
     return sorted(
-        str(p.relative_to(PROJECT_ROOT)) for p in (PROJECT_ROOT / directory).glob(pattern) if p.name not in exclude
+        p.relative_to(PROJECT_ROOT).as_posix()
+        for p in (PROJECT_ROOT / directory).glob(pattern)
+        if p.name not in exclude
     )
 
 
