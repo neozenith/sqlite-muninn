@@ -262,6 +262,8 @@ jobs:
         with:
           submodules: recursive
 
+      - uses: astral-sh/setup-uv@v4
+
       - uses: actions/cache@v4
         with:
           path: vendor/llama.cpp/build
@@ -280,8 +282,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-
-      - uses: astral-sh/setup-uv@v4
 
       - name: Build npm package
         run: |
