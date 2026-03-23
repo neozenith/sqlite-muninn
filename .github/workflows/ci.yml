@@ -311,7 +311,7 @@ jobs:
           key: gguf-test-models
 
       - name: Verify sqlite3 has extension loading
-        run: uv run python -c "import sqlite3; c=sqlite3.connect(':memory:'); c.enable_load_extension(True); print('OK: enable_load_extension works')"
+        run: uv run scripts/verify_sqlite3_ext.py
 
       - name: Python integration tests
         run: uv run pytest pytests/ -v

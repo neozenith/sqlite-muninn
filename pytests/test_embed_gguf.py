@@ -18,10 +18,7 @@ from pathlib import Path
 
 import pytest
 
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
+import sqlite3
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

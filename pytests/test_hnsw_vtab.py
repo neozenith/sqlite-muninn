@@ -11,10 +11,7 @@ import struct
 
 import pytest
 
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
+import sqlite3
 
 
 def make_vector(values: list[float]) -> bytes:
