@@ -93,6 +93,10 @@ def _platform_cmake_overrides() -> dict[str, str]:
             "GGML_METAL_EMBED_LIBRARY": "ON",
             "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
         }
+    if UNAME_S == "Windows":
+        return {
+            "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        }
     return {}
 
 
@@ -465,7 +469,9 @@ def cmd_windows(args: argparse.Namespace) -> int:
 
     bs = "\\"  # backslash for f-strings
     content = _WINDOWS_BAT_TEMPLATE.format(
-        cmake_flags=_bat_continuation(f"    -D{k}={v}" for k, v in CMAKE_FLAGS_BASE.items()),
+        cmake_flags=_bat_continuation(
+            f"    -D{k}={v}" for k, v in {**CMAKE_FLAGS_BASE, **_platform_cmake_overrides()}.items()
+        ),
         include_flags=_bat_continuation(
             f"    /I{d.replace('/', bs)}" for d in VENDOR_INCLUDE_DIRS + LLAMA_INCLUDE_DIRS
         ),
