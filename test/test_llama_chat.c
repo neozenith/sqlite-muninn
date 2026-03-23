@@ -474,6 +474,168 @@ TEST(test_summarize_null_args) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * UNSUPERVISED MODE TESTS
+ *
+ * Verify that extract functions accept 2-arg form (model, text)
+ * for unsupervised mode. Without a loaded model these hit the
+ * "not loaded" error — confirming they passed arg validation.
+ * ═══════════════════════════════════════════════════════════════ */
+
+TEST(test_entities_unsupervised_2arg) {
+    /* muninn_extract_entities('model', 'text') → unsupervised → "not loaded" (not "requires") */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, "SELECT muninn_extract_entities('nope', 'Alice works at ACME')", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "not loaded") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+TEST(test_entities_unsupervised_with_skip_think) {
+    /* muninn_extract_entities('model', 'text', 1) → unsupervised + skip_think → "not loaded" */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, "SELECT muninn_extract_entities('nope', 'Alice works at ACME', 1)", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "not loaded") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+TEST(test_relations_unsupervised_2arg) {
+    /* muninn_extract_relations('model', 'text') → unsupervised → "not loaded" */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, "SELECT muninn_extract_relations('nope', 'Alice founded ACME')", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "not loaded") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+TEST(test_relations_unsupervised_with_skip_think) {
+    /* muninn_extract_relations('model', 'text', 1) → unsupervised + skip_think → "not loaded" */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc =
+        sqlite3_prepare_v2(db, "SELECT muninn_extract_relations('nope', 'Alice founded ACME', 1)", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "not loaded") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+TEST(test_ner_re_unsupervised_2arg) {
+    /* muninn_extract_ner_re('model', 'text') → unsupervised → "not loaded" */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, "SELECT muninn_extract_ner_re('nope', 'Alice founded ACME')", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "not loaded") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+TEST(test_ner_re_unsupervised_with_skip_think) {
+    /* muninn_extract_ner_re('model', 'text', 1) → unsupervised + skip_think → "not loaded" */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, "SELECT muninn_extract_ner_re('nope', 'Alice founded ACME', 1)", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "not loaded") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+TEST(test_ner_re_mixed_labels_error) {
+    /* muninn_extract_ner_re('model', 'text', 'person') → only entity labels → error */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, "SELECT muninn_extract_ner_re('nope', 'text', 'person')", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "requires both") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+TEST(test_entities_batch_unsupervised) {
+    /* muninn_extract_entities_batch('model', texts_json) → unsupervised → "not loaded" */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(
+        db, "SELECT muninn_extract_entities_batch('nope', '[\"Alice works at ACME\"]')", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "not loaded") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+TEST(test_ner_re_batch_unsupervised) {
+    /* muninn_extract_ner_re_batch('model', texts_json) → unsupervised → "not loaded" */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(
+        db, "SELECT muninn_extract_ner_re_batch('nope', '[\"Alice founded ACME\"]')", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "not loaded") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+TEST(test_ner_re_batch_mixed_labels_error) {
+    /* muninn_extract_ner_re_batch('model', texts, 'person') → only entity labels → error */
+    sqlite3 *db = open_test_db();
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(
+        db, "SELECT muninn_extract_ner_re_batch('nope', '[\"text\"]', 'person')", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ERROR, rc);
+    ASSERT(strstr(sqlite3_errmsg(db), "requires both") != NULL);
+    sqlite3_finalize(stmt);
+
+    sqlite3_close(db);
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * LOGGING TESTS
  *
  * Test the MUNINN_LOG_LEVEL env var parsing. Uses reset helper
@@ -1158,6 +1320,18 @@ void test_llama_chat(void) {
     RUN_TEST(test_relations_null_args);
     RUN_TEST(test_ner_re_null_args);
     RUN_TEST(test_summarize_null_args);
+
+    /* ── Unsupervised mode tests ──────────────────────────── */
+    RUN_TEST(test_entities_unsupervised_2arg);
+    RUN_TEST(test_entities_unsupervised_with_skip_think);
+    RUN_TEST(test_relations_unsupervised_2arg);
+    RUN_TEST(test_relations_unsupervised_with_skip_think);
+    RUN_TEST(test_ner_re_unsupervised_2arg);
+    RUN_TEST(test_ner_re_unsupervised_with_skip_think);
+    RUN_TEST(test_ner_re_mixed_labels_error);
+    RUN_TEST(test_entities_batch_unsupervised);
+    RUN_TEST(test_ner_re_batch_unsupervised);
+    RUN_TEST(test_ner_re_batch_mixed_labels_error);
 
     /* ── VT edge cases ─────────────────────────────────────── */
     RUN_TEST(test_vtab_select_hidden_column);

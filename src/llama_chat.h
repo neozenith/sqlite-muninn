@@ -5,12 +5,17 @@
  * constraints using GGUF models loaded through llama.cpp's inference engine.
  *
  * SQL functions registered:
- *   muninn_chat_model(path [, n_ctx])               — Load GGUF chat model, return opaque handle
- *   muninn_chat(model, prompt [, grammar [, max_tokens]]) — Generate text completion
- *   muninn_extract_entities(model, text, labels_csv)      — NER with confidence scores [0.0-1.0]
- *   muninn_extract_relations(model, text, entities_json)  — RE with confidence scores [0.0-1.0]
- *   muninn_extract_ner_re(model, text, ent_labels, rel_labels) — Combined NER+RE in one pass
- *   muninn_summarize(model, text [, max_tokens])          — Summarise text
+ *   muninn_chat_model(path [, n_ctx])                              — Load GGUF chat model
+ *   muninn_chat(model, prompt [, grammar [, max_tokens]])          — Generate text completion
+ *   muninn_extract_entities(model, text [, labels [, skip_think]]) — NER (supervised/unsupervised)
+ *   muninn_extract_relations(model, text [, entities [, skip_think]]) — RE (supervised/unsupervised)
+ *   muninn_extract_ner_re(model, text [, ent_labels, rel_labels [, skip_think]]) — NER+RE
+ *   muninn_extract_entities_batch(model, texts_json [, labels [, batch_size]])   — Batch NER
+ *   muninn_extract_ner_re_batch(model, texts_json [, ent, rel [, batch_size]])   — Batch NER+RE
+ *   muninn_summarize(model, text [, max_tokens])                   — Summarise text
+ *
+ * Omitting labels enables unsupervised (open) extraction — the LLM discovers
+ * entity types and relation types from the text itself.
  *
  * Model registration via eponymous virtual table:
  *   INSERT INTO temp.muninn_chat_models(name, model) SELECT ...

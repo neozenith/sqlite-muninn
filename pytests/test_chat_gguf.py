@@ -45,9 +45,33 @@ def test_extract_entities_registered(conn):
         conn.execute("SELECT muninn_extract_entities('nonexistent', 'text', 'person')").fetchone()
 
 
+def test_extract_entities_unsupervised_registered(conn):
+    """Unsupervised NER (2-arg form) should pass arg validation and reach model lookup."""
+    with pytest.raises(sqlite3.OperationalError, match="not loaded"):
+        conn.execute("SELECT muninn_extract_entities('nonexistent', 'text')").fetchone()
+
+
 def test_extract_relations_registered(conn):
     with pytest.raises(sqlite3.OperationalError, match="not loaded"):
         conn.execute("SELECT muninn_extract_relations('nonexistent', 'text', '[]')").fetchone()
+
+
+def test_extract_relations_unsupervised_registered(conn):
+    """Unsupervised RE (2-arg form) should pass arg validation and reach model lookup."""
+    with pytest.raises(sqlite3.OperationalError, match="not loaded"):
+        conn.execute("SELECT muninn_extract_relations('nonexistent', 'text')").fetchone()
+
+
+def test_extract_ner_re_unsupervised_registered(conn):
+    """Unsupervised NER+RE (2-arg form) should pass arg validation and reach model lookup."""
+    with pytest.raises(sqlite3.OperationalError, match="not loaded"):
+        conn.execute("SELECT muninn_extract_ner_re('nonexistent', 'text')").fetchone()
+
+
+def test_extract_ner_re_mixed_labels_error(conn):
+    """NER+RE with only entity labels (no relation labels) should error."""
+    with pytest.raises(sqlite3.OperationalError, match="requires both"):
+        conn.execute("SELECT muninn_extract_ner_re('nonexistent', 'text', 'person')").fetchone()
 
 
 def test_summarize_registered(conn):
@@ -171,3 +195,58 @@ def test_bulk_ner_re_pipeline(conn_with_model):
     assert doc_id == 1
     parsed = json.loads(rels_json)
     assert "relations" in parsed
+
+
+# ── Unsupervised Mode Integration Tests ──────────────────────────
+
+
+def test_extract_entities_unsupervised(conn_with_model):
+    """Unsupervised NER should return valid JSON with entities."""
+    (result,) = conn_with_model.execute(
+        "SELECT muninn_extract_entities('test', 'Alice works at ACME in New York.')"
+    ).fetchone()
+    assert result is not None
+    parsed = json.loads(result)
+    assert "entities" in parsed
+    assert isinstance(parsed["entities"], list)
+    assert len(parsed["entities"]) > 0
+
+    for ent in parsed["entities"]:
+        assert "text" in ent
+        assert "type" in ent
+
+
+def test_extract_relations_unsupervised(conn_with_model):
+    """Unsupervised RE should return valid JSON with relations."""
+    (result,) = conn_with_model.execute(
+        "SELECT muninn_extract_relations('test', 'Alice founded ACME Corporation in 1987.')"
+    ).fetchone()
+    assert result is not None
+    parsed = json.loads(result)
+    assert "relations" in parsed
+    assert isinstance(parsed["relations"], list)
+
+
+def test_extract_ner_re_unsupervised(conn_with_model):
+    """Unsupervised NER+RE should return valid JSON with both entities and relations."""
+    (result,) = conn_with_model.execute(
+        "SELECT muninn_extract_ner_re('test', 'Alice founded ACME Corporation in New York City in 1987.')"
+    ).fetchone()
+    assert result is not None
+    parsed = json.loads(result)
+    assert "entities" in parsed
+    assert "relations" in parsed
+    assert isinstance(parsed["entities"], list)
+    assert isinstance(parsed["relations"], list)
+    assert len(parsed["entities"]) > 0
+
+
+def test_extract_entities_unsupervised_with_skip_think(conn_with_model):
+    """Unsupervised NER with inject_skip_think=1 should return valid JSON."""
+    (result,) = conn_with_model.execute(
+        "SELECT muninn_extract_entities('test', 'Alice works at ACME in New York.', 1)"
+    ).fetchone()
+    assert result is not None
+    parsed = json.loads(result)
+    assert "entities" in parsed
+    assert isinstance(parsed["entities"], list)

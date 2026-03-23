@@ -1,0 +1,69 @@
+{
+  "description": "Ground truth entities and relations for the 5 NER/RE test documents. VERIFIED by user 2026-03-22.",
+  "entity_types": ["person", "organization", "location", "date", "monetary_value"],
+  "relation_types": ["founded", "acquired", "partner_of", "located_in", "ceo_of", "works_for", "discovered", "announced", "founded_in", "discovered_in", "acquired_for"],
+  "documents": {
+    "1": {
+      "text": "Alice Smith founded ACME Corporation in New York City in 1987.",
+      "entities": [
+        {"text": "Alice Smith", "type": "person"},
+        {"text": "ACME Corporation", "type": "organization"},
+        {"text": "New York City", "type": "location"},
+        {"text": "1987", "type": "date"}
+      ],
+      "relations": [
+        {"head": "Alice Smith", "rel": "founded", "tail": "ACME Corporation"},
+        {"head": "ACME Corporation", "rel": "located_in", "tail": "New York City"},
+        {"head": "ACME Corporation", "rel": "founded_in", "tail": "1987"}
+      ]
+    },
+    "2": {
+      "text": "Bob Jones, CEO of TechStart, announced a partnership with ACME Corporation.",
+      "entities": [
+        {"text": "Bob Jones", "type": "person"},
+        {"text": "TechStart", "type": "organization"},
+        {"text": "ACME Corporation", "type": "organization"}
+      ],
+      "relations": [
+        {"head": "Bob Jones", "rel": "ceo_of", "tail": "TechStart"},
+        {"head": "TechStart", "rel": "partner_of", "tail": "ACME Corporation"},
+        {"head": "Bob Jones", "rel": "announced", "tail": "TechStart"}
+      ]
+    },
+    "3": {
+      "text": "The European Central Bank raised interest rates to combat inflation in the eurozone.",
+      "entities": [
+        {"text": "European Central Bank", "type": "organization"},
+        {"text": "eurozone", "type": "location"}
+      ],
+      "relations": [
+        {"head": "European Central Bank", "rel": "located_in", "tail": "eurozone"}
+      ]
+    },
+    "4": {
+      "text": "Dr. Marie Curie discovered radium at the University of Paris in 1898.",
+      "entities": [
+        {"text": "Dr. Marie Curie", "type": "person"},
+        {"text": "University of Paris", "type": "organization"},
+        {"text": "1898", "type": "date"}
+      ],
+      "relations": [
+        {"head": "Dr. Marie Curie", "rel": "discovered", "tail": "radium"},
+        {"head": "Dr. Marie Curie", "rel": "works_for", "tail": "University of Paris"},
+        {"head": "Dr. Marie Curie", "rel": "discovered_in", "tail": "1898"}
+      ]
+    },
+    "5": {
+      "text": "Amazon acquired Whole Foods for $13.7 billion, reshaping the grocery industry.",
+      "entities": [
+        {"text": "Amazon", "type": "organization"},
+        {"text": "Whole Foods", "type": "organization"},
+        {"text": "$13.7 billion", "type": "monetary_value"}
+      ],
+      "relations": [
+        {"head": "Amazon", "rel": "acquired", "tail": "Whole Foods"},
+        {"head": "Amazon", "rel": "acquired_for", "tail": "$13.7 billion"}
+      ]
+    }
+  }
+}

@@ -12,6 +12,7 @@
 
 #include "llama_chat.h"
 #include "llama_common.h"
+#include "llama_constants.h"
 
 SQLITE_EXTENSION_INIT3
 
@@ -29,54 +30,6 @@ SQLITE_EXTENSION_INIT3
 #define DEFAULT_N_CTX 8192
 #define MAX_BATCH_SEQS 8
 #define DEFAULT_BATCH_SIZE 4
-
-/* ──────────────────────────────────────────────────────────────────
- * GBNF Grammars for Structured Extraction
- *
- * These grammars are passed to llama_sampler_init_grammar() to force
- * the model to produce valid JSON at the token generation level.
- * The grammar sampler rejects any token that would violate the
- * grammar, so output is guaranteed well-formed — no post-hoc
- * bracket matching or JSON repair needed.
- *
- * muninn_chat() also accepts user-provided GBNF via its 3rd arg.
- * ────────────────────────────────────────────────────────────── */
-
-/* Shared tail rules: string, number, whitespace */
-#define GBNF_COMMON_RULES                                                                                              \
-    "string ::= \"\\\"\" [^\"\\\\]* \"\\\"\"\n"                                                                        \
-    "number ::= [0-9] (\".\" [0-9]+)?\n"                                                                               \
-    "ws ::= [ \\t\\n]*\n"
-
-/* NER: {"entities":[{"text":"...","type":"...","score":0.85},...]} */
-static const char *GBNF_NER = "root ::= \"{\" ws \"\\\"entities\\\"\" ws \":\" ws \"[\" ws entities ws \"]\" ws \"}\"\n"
-                              "entities ::= entity (\",\" ws entity)* | \"\"\n"
-                              "entity ::= \"{\" ws \"\\\"text\\\"\" ws \":\" ws string ws \",\" ws "
-                              "\"\\\"type\\\"\" ws \":\" ws string ws \",\" ws "
-                              "\"\\\"score\\\"\" ws \":\" ws number ws \"}\"\n" GBNF_COMMON_RULES;
-
-/* RE: {"relations":[{"head":"...","rel":"...","tail":"...","score":0.75},...]} */
-static const char *GBNF_RE =
-    "root ::= \"{\" ws \"\\\"relations\\\"\" ws \":\" ws \"[\" ws relations ws \"]\" ws \"}\"\n"
-    "relations ::= relation (\",\" ws relation)* | \"\"\n"
-    "relation ::= \"{\" ws \"\\\"head\\\"\" ws \":\" ws string ws \",\" ws "
-    "\"\\\"rel\\\"\" ws \":\" ws string ws \",\" ws "
-    "\"\\\"tail\\\"\" ws \":\" ws string ws \",\" ws "
-    "\"\\\"score\\\"\" ws \":\" ws number ws \"}\"\n" GBNF_COMMON_RULES;
-
-/* Combined NER+RE: {"entities":[...],"relations":[...]} */
-static const char *GBNF_NER_RE =
-    "root ::= \"{\" ws \"\\\"entities\\\"\" ws \":\" ws \"[\" ws entities ws \"]\" ws \",\" ws "
-    "\"\\\"relations\\\"\" ws \":\" ws \"[\" ws relations ws \"]\" ws \"}\"\n"
-    "entities ::= entity (\",\" ws entity)* | \"\"\n"
-    "entity ::= \"{\" ws \"\\\"text\\\"\" ws \":\" ws string ws \",\" ws "
-    "\"\\\"type\\\"\" ws \":\" ws string ws \",\" ws "
-    "\"\\\"score\\\"\" ws \":\" ws number ws \"}\"\n"
-    "relations ::= relation (\",\" ws relation)* | \"\"\n"
-    "relation ::= \"{\" ws \"\\\"head\\\"\" ws \":\" ws string ws \",\" ws "
-    "\"\\\"rel\\\"\" ws \":\" ws string ws \",\" ws "
-    "\"\\\"tail\\\"\" ws \":\" ws string ws \",\" ws "
-    "\"\\\"score\\\"\" ws \":\" ws number ws \"}\"\n" GBNF_COMMON_RULES;
 
 /* ──────────────────────────────────────────────────────────────────
  * Model Loading
@@ -110,11 +63,14 @@ static int load_chat_model(const char *path, int n_ctx, LoadedChatModel *out, ch
         return -1;
     }
 
-    /* Default context: must accommodate batch_size × (prompt + output) tokens.
-     * At bs=8, ~200 prompt + ~300 output = ~500/seq × 8 = ~4000. Use 8192 for headroom. */
+    /* Dynamic context: max(DEFAULT_N_CTX, train_ctx / 8).
+     * Gives 256K models 32K context, 128K models 16K, while never going below 8K.
+     * Must also accommodate batch_size × (prompt + output) tokens for batch inference. */
     int n_ctx_train = (int)llama_model_n_ctx_train(model);
-    if (n_ctx <= 0)
-        n_ctx = DEFAULT_N_CTX;
+    if (n_ctx <= 0) {
+        int dynamic_ctx = n_ctx_train > 0 ? n_ctx_train / 8 : 0;
+        n_ctx = dynamic_ctx > DEFAULT_N_CTX ? dynamic_ctx : DEFAULT_N_CTX;
+    }
     if (n_ctx_train > 0 && n_ctx > n_ctx_train)
         n_ctx = n_ctx_train;
 
@@ -465,7 +421,8 @@ static int chat_generate_batch(MuninnModelEntry *me, const char **prompts, int n
  * For convenience functions, builds system+user message pairs.
  * ────────────────────────────────────────────────────────────── */
 
-static char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const char *user_msg, int *out_len) {
+static char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const char *user_msg,
+                                  int inject_skip_think, int *out_len) {
     struct llama_chat_message msgs[2];
     int n_msg = 0;
 
@@ -485,7 +442,7 @@ static char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, 
     if (needed <= 0)
         return NULL;
 
-    char *buf = (char *)malloc((size_t)(needed + 1));
+    char *buf = (char *)malloc((size_t)(needed + 64)); /* +64 for think tag */
     if (!buf)
         return NULL;
 
@@ -495,6 +452,19 @@ static char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, 
         return NULL;
     }
     buf[written] = '\0';
+
+    /* Qwen3.5 thinking models: llama_chat_apply_template() uses a hardcoded
+     * ChatML handler that doesn't inject the <think> prefix the Jinja2 template
+     * would. When inject_skip_think=1, we inject an empty closed think block
+     * to disable reasoning. Default (0) = no injection, bare ChatML. */
+    if (inject_skip_think == 1 && tmpl && strstr(tmpl, "enable_thinking")) {
+        static const char tag[] = "<think>\n\n</think>\n\n";
+        int tag_len = (int)(sizeof(tag) - 1);
+        memcpy(buf + written, tag, (size_t)tag_len);
+        written += tag_len;
+        buf[written] = '\0';
+    }
+
     if (out_len)
         *out_len = written;
     return buf;
@@ -539,25 +509,81 @@ const char *strip_think_block(const char *text) {
  * With GBNF grammar active, each generated token is guaranteed valid.
  * The only failure mode is max_tokens truncation (model didn't finish
  * before the token budget ran out). In that case we return fallback_json.
+ *
+ * wrap_key: if non-NULL and the model produced a bare JSON array,
+ * wrap it as {"<wrap_key>": [...]} to normalize the output format.
+ * Small models often emit bare arrays instead of the wrapper object.
  * ────────────────────────────────────────────────────────────── */
 
-static void result_json_output(sqlite3_context *ctx, char *output, int output_len, const char *fallback_json) {
-    yyjson_doc *doc = yyjson_read(output, (size_t)output_len, 0);
+static void result_json_output(sqlite3_context *ctx, char *output, int output_len, const char *fallback_json,
+                               const char *wrap_key) {
+    /* Strip <think>...</think> prefix if present (GBNF allows it optionally) */
+    const char *json_start = strip_think_block(output);
+    int json_len = output_len - (int)(json_start - output);
+
+    yyjson_doc *doc = yyjson_read(json_start, (size_t)json_len, 0);
     if (doc) {
-        size_t write_len = 0;
-        char *minified = yyjson_write(doc, YYJSON_WRITE_NOFLAG, &write_len);
-        yyjson_doc_free(doc);
-        if (minified) {
-            sqlite3_result_text(ctx, minified, (int)write_len, free);
-            sqlite3_result_subtype(ctx, (unsigned int)'J');
-            free(output);
-            return;
+        yyjson_val *root = yyjson_doc_get_root(doc);
+
+        /* If model produced bare array and we have a wrap key, normalize to object */
+        if (wrap_key && yyjson_is_arr(root)) {
+            yyjson_mut_doc *mut = yyjson_mut_doc_new(NULL);
+            yyjson_mut_val *obj = yyjson_mut_obj(mut);
+            yyjson_mut_doc_set_root(mut, obj);
+            yyjson_mut_val *arr_copy = yyjson_val_mut_copy(mut, root);
+            yyjson_mut_obj_add_val(mut, obj, wrap_key, arr_copy);
+            yyjson_doc_free(doc);
+
+            size_t write_len = 0;
+            char *minified = yyjson_mut_write(mut, YYJSON_WRITE_NOFLAG, &write_len);
+            yyjson_mut_doc_free(mut);
+            if (minified) {
+                sqlite3_result_text(ctx, minified, (int)write_len, free);
+                sqlite3_result_subtype(ctx, (unsigned int)'J');
+                free(output);
+                return;
+            }
+        } else {
+            size_t write_len = 0;
+            char *minified = yyjson_write(doc, YYJSON_WRITE_NOFLAG, &write_len);
+            yyjson_doc_free(doc);
+            if (minified) {
+                sqlite3_result_text(ctx, minified, (int)write_len, free);
+                sqlite3_result_subtype(ctx, (unsigned int)'J');
+                free(output);
+                return;
+            }
         }
     }
     /* Truncated by max_tokens — return fallback */
     sqlite3_result_text(ctx, fallback_json, -1, SQLITE_STATIC);
     sqlite3_result_subtype(ctx, (unsigned int)'J');
     free(output);
+}
+
+/* ──────────────────────────────────────────────────────────────────
+ * Extract argument disambiguation
+ *
+ * Shared by all extract functions. Parses optional args starting at
+ * argv[start_idx]. TEXT = labels (supervised), INTEGER = inject_skip_think
+ * (unsupervised). Returns labels=NULL for unsupervised mode.
+ * ────────────────────────────────────────────────────────────── */
+
+typedef struct {
+    const char *labels;    /* NULL if unsupervised */
+    int inject_skip_think; /* 0 = off (default), 1 = inject closed think block */
+} ExtractArgs;
+
+static ExtractArgs parse_extract_args(int argc, sqlite3_value **argv, int start_idx) {
+    ExtractArgs args = {NULL, 0};
+    if (argc > start_idx && sqlite3_value_type(argv[start_idx]) == SQLITE_TEXT) {
+        args.labels = (const char *)sqlite3_value_text(argv[start_idx]);
+        if (argc > start_idx + 1 && sqlite3_value_type(argv[start_idx + 1]) == SQLITE_INTEGER)
+            args.inject_skip_think = sqlite3_value_int(argv[start_idx + 1]) ? 1 : 0;
+    } else if (argc > start_idx && sqlite3_value_type(argv[start_idx]) == SQLITE_INTEGER) {
+        args.inject_skip_think = sqlite3_value_int(argv[start_idx]) ? 1 : 0;
+    }
+    return args;
 }
 
 /* ──────────────────────────────────────────────────────────────────
@@ -570,7 +596,7 @@ static void fn_chat_model(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
         return;
     }
     const char *path = (const char *)sqlite3_value_text(argv[0]);
-    int n_ctx = DEFAULT_N_CTX;
+    int n_ctx = 0; /* 0 = use dynamic default: max(DEFAULT_N_CTX, train_ctx / 8) */
     if (argc >= 2 && sqlite3_value_type(argv[1]) == SQLITE_INTEGER) {
         n_ctx = sqlite3_value_int(argv[1]);
     }
@@ -594,7 +620,7 @@ static void fn_chat_model(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
 }
 
 /* ──────────────────────────────────────────────────────────────────
- * SQL Function: muninn_chat(model TEXT, prompt TEXT [, grammar TEXT [, max_tokens INT]]) -> TEXT
+ * SQL Function: muninn_chat(model, prompt [, grammar [, max_tokens [, system_prompt]]]) -> TEXT
  * ────────────────────────────────────────────────────────────── */
 
 static void fn_chat(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
@@ -625,10 +651,14 @@ static void fn_chat(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc >= 4 && sqlite3_value_type(argv[3]) == SQLITE_INTEGER) {
         max_tokens = sqlite3_value_int(argv[3]);
     }
+    const char *system_msg = NULL;
+    if (argc >= 5 && sqlite3_value_type(argv[4]) == SQLITE_TEXT) {
+        system_msg = (const char *)sqlite3_value_text(argv[4]);
+    }
 
-    /* Format as single user message using model chat template */
+    /* Format with optional system message using model chat template */
     int fmt_len = 0;
-    char *formatted = format_chat_messages(me, NULL, prompt, &fmt_len);
+    char *formatted = format_chat_messages(me, system_msg, prompt, 0, &fmt_len);
     if (!formatted) {
         sqlite3_result_error(ctx, "muninn_chat: failed to format chat template", -1);
         return;
@@ -649,20 +679,29 @@ static void fn_chat(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
 }
 
 /* ──────────────────────────────────────────────────────────────────
- * SQL Function: muninn_extract_entities(model TEXT, text TEXT, labels_csv TEXT) -> TEXT
+ * SQL Function: muninn_extract_entities(model, text [, labels [, inject_skip_think]]) -> TEXT
+ *
+ * Supervised (labels provided): extract entities of the specified types.
+ * Unsupervised (labels omitted): open extraction of all notable entities.
+ * inject_skip_think: 0=off (default), 1=inject closed think block to
+ * suppress reasoning on Qwen3.5 models.
  *
  * Returns JSON: {"entities":[{"text":"...","type":"...","score":0.0-1.0},...]}
  * ────────────────────────────────────────────────────────────── */
 
 static void fn_extract_entities(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    (void)argc;
-    const char *name = (const char *)sqlite3_value_text(argv[0]);
-    const char *text = (const char *)sqlite3_value_text(argv[1]);
-    const char *labels = (const char *)sqlite3_value_text(argv[2]);
-    if (!name || !text || !labels) {
-        sqlite3_result_error(ctx, "muninn_extract_entities: all arguments must be TEXT", -1);
+    if (argc < 2) {
+        sqlite3_result_error(ctx, "muninn_extract_entities: requires (model, text [, labels [, inject_skip_think]])", -1);
         return;
     }
+    const char *name = (const char *)sqlite3_value_text(argv[0]);
+    const char *text = (const char *)sqlite3_value_text(argv[1]);
+    if (!name || !text) {
+        sqlite3_result_error(ctx, "muninn_extract_entities: model and text must be TEXT", -1);
+        return;
+    }
+
+    ExtractArgs args = parse_extract_args(argc, argv, 2);
 
     MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
     if (!me) {
@@ -672,25 +711,20 @@ static void fn_extract_entities(sqlite3_context *ctx, int argc, sqlite3_value **
         return;
     }
 
-    static const char *sys_prompt =
-        "You are a precise named entity recognition system. "
-        "Extract entities of the specified types from the text. "
-        "For each entity, assign a confidence score between 0.0 and 1.0 reflecting "
-        "how certain you are that the span is correctly identified as that entity type. "
-        "Use the full range: 1.0 = definite, 0.7-0.9 = high confidence, "
-        "0.4-0.6 = moderate, below 0.4 = uncertain. "
-        "Respond ONLY with a JSON object in this format: "
-        "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} ";
+    const char *sys_prompt = args.labels ? SYS_NER_SUP : SYS_NER_UNSUP;
 
-    int user_len = (int)strlen(text) + (int)strlen(labels) + 128;
+    int user_len = (int)strlen(text) + (args.labels ? (int)strlen(args.labels) : 0) + 128;
     char *user_prompt = (char *)malloc((size_t)user_len);
     if (!user_prompt) {
         sqlite3_result_error_nomem(ctx);
         return;
     }
-    snprintf(user_prompt, user_len, "Extract entities of types: %s\nText: %s", labels, text);
+    if (args.labels)
+        snprintf(user_prompt, user_len, "Extract entities of types: %s\nText: %s", args.labels, text);
+    else
+        snprintf(user_prompt, user_len, "Text: %s", text);
 
-    char *formatted = format_chat_messages(me, sys_prompt, user_prompt, NULL);
+    char *formatted = format_chat_messages(me, sys_prompt, user_prompt, args.inject_skip_think, NULL);
     free(user_prompt);
     if (!formatted) {
         sqlite3_result_error(ctx, "muninn_extract_entities: template formatting failed", -1);
@@ -707,24 +741,33 @@ static void fn_extract_entities(sqlite3_context *ctx, int argc, sqlite3_value **
         return;
     }
 
-    result_json_output(ctx, output, output_len, "{\"entities\":[]}");
+    result_json_output(ctx, output, output_len, "{\"entities\":[]}", "entities");
 }
 
 /* ──────────────────────────────────────────────────────────────────
- * SQL Function: muninn_extract_relations(model TEXT, text TEXT, entities_json TEXT) -> TEXT
+ * SQL Function: muninn_extract_relations(model, text [, entities_json [, inject_skip_think]]) -> TEXT
+ *
+ * Supervised (entities_json provided): extract relations between given entities.
+ * Unsupervised (entities_json omitted): discover entities and relations from text.
  *
  * Returns JSON: {"relations":[{"head":"...","rel":"...","tail":"...","score":0.0-1.0},...]}
  * ────────────────────────────────────────────────────────────── */
 
 static void fn_extract_relations(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    (void)argc;
-    const char *name = (const char *)sqlite3_value_text(argv[0]);
-    const char *text = (const char *)sqlite3_value_text(argv[1]);
-    const char *ents = (const char *)sqlite3_value_text(argv[2]);
-    if (!name || !text || !ents) {
-        sqlite3_result_error(ctx, "muninn_extract_relations: all arguments must be TEXT", -1);
+    if (argc < 2) {
+        sqlite3_result_error(ctx,
+                             "muninn_extract_relations: requires (model, text [, entities_json [, inject_skip_think]])",
+                             -1);
         return;
     }
+    const char *name = (const char *)sqlite3_value_text(argv[0]);
+    const char *text = (const char *)sqlite3_value_text(argv[1]);
+    if (!name || !text) {
+        sqlite3_result_error(ctx, "muninn_extract_relations: model and text must be TEXT", -1);
+        return;
+    }
+
+    ExtractArgs args = parse_extract_args(argc, argv, 2);
 
     MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
     if (!me) {
@@ -734,26 +777,20 @@ static void fn_extract_relations(sqlite3_context *ctx, int argc, sqlite3_value *
         return;
     }
 
-    static const char *sys_prompt =
-        "You are a precise relation extraction system. "
-        "Given text and a list of entities, extract relations between them. "
-        "Only emit relations between the provided entities. "
-        "For each relation, assign a confidence score between 0.0 and 1.0 reflecting "
-        "how certain you are that this relation is explicitly supported by the text. "
-        "Use the full range: 1.0 = explicitly stated, 0.7-0.9 = strongly implied, "
-        "0.4-0.6 = inferred, below 0.4 = speculative. "
-        "Respond ONLY with a JSON object in this format: "
-        "{\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} ";
+    const char *sys_prompt = args.labels ? SYS_RE_SUP : SYS_RE_UNSUP;
 
-    int user_len = (int)strlen(text) + (int)strlen(ents) + 128;
+    int user_len = (int)strlen(text) + (args.labels ? (int)strlen(args.labels) : 0) + 128;
     char *user_prompt = (char *)malloc((size_t)user_len);
     if (!user_prompt) {
         sqlite3_result_error_nomem(ctx);
         return;
     }
-    snprintf(user_prompt, user_len, "Entities: %s\nText: %s", ents, text);
+    if (args.labels)
+        snprintf(user_prompt, user_len, "Entities: %s\nText: %s", args.labels, text);
+    else
+        snprintf(user_prompt, user_len, "Text: %s", text);
 
-    char *formatted = format_chat_messages(me, sys_prompt, user_prompt, NULL);
+    char *formatted = format_chat_messages(me, sys_prompt, user_prompt, args.inject_skip_think, NULL);
     free(user_prompt);
     if (!formatted) {
         sqlite3_result_error(ctx, "muninn_extract_relations: template formatting failed", -1);
@@ -770,13 +807,16 @@ static void fn_extract_relations(sqlite3_context *ctx, int argc, sqlite3_value *
         return;
     }
 
-    result_json_output(ctx, output, output_len, "{\"relations\":[]}");
+    result_json_output(ctx, output, output_len, "{\"relations\":[]}", "relations");
 }
 
 /* ──────────────────────────────────────────────────────────────────
- * SQL Function: muninn_extract_ner_re(model TEXT, text TEXT,
- *                                     entity_labels_csv TEXT,
- *                                     relation_labels_csv TEXT) -> TEXT
+ * SQL Function: muninn_extract_ner_re(model, text [, entity_labels,
+ *                                     relation_labels [, inject_skip_think]]) -> TEXT
+ *
+ * Supervised (both label sets provided): extract entities + relations of given types.
+ * Unsupervised (labels omitted): open extraction of all entities + relations.
+ * No mixed mode — call separate functions if you want supervised NER + open RE.
  *
  * Combined NER + RE in a single LLM call for 2x throughput.
  * Returns JSON: {"entities":[{"text":"...","type":"...","score":0.0-1.0},...],
@@ -784,14 +824,40 @@ static void fn_extract_relations(sqlite3_context *ctx, int argc, sqlite3_value *
  * ────────────────────────────────────────────────────────────── */
 
 static void fn_extract_ner_re(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    (void)argc;
+    if (argc < 2) {
+        sqlite3_result_error(
+            ctx, "muninn_extract_ner_re: requires (model, text [, ent_labels, rel_labels [, inject_skip_think]])", -1);
+        return;
+    }
     const char *name = (const char *)sqlite3_value_text(argv[0]);
     const char *text = (const char *)sqlite3_value_text(argv[1]);
-    const char *entity_labels = (const char *)sqlite3_value_text(argv[2]);
-    const char *relation_labels = (const char *)sqlite3_value_text(argv[3]);
-    if (!name || !text || !entity_labels || !relation_labels) {
-        sqlite3_result_error(ctx, "muninn_extract_ner_re: all arguments must be TEXT", -1);
+    if (!name || !text) {
+        sqlite3_result_error(ctx, "muninn_extract_ner_re: model and text must be TEXT", -1);
         return;
+    }
+
+    /* Disambiguate supervised vs unsupervised:
+     * - argc >= 4 with TEXT at [2] and TEXT at [3]: supervised (ent_labels, rel_labels)
+     * - argc >= 3 with TEXT at [2] only: error — need both label sets or neither
+     * - INTEGER at [2]: unsupervised with inject_skip_think
+     * - argc == 2: unsupervised, no flags */
+    const char *entity_labels = NULL;
+    const char *relation_labels = NULL;
+    int inject_skip_think = 0;
+
+    if (argc > 2 && sqlite3_value_type(argv[2]) == SQLITE_TEXT) {
+        entity_labels = (const char *)sqlite3_value_text(argv[2]);
+        if (argc > 3 && sqlite3_value_type(argv[3]) == SQLITE_TEXT) {
+            relation_labels = (const char *)sqlite3_value_text(argv[3]);
+            if (argc > 4 && sqlite3_value_type(argv[4]) == SQLITE_INTEGER)
+                inject_skip_think = sqlite3_value_int(argv[4]) ? 1 : 0;
+        } else {
+            sqlite3_result_error(ctx,
+                                 "muninn_extract_ner_re: supervised mode requires both ent_labels and rel_labels", -1);
+            return;
+        }
+    } else if (argc > 2 && sqlite3_value_type(argv[2]) == SQLITE_INTEGER) {
+        inject_skip_think = sqlite3_value_int(argv[2]) ? 1 : 0;
     }
 
     MuninnModelEntry *me = muninn_registry_find_type(name, MUNINN_MODEL_CHAT);
@@ -802,28 +868,22 @@ static void fn_extract_ner_re(sqlite3_context *ctx, int argc, sqlite3_value **ar
         return;
     }
 
-    static const char *sys_prompt =
-        "You are a precise knowledge extraction system. "
-        "Extract named entities and relations between them from the text. "
-        "For entities: identify spans matching the specified types with a confidence score [0.0-1.0]. "
-        "For relations: identify how entities are connected with a confidence score [0.0-1.0]. "
-        "Entity scores: 1.0 = definite, 0.7-0.9 = high, 0.4-0.6 = moderate, below 0.4 = uncertain. "
-        "Relation scores: 1.0 = explicitly stated, 0.7-0.9 = strongly implied, "
-        "0.4-0.6 = inferred, below 0.4 = speculative. "
-        "Respond ONLY with a JSON object in this format: "
-        "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...], "
-        "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} ";
+    const char *sys_prompt = entity_labels ? SYS_NER_RE_SUP : SYS_NER_RE_UNSUP;
 
-    int user_len = (int)strlen(text) + (int)strlen(entity_labels) + (int)strlen(relation_labels) + 192;
+    int user_len = (int)strlen(text) + (entity_labels ? (int)strlen(entity_labels) : 0) +
+                   (relation_labels ? (int)strlen(relation_labels) : 0) + 192;
     char *user_prompt = (char *)malloc((size_t)user_len);
     if (!user_prompt) {
         sqlite3_result_error_nomem(ctx);
         return;
     }
-    snprintf(user_prompt, user_len, "Extract entities of types: %s\nExtract relations of types: %s\nText: %s",
-             entity_labels, relation_labels, text);
+    if (entity_labels)
+        snprintf(user_prompt, user_len, "Extract entities of types: %s\nExtract relations of types: %s\nText: %s",
+                 entity_labels, relation_labels, text);
+    else
+        snprintf(user_prompt, user_len, "Text: %s", text);
 
-    char *formatted = format_chat_messages(me, sys_prompt, user_prompt, NULL);
+    char *formatted = format_chat_messages(me, sys_prompt, user_prompt, inject_skip_think, NULL);
     free(user_prompt);
     if (!formatted) {
         sqlite3_result_error(ctx, "muninn_extract_ner_re: template formatting failed", -1);
@@ -833,16 +893,14 @@ static void fn_extract_ner_re(sqlite3_context *ctx, int argc, sqlite3_value **ar
     char errbuf[256];
     char *output = NULL;
     int output_len = 0;
-    /* Use 2x default max tokens since combined output is larger */
-    int rc =
-        chat_generate(me, formatted, GBNF_NER_RE, me->n_ctx, &output, &output_len, errbuf, sizeof(errbuf));
+    int rc = chat_generate(me, formatted, GBNF_NER_RE, me->n_ctx, &output, &output_len, errbuf, sizeof(errbuf));
     free(formatted);
     if (rc != 0) {
         sqlite3_result_error(ctx, errbuf, -1);
         return;
     }
 
-    result_json_output(ctx, output, output_len, "{\"entities\":[],\"relations\":[]}");
+    result_json_output(ctx, output, output_len, "{\"entities\":[],\"relations\":[]}", NULL);
 }
 
 /* ──────────────────────────────────────────────────────────────────
@@ -852,7 +910,7 @@ static void fn_extract_ner_re(sqlite3_context *ctx, int argc, sqlite3_value **ar
 
 static void batch_extract_core(sqlite3_context *ctx, MuninnModelEntry *me, yyjson_doc *in_doc, yyjson_val *in_arr,
                                const char *sys_prompt, const char *grammar_gbnf, const char *fallback_json,
-                               int max_tokens, int batch_size,
+                               const char *wrap_key, int max_tokens, int batch_size,
                                void (*build_user_prompt)(char *buf, int buf_sz, const char *text, const void *extra),
                                const void *extra) {
     int n_texts = (int)yyjson_arr_size(in_arr);
@@ -882,7 +940,7 @@ static void batch_extract_core(sqlite3_context *ctx, MuninnModelEntry *me, yyjso
                 continue;
             build_user_prompt(user_bufs[i], user_len, text, extra);
 
-            fmt_bufs[i] = format_chat_messages(me, sys_prompt, user_bufs[i], NULL);
+            fmt_bufs[i] = format_chat_messages(me, sys_prompt, user_bufs[i], 0, NULL);
             prompts[i] = fmt_bufs[i] ? fmt_bufs[i] : "";
         }
 
@@ -897,8 +955,17 @@ static void batch_extract_core(sqlite3_context *ctx, MuninnModelEntry *me, yyjso
                 /* Grammar guarantees valid JSON — parse directly */
                 yyjson_doc *res_doc = yyjson_read(slots[i].text, (size_t)slots[i].len, 0);
                 if (res_doc) {
-                    yyjson_mut_val *rv = yyjson_val_mut_copy(out_doc, yyjson_doc_get_root(res_doc));
-                    yyjson_mut_arr_append(out_arr, rv);
+                    yyjson_val *res_root = yyjson_doc_get_root(res_doc);
+                    /* Wrap bare array in object if needed */
+                    if (wrap_key && yyjson_is_arr(res_root)) {
+                        yyjson_mut_val *wrapper = yyjson_mut_obj(out_doc);
+                        yyjson_mut_val *arr_copy = yyjson_val_mut_copy(out_doc, res_root);
+                        yyjson_mut_obj_add_val(out_doc, wrapper, wrap_key, arr_copy);
+                        yyjson_mut_arr_append(out_arr, wrapper);
+                    } else {
+                        yyjson_mut_val *rv = yyjson_val_mut_copy(out_doc, res_root);
+                        yyjson_mut_arr_append(out_arr, rv);
+                    }
                     yyjson_doc_free(res_doc);
                     added = 1;
                 }
@@ -931,45 +998,65 @@ static void batch_extract_core(sqlite3_context *ctx, MuninnModelEntry *me, yyjso
 /* ── Prompt builder callbacks ── */
 
 typedef struct {
-    const char *labels;
+    const char *labels; /* NULL for unsupervised */
 } NerPromptExtra;
 
 static void build_ner_prompt(char *buf, int buf_sz, const char *text, const void *extra) {
     const NerPromptExtra *e = (const NerPromptExtra *)extra;
-    snprintf(buf, (size_t)buf_sz, "Extract entities of types: %s\nText: %s", e->labels, text);
+    if (e->labels)
+        snprintf(buf, (size_t)buf_sz, "Extract entities of types: %s\nText: %s", e->labels, text);
+    else
+        snprintf(buf, (size_t)buf_sz, "Text: %s", text);
 }
 
 typedef struct {
-    const char *entity_labels;
-    const char *relation_labels;
+    const char *entity_labels;   /* NULL for unsupervised */
+    const char *relation_labels; /* NULL for unsupervised */
 } NerRePromptExtra;
 
 static void build_ner_re_prompt(char *buf, int buf_sz, const char *text, const void *extra) {
     const NerRePromptExtra *e = (const NerRePromptExtra *)extra;
-    snprintf(buf, (size_t)buf_sz,
-             "Extract entities of types: %s\nExtract relations of types: %s\nText: %s",
-             e->entity_labels, e->relation_labels, text);
+    if (e->entity_labels)
+        snprintf(buf, (size_t)buf_sz, "Extract entities of types: %s\nExtract relations of types: %s\nText: %s",
+                 e->entity_labels, e->relation_labels, text);
+    else
+        snprintf(buf, (size_t)buf_sz, "Text: %s", text);
 }
 
 /* ──────────────────────────────────────────────────────────────────
- * SQL Function: muninn_extract_entities_batch(model, texts_json, labels [, batch_size])
+ * SQL Function: muninn_extract_entities_batch(model, texts_json [, labels [, batch_size]])
+ *
+ * Supervised (labels TEXT): extract entities of the specified types.
+ * Unsupervised (labels omitted or INTEGER): open extraction of all entities.
  *
  * Input:  JSON array of texts ["text1", "text2", ...]
  * Output: JSON array of results [{"entities":[...]}, {"entities":[...]}, ...]
  * ────────────────────────────────────────────────────────────── */
 
 static void fn_extract_entities_batch(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc < 2) {
+        sqlite3_result_error(ctx, "muninn_extract_entities_batch: requires (model, texts_json [, labels [, batch_size]])",
+                             -1);
+        return;
+    }
     const char *name = (const char *)sqlite3_value_text(argv[0]);
     const char *texts_json = (const char *)sqlite3_value_text(argv[1]);
-    const char *labels = (const char *)sqlite3_value_text(argv[2]);
-    if (!name || !texts_json || !labels) {
-        sqlite3_result_error(ctx, "muninn_extract_entities_batch: all args must be TEXT", -1);
+    if (!name || !texts_json) {
+        sqlite3_result_error(ctx, "muninn_extract_entities_batch: model and texts_json must be TEXT", -1);
         return;
     }
 
+    /* Parse optional labels + batch_size using type disambiguation */
+    const char *labels = NULL;
     int batch_size = DEFAULT_BATCH_SIZE;
-    if (argc >= 4 && sqlite3_value_type(argv[3]) == SQLITE_INTEGER) {
-        batch_size = sqlite3_value_int(argv[3]);
+    int next_idx = 2;
+
+    if (argc > next_idx && sqlite3_value_type(argv[next_idx]) == SQLITE_TEXT) {
+        labels = (const char *)sqlite3_value_text(argv[next_idx]);
+        next_idx++;
+    }
+    if (argc > next_idx && sqlite3_value_type(argv[next_idx]) == SQLITE_INTEGER) {
+        batch_size = sqlite3_value_int(argv[next_idx]);
         if (batch_size < 1)
             batch_size = 1;
         if (batch_size > MAX_BATCH_SEQS)
@@ -1002,25 +1089,20 @@ static void fn_extract_entities_batch(sqlite3_context *ctx, int argc, sqlite3_va
         return;
     }
 
-    static const char *sys_prompt =
-        "You are a precise named entity recognition system. "
-        "Extract entities of the specified types from the text. "
-        "For each entity, assign a confidence score between 0.0 and 1.0 reflecting "
-        "how certain you are that the span is correctly identified as that entity type. "
-        "Use the full range: 1.0 = definite, 0.7-0.9 = high confidence, "
-        "0.4-0.6 = moderate, below 0.4 = uncertain. "
-        "Respond ONLY with a JSON object in this format: "
-        "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...]} ";
+    const char *sys_prompt = labels ? SYS_NER_SUP : SYS_NER_UNSUP;
 
     NerPromptExtra extra = {.labels = labels};
-    batch_extract_core(ctx, me, in_doc, in_arr, sys_prompt, GBNF_NER, "{\"entities\":[]}", me->n_ctx,
+    batch_extract_core(ctx, me, in_doc, in_arr, sys_prompt, GBNF_NER, "{\"entities\":[]}", "entities", me->n_ctx,
                        batch_size, build_ner_prompt, &extra);
 }
 
 /* ──────────────────────────────────────────────────────────────────
- * SQL Function: muninn_extract_ner_re_batch(model, texts_json,
- *                                           entity_labels, relation_labels
- *                                           [, batch_size])
+ * SQL Function: muninn_extract_ner_re_batch(model, texts_json
+ *                                           [, entity_labels, relation_labels
+ *                                            [, batch_size]])
+ *
+ * Supervised (both label sets TEXT): extract entities + relations of given types.
+ * Unsupervised (labels omitted or INTEGER): open extraction.
  *
  * Combined NER + RE batch: 2x throughput vs sequential, N× parallelism.
  * Input:  JSON array of texts
@@ -1028,18 +1110,39 @@ static void fn_extract_entities_batch(sqlite3_context *ctx, int argc, sqlite3_va
  * ────────────────────────────────────────────────────────────── */
 
 static void fn_extract_ner_re_batch(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc < 2) {
+        sqlite3_result_error(
+            ctx,
+            "muninn_extract_ner_re_batch: requires (model, texts_json [, ent_labels, rel_labels [, batch_size]])", -1);
+        return;
+    }
     const char *name = (const char *)sqlite3_value_text(argv[0]);
     const char *texts_json = (const char *)sqlite3_value_text(argv[1]);
-    const char *entity_labels = (const char *)sqlite3_value_text(argv[2]);
-    const char *relation_labels = (const char *)sqlite3_value_text(argv[3]);
-    if (!name || !texts_json || !entity_labels || !relation_labels) {
-        sqlite3_result_error(ctx, "muninn_extract_ner_re_batch: all args must be TEXT", -1);
+    if (!name || !texts_json) {
+        sqlite3_result_error(ctx, "muninn_extract_ner_re_batch: model and texts_json must be TEXT", -1);
         return;
     }
 
+    /* Parse optional labels + batch_size using type disambiguation */
+    const char *entity_labels = NULL;
+    const char *relation_labels = NULL;
     int batch_size = DEFAULT_BATCH_SIZE;
-    if (argc >= 5 && sqlite3_value_type(argv[4]) == SQLITE_INTEGER) {
-        batch_size = sqlite3_value_int(argv[4]);
+    int next_idx = 2;
+
+    if (argc > next_idx && sqlite3_value_type(argv[next_idx]) == SQLITE_TEXT) {
+        entity_labels = (const char *)sqlite3_value_text(argv[next_idx]);
+        next_idx++;
+        if (argc > next_idx && sqlite3_value_type(argv[next_idx]) == SQLITE_TEXT) {
+            relation_labels = (const char *)sqlite3_value_text(argv[next_idx]);
+            next_idx++;
+        } else {
+            sqlite3_result_error(
+                ctx, "muninn_extract_ner_re_batch: supervised mode requires both ent_labels and rel_labels", -1);
+            return;
+        }
+    }
+    if (argc > next_idx && sqlite3_value_type(argv[next_idx]) == SQLITE_INTEGER) {
+        batch_size = sqlite3_value_int(argv[next_idx]);
         if (batch_size < 1)
             batch_size = 1;
         if (batch_size > MAX_BATCH_SEQS)
@@ -1072,21 +1175,11 @@ static void fn_extract_ner_re_batch(sqlite3_context *ctx, int argc, sqlite3_valu
         return;
     }
 
-    static const char *sys_prompt =
-        "You are a precise knowledge extraction system. "
-        "Extract named entities and relations between them from the text. "
-        "For entities: identify spans matching the specified types with a confidence score [0.0-1.0]. "
-        "For relations: identify how entities are connected with a confidence score [0.0-1.0]. "
-        "Entity scores: 1.0 = definite, 0.7-0.9 = high, 0.4-0.6 = moderate, below 0.4 = uncertain. "
-        "Relation scores: 1.0 = explicitly stated, 0.7-0.9 = strongly implied, "
-        "0.4-0.6 = inferred, below 0.4 = speculative. "
-        "Respond ONLY with a JSON object in this format: "
-        "{\"entities\":[{\"text\":\"entity text\",\"type\":\"entity_type\",\"score\":0.85},...], "
-        "\"relations\":[{\"head\":\"entity\",\"rel\":\"relation_type\",\"tail\":\"entity\",\"score\":0.75},...]} ";
+    const char *sys_prompt = entity_labels ? SYS_NER_RE_SUP : SYS_NER_RE_UNSUP;
 
     NerRePromptExtra extra = {.entity_labels = entity_labels, .relation_labels = relation_labels};
     batch_extract_core(ctx, me, in_doc, in_arr, sys_prompt, GBNF_NER_RE, "{\"entities\":[],\"relations\":[]}",
-                       me->n_ctx, batch_size, build_ner_re_prompt, &extra);
+                       NULL, me->n_ctx, batch_size, build_ner_re_prompt, &extra);
 }
 
 /* ──────────────────────────────────────────────────────────────────
@@ -1127,7 +1220,7 @@ static void fn_summarize(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
              "Produce a one-sentence summary of this text:\n\n%s",
              text);
 
-    char *formatted = format_chat_messages(me, NULL, user_prompt, NULL);
+    char *formatted = format_chat_messages(me, NULL, user_prompt, 0, NULL);
     free(user_prompt);
     if (!formatted) {
         sqlite3_result_error(ctx, "muninn_summarize: template formatting failed", -1);
@@ -1357,31 +1450,31 @@ int chat_register_functions(sqlite3 *db) {
     if (rc != SQLITE_OK)
         return rc;
 
-    /* muninn_extract_entities(model, text, labels_csv) -> TEXT */
-    rc = sqlite3_create_function(db, "muninn_extract_entities", 3, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
+    /* muninn_extract_entities(model, text [, labels [, inject_skip_think]]) -> TEXT */
+    rc = sqlite3_create_function(db, "muninn_extract_entities", -1, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
                                  fn_extract_entities, NULL, NULL);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* muninn_extract_relations(model, text, entities_json) -> TEXT */
-    rc = sqlite3_create_function(db, "muninn_extract_relations", 3, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
+    /* muninn_extract_relations(model, text [, entities_json [, inject_skip_think]]) -> TEXT */
+    rc = sqlite3_create_function(db, "muninn_extract_relations", -1, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
                                  fn_extract_relations, NULL, NULL);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* muninn_extract_ner_re(model, text, entity_labels_csv, relation_labels_csv) -> TEXT */
-    rc = sqlite3_create_function(db, "muninn_extract_ner_re", 4, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
+    /* muninn_extract_ner_re(model, text [, ent_labels, rel_labels [, inject_skip_think]]) -> TEXT */
+    rc = sqlite3_create_function(db, "muninn_extract_ner_re", -1, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
                                  fn_extract_ner_re, NULL, NULL);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* muninn_extract_entities_batch(model, texts_json, labels [, batch_size]) -> TEXT */
+    /* muninn_extract_entities_batch(model, texts_json [, labels [, batch_size]]) -> TEXT */
     rc = sqlite3_create_function(db, "muninn_extract_entities_batch", -1, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
                                  fn_extract_entities_batch, NULL, NULL);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* muninn_extract_ner_re_batch(model, texts_json, ent_labels, rel_labels [, batch_size]) -> TEXT */
+    /* muninn_extract_ner_re_batch(model, texts_json [, ent_labels, rel_labels [, batch_size]]) -> TEXT */
     rc = sqlite3_create_function(db, "muninn_extract_ner_re_batch", -1, SQLITE_UTF8 | SQLITE_INNOCUOUS, NULL,
                                  fn_extract_ner_re_batch, NULL, NULL);
     if (rc != SQLITE_OK)
