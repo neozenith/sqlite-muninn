@@ -330,6 +330,10 @@ def _llama_lib_paths_full() -> list[str]:
 def _cmake_flags_platform() -> str:
     """CMAKE_FLAGS_BASE merged with platform overrides, as -DKEY=VAL string."""
     merged = {**CMAKE_FLAGS_BASE, **_platform_cmake_overrides()}
+    # Auto-detect ccache and use it as compiler launcher
+    if shutil.which("ccache"):
+        merged["CMAKE_C_COMPILER_LAUNCHER"] = "ccache"
+        merged["CMAKE_CXX_COMPILER_LAUNCHER"] = "ccache"
     return _cmake_flags_str(merged)
 
 

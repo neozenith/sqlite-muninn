@@ -72,19 +72,24 @@ jobs:
             ext: dll
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.name }})
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - uses: astral-sh/setup-uv@v4
-
-      # ── Cache llama.cpp build ───────────────────────────
-      - uses: actions/cache@v4
+      - uses: astral-sh/setup-uv@v7
         with:
-          path: vendor/llama.cpp/build
-          key: llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.gitmodules') }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # ── ccache for C/C++ compilation ───────────────────
+      - name: ccache
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.os }}
+          evict-old-files: 1d
 
       # ── Unix build ──────────────────────────────────────
       - name: Build extension (Unix)
@@ -127,7 +132,7 @@ jobs:
         with:
           python-version: "3.13"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         if: runner.os != 'Windows'
         with:
           path: models
@@ -162,13 +167,22 @@ jobs:
   build-macos-universal:
     runs-on: macos-15
     name: Build (macOS Universal Binary)
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-universal
+          evict-old-files: 1d
 
       - name: Build arm64
         run: make ARCH=arm64 all
@@ -200,18 +214,22 @@ jobs:
           - name: ASan+UBSan
             flags: "-fsanitize=address,undefined -fno-sanitize-recover=all"
     name: Sanitize (${{ matrix.sanitizer.name }})
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - uses: astral-sh/setup-uv@v4
-
-      - uses: actions/cache@v4
+      - uses: astral-sh/setup-uv@v7
         with:
-          path: vendor/llama.cpp/build
-          key: llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.gitmodules') }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: sanitize-${{ matrix.sanitizer.name }}
+          evict-old-files: 1d
 
       - name: Install SQLite dev headers
         run: sudo apt-get install -y libsqlite3-dev
@@ -231,7 +249,10 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Create amalgamation
         run: make amalgamation
@@ -256,18 +277,22 @@ jobs:
   package-install:
     runs-on: ubuntu-22.04
     name: Package Install Tests
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - uses: astral-sh/setup-uv@v4
-
-      - uses: actions/cache@v4
+      - uses: astral-sh/setup-uv@v7
         with:
-          path: vendor/llama.cpp/build
-          key: llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.gitmodules') }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: package-install
+          evict-old-files: 1d
 
       - name: Install SQLite dev headers
         run: sudo apt-get install -y libsqlite3-dev
@@ -304,7 +329,7 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: vendor/llama.cpp/build-wasm
           key: llama-wasm-${{ hashFiles('.gitmodules') }}
