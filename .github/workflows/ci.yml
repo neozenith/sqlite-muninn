@@ -163,7 +163,7 @@ jobs:
   macos-arm64:
     runs-on: macos-15
     name: Build (macOS arm64)
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
