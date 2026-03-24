@@ -26,11 +26,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.target }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: vendor/llama.cpp/build
           key: llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.gitmodules') }}
@@ -62,7 +62,7 @@ jobs:
         run: cp build/muninn.${{ matrix.ext }} sqlite_muninn/
         shell: bash
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -72,12 +72,12 @@ jobs:
           uvx wheel tags --platform-tag=${{ matrix.wheel_tag }} --remove dist/*.whl
         shell: bash
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: build/muninn.${{ matrix.ext }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.target }}
           path: dist/*.whl
@@ -87,7 +87,7 @@ jobs:
     runs-on: macos-15
     name: Build (macos-universal)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -110,7 +110,7 @@ jobs:
       - name: Copy binary into Python package
         run: cp build/muninn.dylib sqlite_muninn/
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
@@ -119,12 +119,12 @@ jobs:
           uv build --wheel
           uvx wheel tags --platform-tag=macosx_11_0_universal2 --remove dist/*.whl
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-universal
           path: build/muninn.dylib
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheel-macos-universal
           path: dist/*.whl
@@ -134,12 +134,12 @@ jobs:
     runs-on: ubuntu-22.04
     name: Amalgamation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
       - run: make amalgamation
       - run: tar czf muninn-amalgamation.tar.gz -C dist muninn.c muninn.h
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: amalgamation
           path: muninn-amalgamation.tar.gz
@@ -149,11 +149,11 @@ jobs:
     runs-on: ubuntu-22.04
     name: WASM Build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: vendor/llama.cpp/build-wasm
           key: llama-wasm-${{ hashFiles('.gitmodules') }}
@@ -164,7 +164,7 @@ jobs:
       - name: Build WASM
         run: make -C wasm dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wasm
           path: |
@@ -180,13 +180,13 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: wheel-*
           merge-multiple: true
           path: dist/
 
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
 
       - name: Publish to PyPI
         run: uv publish dist/*.whl
@@ -205,11 +205,11 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
           registry-url: https://registry.npmjs.org
@@ -284,9 +284,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
 
       - name: Rename artifacts for unique asset names
         run: |

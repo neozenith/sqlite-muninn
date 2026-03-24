@@ -17,14 +17,14 @@ jobs:
     name: Code Quality
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -72,7 +72,7 @@ jobs:
     name: Build (${{ matrix.name }})
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -142,7 +142,7 @@ jobs:
         run: uv run pytest pytests/ -v
 
       # ── Node.js tests ──────────────────────────────────
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: runner.os != 'Windows'
         with:
           node-version: "22"
@@ -154,7 +154,7 @@ jobs:
           npm --prefix npm test
 
       # ── Upload artifact ─────────────────────────────────
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: muninn-${{ matrix.name }}
           path: build/muninn.${{ matrix.ext }}
@@ -165,7 +165,7 @@ jobs:
     name: Build (macOS Universal)
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -231,7 +231,7 @@ jobs:
         run: uv run pytest pytests/ -v
 
       # ── Node.js tests ────────────────────────────────────
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -240,7 +240,7 @@ jobs:
           npm --prefix npm ci
           npm --prefix npm test
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: muninn-macos
           path: build/muninn.dylib
@@ -251,7 +251,7 @@ jobs:
     name: Build (macOS Universal Binary)
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -285,7 +285,7 @@ jobs:
           rm -f muninn_arm64.dylib
           lipo -info build/muninn.dylib
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: muninn-macos-universal
           path: build/muninn.dylib
@@ -301,7 +301,7 @@ jobs:
     name: Sanitize (${{ matrix.sanitizer.name }})
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -325,7 +325,7 @@ jobs:
     name: Amalgamation
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -344,7 +344,7 @@ jobs:
             -lm 2>&1 || echo "Note: link errors expected without llama.cpp libs"
           ls -la dist/muninn.c dist/muninn.h
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: amalgamation
           path: |
@@ -357,7 +357,7 @@ jobs:
     name: Package Install Tests
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -378,7 +378,7 @@ jobs:
       - name: Build extension
         run: make all
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -398,7 +398,7 @@ jobs:
     name: WASM Build
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -418,7 +418,7 @@ jobs:
       - name: Build WASM (lite, no llama.cpp)
         run: make build-wasm-lite
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wasm
           path: |
