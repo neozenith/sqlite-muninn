@@ -3,6 +3,13 @@ name: Publish
 on:
   release:
     types: [published]
+  # TEMPORARY: also run on PRs to verify build steps work
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ── Build All Platforms ──────────────────────────────────
@@ -25,46 +32,55 @@ jobs:
             wheel_tag: win_amd64
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.target }})
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - uses: actions/cache@v5
+      - uses: astral-sh/setup-uv@v7
         with:
-          path: vendor/llama.cpp/build
-          key: llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.gitmodules') }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
+      # ── ccache (shared keys with ci.yml) ─────────────────
+      - name: ccache
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.os }}
+          evict-old-files: 1d
+
+      # ── Unix build ──────────────────────────────────────
       - name: Build (Unix)
         if: runner.os != 'Windows'
         run: make all
 
+      # ── Windows build ───────────────────────────────────
       - name: Setup MSVC
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Generate Windows build script
         if: runner.os == 'Windows'
-        run: python3 scripts/generate_build.py windows  # stdlib-only, no uv needed
+        run: python3 scripts/generate_build.py windows
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: cmd
         run: build\generated\build_windows.bat
 
+      # ── Test (Linux only) ───────────────────────────────
       - name: Test (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y libsqlite3-dev
           make test
 
+      # ── Wheel build ─────────────────────────────────────
       - name: Copy binary into Python package
         run: cp build/muninn.${{ matrix.ext }} sqlite_muninn/
         shell: bash
-
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
 
       - name: Build and retag wheel
         run: |
@@ -86,19 +102,35 @@ jobs:
   build-macos:
     runs-on: macos-15
     name: Build (macos-universal)
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Build arm64
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # ── ccache (shared key with ci.yml macOS jobs) ──────
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-15
+          evict-old-files: 1d
+
+      - name: Build arm64 (llama.cpp + muninn)
         run: make ARCH=arm64 all
 
       - name: Save arm64 binary
         run: cp build/muninn.dylib muninn_arm64.dylib
 
-      - name: Build x86_64
-        run: make clean all ARCH=x86_64
+      - name: Clean build dir (keep ccache)
+        run: make clean
+
+      - name: Build x86_64 (llama.cpp + muninn)
+        run: make ARCH=x86_64 all
 
       - name: Create universal binary
         run: |
@@ -107,12 +139,9 @@ jobs:
           rm -f muninn_arm64.dylib
           lipo -info build/muninn.dylib
 
+      # ── Wheel build ─────────────────────────────────────
       - name: Copy binary into Python package
         run: cp build/muninn.dylib sqlite_muninn/
-
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
 
       - name: Build and retag wheel
         run: |
@@ -133,12 +162,20 @@ jobs:
   amalgamation:
     runs-on: ubuntu-22.04
     name: Amalgamation
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - run: make amalgamation
       - run: tar czf muninn-amalgamation.tar.gz -C dist muninn.c muninn.h
+
       - uses: actions/upload-artifact@v7
         with:
           name: amalgamation
@@ -148,10 +185,16 @@ jobs:
   wasm-build:
     runs-on: ubuntu-22.04
     name: WASM Build
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - uses: actions/cache@v5
         with:
@@ -161,149 +204,142 @@ jobs:
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
 
-      - name: Build WASM
-        run: make -C wasm dist
+      - name: Build WASM (lite, no llama.cpp)
+        run: make build-wasm-lite
 
       - uses: actions/upload-artifact@v7
         with:
           name: wasm
           path: |
-            dist/nodejs/platforms/wasm/muninn_sqlite3.js
-            dist/nodejs/platforms/wasm/muninn_sqlite3.wasm
+            build/wasm/muninn_sqlite3.js
+            build/wasm/muninn_sqlite3.wasm
 
-  # ── Publish to PyPI ──────────────────────────────────────
-  publish-pypi:
-    needs: [build, build-macos]
-    runs-on: ubuntu-latest
-    name: Publish to PyPI
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v7
-        with:
-          pattern: wheel-*
-          merge-multiple: true
-          path: dist/
+  # ── BLOCKED: Publish jobs (uncomment when build jobs verified) ──
 
-      - uses: astral-sh/setup-uv@v7
+  # publish-pypi:
+  #   needs: [build, build-macos]
+  #   runs-on: ubuntu-latest
+  #   name: Publish to PyPI
+  #   if: github.event_name == 'release'
+  #   environment: pypi
+  #   permissions:
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/download-artifact@v7
+  #       with:
+  #         pattern: wheel-*
+  #         merge-multiple: true
+  #         path: dist/
+  #
+  #     - uses: astral-sh/setup-uv@v7
+  #
+  #     - name: Publish to PyPI
+  #       run: uv publish dist/*.whl
 
-      - name: Publish to PyPI
-        run: uv publish dist/*.whl
+  # publish-npm:
+  #   needs: [build, build-macos, wasm-build]
+  #   runs-on: ubuntu-latest
+  #   name: Publish to NPM
+  #   if: github.event_name == 'release'
+  #   permissions:
+  #     contents: read
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #
+  #     - uses: actions/download-artifact@v7
+  #
+  #     - uses: actions/setup-node@v6
+  #       with:
+  #         node-version: "22"
+  #         registry-url: https://registry.npmjs.org
+  #
+  #     - name: Upgrade npm for Trusted Publishing
+  #       run: npm install -g npm@latest
+  #
+  #     - name: Determine npm dist-tag
+  #       id: npm-tag
+  #       run: |
+  #         VERSION=$(cat VERSION)
+  #         if echo "$VERSION" | grep -q "alpha"; then
+  #           echo "tag=alpha" >> "$GITHUB_OUTPUT"
+  #         elif echo "$VERSION" | grep -q "beta"; then
+  #           echo "tag=beta" >> "$GITHUB_OUTPUT"
+  #         elif echo "$VERSION" | grep -q "rc"; then
+  #           echo "tag=rc" >> "$GITHUB_OUTPUT"
+  #         else
+  #           echo "tag=latest" >> "$GITHUB_OUTPUT"
+  #         fi
+  #
+  #     - name: Generate npm sub-packages
+  #       run: python3 scripts/generate_build.py npm
+  #
+  #     - name: Copy binaries into platform packages
+  #       run: |
+  #         cp linux-x86_64/muninn.so    dist/nodejs/platforms/linux-x64/muninn.so
+  #         cp linux-arm64/muninn.so     dist/nodejs/platforms/linux-arm64/muninn.so
+  #         cp windows-x86_64/muninn.dll dist/nodejs/platforms/win32-x64/muninn.dll
+  #         cp macos-universal/muninn.dylib dist/nodejs/platforms/darwin-arm64/muninn.dylib
+  #         cp macos-universal/muninn.dylib dist/nodejs/platforms/darwin-x64/muninn.dylib
+  #
+  #     - name: Publish darwin-arm64
+  #       run: npm publish dist/nodejs/platforms/darwin-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+  #
+  #     - name: Publish darwin-x64
+  #       run: npm publish dist/nodejs/platforms/darwin-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+  #
+  #     - name: Publish linux-x64
+  #       run: npm publish dist/nodejs/platforms/linux-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+  #
+  #     - name: Publish linux-arm64
+  #       run: npm publish dist/nodejs/platforms/linux-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+  #
+  #     - name: Publish win32-x64
+  #       run: npm publish dist/nodejs/platforms/win32-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+  #
+  #     - name: Install main package dependencies
+  #       working-directory: npm
+  #       run: npm install
+  #
+  #     - name: Publish main package
+  #       run: npm publish ./npm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+  #
+  #     - name: Copy WASM artifacts into package
+  #       run: |
+  #         cp wasm/muninn_sqlite3.js dist/nodejs/platforms/wasm/muninn_sqlite3.js
+  #         cp wasm/muninn_sqlite3.wasm dist/nodejs/platforms/wasm/muninn_sqlite3.wasm
+  #
+  #     - name: Publish WASM package
+  #       run: npm publish dist/nodejs/platforms/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
-  # ── Publish to NPM ──────────────────────────────────────
-  # Platform packages MUST be published before the main package because
-  # npm install of the main package immediately resolves optionalDependencies.
-  # Uses npm Trusted Publishing (OIDC) — no NODE_AUTH_TOKEN needed.
-  # Each package must have a trusted publisher configured on npmjs.com:
-  #   https://www.npmjs.com/package/<name>/access → GitHub Actions → neozenith/sqlite-muninn/publish.yml
-  publish-npm:
-    needs: [build, build-macos, wasm-build]
-    runs-on: ubuntu-latest
-    name: Publish to NPM
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/download-artifact@v7
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          registry-url: https://registry.npmjs.org
-
-      # Trusted Publishing requires npm >= 11.5.1 (Node 22 ships ~10.x)
-      - name: Upgrade npm for Trusted Publishing
-        run: npm install -g npm@latest
-
-      - name: Determine npm dist-tag
-        id: npm-tag
-        run: |
-          VERSION=$(cat VERSION)
-          if echo "$VERSION" | grep -q "alpha"; then
-            echo "tag=alpha" >> "$GITHUB_OUTPUT"
-          elif echo "$VERSION" | grep -q "beta"; then
-            echo "tag=beta" >> "$GITHUB_OUTPUT"
-          elif echo "$VERSION" | grep -q "rc"; then
-            echo "tag=rc" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate npm sub-packages
-        run: python3 scripts/generate_build.py npm
-
-      - name: Copy binaries into platform packages
-        run: |
-          cp linux-x86_64/muninn.so    dist/nodejs/platforms/linux-x64/muninn.so
-          cp linux-arm64/muninn.so     dist/nodejs/platforms/linux-arm64/muninn.so
-          cp windows-x86_64/muninn.dll dist/nodejs/platforms/win32-x64/muninn.dll
-          # macOS universal binary goes to both darwin packages
-          cp macos-universal/muninn.dylib dist/nodejs/platforms/darwin-arm64/muninn.dylib
-          cp macos-universal/muninn.dylib dist/nodejs/platforms/darwin-x64/muninn.dylib
-
-      - name: Publish darwin-arm64
-        run: npm publish dist/nodejs/platforms/darwin-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-
-      - name: Publish darwin-x64
-        run: npm publish dist/nodejs/platforms/darwin-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-
-      - name: Publish linux-x64
-        run: npm publish dist/nodejs/platforms/linux-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-
-      - name: Publish linux-arm64
-        run: npm publish dist/nodejs/platforms/linux-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-
-      - name: Publish win32-x64
-        run: npm publish dist/nodejs/platforms/win32-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-
-      # Install devDependencies so tsup can build the main package's dist/
-      - name: Install main package dependencies
-        working-directory: npm
-        run: npm install
-
-      - name: Publish main package
-        run: npm publish ./npm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-
-      # WASM package — artifact already downloaded, package.json generated above
-      - name: Copy WASM artifacts into package
-        run: |
-          cp wasm/muninn_sqlite3.js dist/nodejs/platforms/wasm/muninn_sqlite3.js
-          cp wasm/muninn_sqlite3.wasm dist/nodejs/platforms/wasm/muninn_sqlite3.wasm
-
-      - name: Publish WASM package
-        run: npm publish dist/nodejs/platforms/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-
-  # ── Upload to GitHub Release ─────────────────────────────
-  upload-release:
-    needs: [build, build-macos, amalgamation, wasm-build]
-    runs-on: ubuntu-latest
-    name: Upload Release Assets
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/download-artifact@v7
-
-      - name: Rename artifacts for unique asset names
-        run: |
-          mv linux-x86_64/muninn.so muninn-linux-x86_64.so
-          mv linux-arm64/muninn.so muninn-linux-arm64.so
-          mv macos-universal/muninn.dylib muninn-macos-universal.dylib
-          mv windows-x86_64/muninn.dll muninn-windows-x86_64.dll
-
-      - name: Upload to GitHub Release
-        run: |
-          gh release upload ${{ github.event.release.tag_name }} \
-            muninn-linux-x86_64.so \
-            muninn-linux-arm64.so \
-            muninn-macos-universal.dylib \
-            muninn-windows-x86_64.dll \
-            amalgamation/muninn-amalgamation.tar.gz \
-            wasm/muninn_sqlite3.js \
-            wasm/muninn_sqlite3.wasm
-        env:
-          GH_TOKEN: ${{ github.token }}
+  # upload-release:
+  #   needs: [build, build-macos, amalgamation, wasm-build]
+  #   runs-on: ubuntu-latest
+  #   name: Upload Release Assets
+  #   if: github.event_name == 'release'
+  #   permissions:
+  #     contents: write
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #
+  #     - uses: actions/download-artifact@v7
+  #
+  #     - name: Rename artifacts for unique asset names
+  #       run: |
+  #         mv linux-x86_64/muninn.so muninn-linux-x86_64.so
+  #         mv linux-arm64/muninn.so muninn-linux-arm64.so
+  #         mv macos-universal/muninn.dylib muninn-macos-universal.dylib
+  #         mv windows-x86_64/muninn.dll muninn-windows-x86_64.dll
+  #
+  #     - name: Upload to GitHub Release
+  #       run: |
+  #         gh release upload ${{ github.event.release.tag_name }} \
+  #           muninn-linux-x86_64.so \
+  #           muninn-linux-arm64.so \
+  #           muninn-macos-universal.dylib \
+  #           muninn-windows-x86_64.dll \
+  #           amalgamation/muninn-amalgamation.tar.gz \
+  #           wasm/muninn_sqlite3.js \
+  #           wasm/muninn_sqlite3.wasm
+  #       env:
+  #         GH_TOKEN: ${{ github.token }}
