@@ -1,11 +1,13 @@
 name: Publish
 
 on:
-  release:
-    types: [published]
-  # TEMPORARY: also run on PRs to verify build steps work
-  pull_request:
-    branches: [main]
+  # release:
+  #   types: [published]
+  # # TEMPORARY: also run on PRs to verify build steps work
+  # pull_request:
+  #   branches: [main]
+  workflow_dispatch:
+    
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
