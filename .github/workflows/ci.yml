@@ -163,7 +163,7 @@ jobs:
   build-macos:
     runs-on: macos-15
     name: Build (macOS Universal)
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
