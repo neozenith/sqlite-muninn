@@ -73,6 +73,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ubuntu-22.04
+          max-size: 200M
           evict-old-files: 1d
 
       - name: Build extension
@@ -136,6 +137,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ubuntu-22.04-arm
+          max-size: 200M
           evict-old-files: 1d
 
       - name: Build extension
@@ -230,6 +232,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: macos-arm64
+          max-size: 200M
           evict-old-files: 1d
 
       - name: Build extension (arm64)
@@ -302,6 +305,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: macos-x86_64
+          max-size: 200M
           evict-old-files: 1d
 
       - name: Build extension (x86_64)
@@ -419,6 +423,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ubuntu-22.04
+          max-size: 200M
           evict-old-files: 1d
 
       - name: Install SQLite dev headers
@@ -461,6 +466,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: wasm
+          max-size: 200M
           evict-old-files: 1d
 
       - name: Setup Emscripten
