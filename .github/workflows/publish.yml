@@ -14,26 +14,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Build All Platforms ──────────────────────────────────
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            target: linux-x86_64
-            ext: so
-            wheel_tag: manylinux_2_17_x86_64
-          - os: ubuntu-22.04-arm
-            target: linux-arm64
-            ext: so
-            wheel_tag: manylinux_2_17_aarch64
-          - os: windows-2022
-            target: windows-x86_64
-            ext: dll
-            wheel_tag: win_amd64
-    runs-on: ${{ matrix.os }}
-    name: Build (${{ matrix.target }})
+  # ── Linux x86_64 ─────────────────────────────────────────
+  linux-x64:
+    runs-on: ubuntu-22.04
+    name: Build (linux-x86_64)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -45,59 +29,124 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      # ── ccache (shared keys with ci.yml) ─────────────────
       - name: ccache
-        if: runner.os != 'Windows'
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: ${{ matrix.os }}
+          key: ubuntu-22.04
           evict-old-files: 1d
 
-      # ── Unix build ──────────────────────────────────────
-      - name: Build (Unix)
-        if: runner.os != 'Windows'
+      - name: Build extension
         run: make all
 
-      # ── Windows build ───────────────────────────────────
+      - name: Run C unit tests
+        run: make test
+
+      - name: Copy binary into Python package
+        run: cp build/muninn.so sqlite_muninn/
+
+      - name: Build and retag wheel
+        run: |
+          uv build --wheel
+          uvx wheel tags --platform-tag=manylinux_2_17_x86_64 --remove dist/*.whl
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-x86_64
+          path: build/muninn.so
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-linux-x86_64
+          path: dist/*.whl
+
+  # ── Linux ARM64 ──────────────────────────────────────────
+  linux-arm64:
+    runs-on: ubuntu-22.04-arm
+    name: Build (linux-arm64)
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ubuntu-22.04-arm
+          evict-old-files: 1d
+
+      - name: Build extension
+        run: make all
+
+      - name: Run C unit tests
+        run: make test
+
+      - name: Copy binary into Python package
+        run: cp build/muninn.so sqlite_muninn/
+
+      - name: Build and retag wheel
+        run: |
+          uv build --wheel
+          uvx wheel tags --platform-tag=manylinux_2_17_aarch64 --remove dist/*.whl
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-arm64
+          path: build/muninn.so
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-linux-arm64
+          path: dist/*.whl
+
+  # ── Windows x86_64 ──────────────────────────────────────
+  windows-x64:
+    runs-on: windows-2022
+    name: Build (windows-x86_64)
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
       - name: Setup MSVC
-        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Generate Windows build script
-        if: runner.os == 'Windows'
         run: python3 scripts/generate_build.py windows
 
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
+      - name: Build extension
         shell: cmd
         run: build\generated\build_windows.bat
 
-      # ── Test (Linux only) ───────────────────────────────
-      - name: Test (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y libsqlite3-dev
-          make test
-
-      # ── Wheel build ─────────────────────────────────────
       - name: Copy binary into Python package
-        run: cp build/muninn.${{ matrix.ext }} sqlite_muninn/
+        run: cp build/muninn.dll sqlite_muninn/
         shell: bash
 
       - name: Build and retag wheel
         run: |
           uv build --wheel
-          uvx wheel tags --platform-tag=${{ matrix.wheel_tag }} --remove dist/*.whl
+          uvx wheel tags --platform-tag=win_amd64 --remove dist/*.whl
         shell: bash
 
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.target }}
-          path: build/muninn.${{ matrix.ext }}
+          name: windows-x86_64
+          path: build/muninn.dll
 
       - uses: actions/upload-artifact@v7
         with:
-          name: wheel-${{ matrix.target }}
+          name: wheel-windows-x86_64
           path: dist/*.whl
 
   # ── macOS arm64 ───────────────────────────────────────
@@ -262,7 +311,7 @@ jobs:
   # ── BLOCKED: Publish jobs (uncomment when build jobs verified) ──
 
   # publish-pypi:
-  #   needs: [build, build-macos-universal]
+  #   needs: [linux-x64, linux-arm64, windows-x64, build-macos-universal]
   #   runs-on: ubuntu-latest
   #   name: Publish to PyPI
   #   if: github.event_name == 'release'
@@ -282,7 +331,7 @@ jobs:
   #       run: uv publish dist/*.whl
 
   # publish-npm:
-  #   needs: [build, build-macos-universal, wasm-build]
+  #   needs: [linux-x64, linux-arm64, windows-x64, build-macos-universal, wasm-build]
   #   runs-on: ubuntu-latest
   #   name: Publish to NPM
   #   if: github.event_name == 'release'
@@ -358,7 +407,7 @@ jobs:
   #       run: npm publish dist/nodejs/platforms/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
   # upload-release:
-  #   needs: [build, build-macos-universal, amalgamation, wasm-build]
+  #   needs: [linux-x64, linux-arm64, windows-x64, build-macos-universal, amalgamation, wasm-build]
   #   runs-on: ubuntu-latest
   #   name: Upload Release Assets
   #   if: github.event_name == 'release'
