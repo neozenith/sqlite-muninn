@@ -290,12 +290,8 @@ jobs:
   # ── Sanitizers (Linux only) ──────────────────────────────
   sanitize:
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        sanitizer:
-          - name: ASan+UBSan
-            flags: "-fsanitize=address,undefined -fno-sanitize-recover=all"
-    name: Sanitize (${{ matrix.sanitizer.name }})
+
+    name: Sanitize (ASan+UBSan)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -311,10 +307,10 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get install -y libsqlite3-dev llvm
 
-      - name: Build and test with ${{ matrix.sanitizer.name }}
+      - name: Build and test with ASan+UBSan
         run: |
           CCACHE_DISABLE=1 GCOV_EXECUTABLE="llvm-cov gcov" CC=clang make test \
-            CFLAGS_EXTRA="${{ matrix.sanitizer.flags }} -g -O1 -fno-omit-frame-pointer"
+            CFLAGS_EXTRA="-fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -fno-omit-frame-pointer"
 
   # ── Amalgamation ─────────────────────────────────────────
   amalgamation:
