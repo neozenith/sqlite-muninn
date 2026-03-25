@@ -284,7 +284,7 @@ jobs:
   wasm-build:
     runs-on: ubuntu-22.04
     name: WASM Build
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
@@ -295,11 +295,17 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: wasm
+          evict-old-files: 1d
+
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
 
-      - name: Build WASM (lite, no llama.cpp)
-        run: make build-wasm-lite
+      - name: Build WASM (full, with llama.cpp)
+        run: make build-wasm
 
       - uses: actions/upload-artifact@v7
         with:
