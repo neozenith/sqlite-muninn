@@ -217,6 +217,11 @@ def main():
         prog="benchmarks.harness.cli",
         description="Unified benchmark CLI: prep, manifest, benchmark, analyse",
     )
+    parser.add_argument(
+        "--s3-bucket",
+        default=None,
+        help="S3 bucket for additive-only data sync (e.g., muninn-benchmarks-389956346255)",
+    )
     subparsers = parser.add_subparsers(dest="command", help="Subcommand")
 
     # ── prep ──────────────────────────────────────────────────────
@@ -353,6 +358,12 @@ def main():
         sys.exit(1)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+
+    # Configure S3 mirror if requested
+    if args.s3_bucket:
+        from benchmarks.harness.s3_mirror import set_s3_bucket
+
+        set_s3_bucket(args.s3_bucket)
 
     if args.command == "prep":
         _cmd_prep(args)

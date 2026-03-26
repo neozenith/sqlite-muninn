@@ -17,33 +17,33 @@ The current ER implementation is a three-stage pipeline: **HNSW blocking** (embe
 ```mermaid
 flowchart LR
     subgraph Inputs
-        EVM["entity_vec_map<br/>(name-to-rowid)"]
-        EVT["entities_vec<br/>(HNSW VT, cosine)"]
-        ENT["entities<br/>(name, type, mentions)"]
-        REL["relations<br/>(src, dst, rel_type, weight)"]
+        EVM["entity_vec_map<br/>(name-to-rowid)"]:::sourcePrimary
+        EVT["entities_vec<br/>(HNSW VT, cosine)"]:::sourcePrimary
+        ENT["entities<br/>(name, type, mentions)"]:::sourceSecondary
+        REL["relations<br/>(src, dst, rel_type, weight)"]:::sourceSecondary
     end
 
     subgraph Stage1["Stage 1: HNSW Blocking"]
-        KNN["KNN search per entity<br/>k=10, distance &lt;= 0.4"]
-        DEDUP["Deduplicate pairs<br/>(lexicographic sort)"]
+        KNN["KNN search per entity<br/>k=10, distance &lt;= 0.4"]:::transformPrimary
+        DEDUP["Deduplicate pairs<br/>(lexicographic sort)"]:::transformSecondary
     end
 
     subgraph Stage2["Stage 2: Matching Cascade"]
-        EXACT["Exact match: 1.0"]
-        ICASE["Case-insensitive: 0.9"]
-        COMBO["0.4*JW + 0.6*cosine_sim<br/>threshold &gt; 0.5"]
+        EXACT["Exact match: 1.0"]:::orchPrimary
+        ICASE["Case-insensitive: 0.9"]:::orchPrimary
+        COMBO["0.4*JW + 0.6*cosine_sim<br/>threshold &gt; 0.5"]:::orchPrimary
     end
 
     subgraph Stage3["Stage 3: Leiden Clustering"]
-        EDGES["_match_edges<br/>(bidirectional weighted)"]
-        LEIDEN["graph_leiden TVF"]
-        CANON["Canonical selection<br/>(max mention count)"]
+        EDGES["_match_edges<br/>(bidirectional weighted)"]:::loadSecondary
+        LEIDEN["graph_leiden TVF"]:::loadPrimary
+        CANON["Canonical selection<br/>(max mention count)"]:::loadPrimary
     end
 
     subgraph Outputs
-        EC["entity_clusters<br/>(name -> canonical)"]
-        NODES["nodes<br/>(canonical entities)"]
-        COALESCE["edges<br/>(coalesced relations)"]
+        EC["entity_clusters<br/>(name -> canonical)"]:::dataPrimary
+        NODES["nodes<br/>(canonical entities)"]:::dataPrimary
+        COALESCE["edges<br/>(coalesced relations)"]:::dataPrimary
     end
 
     EVM --> KNN
@@ -60,6 +60,21 @@ flowchart LR
     EC --> NODES
     EC --> COALESCE
     REL --> COALESCE
+
+    classDef sourcePrimary     fill:#d97706,stroke:#b45309,color:#fff,stroke-width:2px
+    classDef sourceSecondary   fill:#fde68a,stroke:#f59e0b,color:#1e293b,stroke-width:1px
+    classDef transformPrimary  fill:#ea580c,stroke:#c2410c,color:#fff,stroke-width:2px
+    classDef transformSecondary fill:#fed7aa,stroke:#f97316,color:#1e293b,stroke-width:1px
+    classDef orchPrimary       fill:#4f46e5,stroke:#4338ca,color:#fff,stroke-width:2px
+    classDef loadPrimary       fill:#059669,stroke:#047857,color:#fff,stroke-width:2px
+    classDef loadSecondary     fill:#a7f3d0,stroke:#10b981,color:#1e293b,stroke-width:1px
+    classDef dataPrimary       fill:#0d9488,stroke:#0f766e,color:#fff,stroke-width:2px
+
+    style Inputs fill:#fef3c7,stroke:#f59e0b,color:#1e293b
+    style Stage1 fill:#fff7ed,stroke:#f97316,color:#1e293b
+    style Stage2 fill:#e0e7ff,stroke:#6366f1,color:#1e293b
+    style Stage3 fill:#d1fae5,stroke:#10b981,color:#1e293b
+    style Outputs fill:#ccfbf1,stroke:#14b8a6,color:#1e293b
 ```
 
 ### Implementation Details
@@ -115,34 +130,34 @@ A hybrid ER pipeline that uses the existing HNSW blocking and Leiden clustering 
 ```mermaid
 flowchart LR
     subgraph Inputs
-        EVM["entity_vec_map"]
-        EVT["entities_vec (HNSW)"]
-        ENT["entities"]
-        REL["relations"]
+        EVM["entity_vec_map"]:::sourcePrimary
+        EVT["entities_vec (HNSW)"]:::sourcePrimary
+        ENT["entities"]:::sourceSecondary
+        REL["relations"]:::sourceSecondary
     end
 
     subgraph Stage1["Stage 1: HNSW Blocking"]
-        KNN["KNN search<br/>k configurable"]
-        DEDUP["Deduplicate pairs"]
+        KNN["KNN search<br/>k configurable"]:::transformPrimary
+        DEDUP["Deduplicate pairs"]:::transformSecondary
     end
 
     subgraph Stage2["Stage 2: Tiered Matching"]
-        EXACT["Tier 1: Exact/case-insensitive<br/>score = 1.0 / 0.9"]
-        STRING["Tier 2: String similarity<br/>JW + cosine combined"]
-        LLM["Tier 3: LLM verification<br/>muninn_chat() + GBNF<br/>borderline pairs only"]
+        EXACT["Tier 1: Exact/case-insensitive<br/>score = 1.0 / 0.9"]:::orchPrimary
+        STRING["Tier 2: String similarity<br/>JW + cosine combined"]:::orchPrimary
+        LLM["Tier 3: LLM verification<br/>muninn_chat() + GBNF<br/>borderline pairs only"]:::llmAccent
     end
 
     subgraph Stage3["Stage 3: Clustering + Cleanup"]
-        EDGES["Match edges (weighted)"]
-        LEIDEN["graph_leiden TVF"]
-        BETWEEN["graph_betweenness TVF<br/>false-positive edge removal"]
-        CANON["Canonical selection<br/>(configurable strategy)"]
+        EDGES["Match edges (weighted)"]:::loadSecondary
+        LEIDEN["graph_leiden TVF"]:::loadPrimary
+        BETWEEN["graph_betweenness TVF<br/>false-positive edge removal"]:::danger
+        CANON["Canonical selection<br/>(configurable strategy)"]:::loadPrimary
     end
 
     subgraph Outputs
-        EC["entity_clusters"]
-        NODES["nodes"]
-        COALESCE["edges"]
+        EC["entity_clusters"]:::dataPrimary
+        NODES["nodes"]:::dataPrimary
+        COALESCE["edges"]:::dataPrimary
     end
 
     EVM --> KNN
@@ -160,13 +175,30 @@ flowchart LR
     EC --> NODES
     EC --> COALESCE
     REL --> COALESCE
+
+    classDef sourcePrimary     fill:#d97706,stroke:#b45309,color:#fff,stroke-width:2px
+    classDef sourceSecondary   fill:#fde68a,stroke:#f59e0b,color:#1e293b,stroke-width:1px
+    classDef transformPrimary  fill:#ea580c,stroke:#c2410c,color:#fff,stroke-width:2px
+    classDef transformSecondary fill:#fed7aa,stroke:#f97316,color:#1e293b,stroke-width:1px
+    classDef orchPrimary       fill:#4f46e5,stroke:#4338ca,color:#fff,stroke-width:2px
+    classDef llmAccent         fill:#7c3aed,stroke:#6d28d9,color:#fff,stroke-width:3px
+    classDef loadPrimary       fill:#059669,stroke:#047857,color:#fff,stroke-width:2px
+    classDef loadSecondary     fill:#a7f3d0,stroke:#10b981,color:#1e293b,stroke-width:1px
+    classDef dataPrimary       fill:#0d9488,stroke:#0f766e,color:#fff,stroke-width:2px
+    classDef danger            fill:#dc2626,stroke:#b91c1c,color:#fff,stroke-width:2px
+
+    style Inputs fill:#fef3c7,stroke:#f59e0b,color:#1e293b
+    style Stage1 fill:#fff7ed,stroke:#f97316,color:#1e293b
+    style Stage2 fill:#e0e7ff,stroke:#6366f1,color:#1e293b
+    style Stage3 fill:#d1fae5,stroke:#10b981,color:#1e293b
+    style Outputs fill:#ccfbf1,stroke:#14b8a6,color:#1e293b
 ```
 
 ### Key Design Decisions Informed by Literature
 
 **1. LLM for borderline pairs only (not all pairs)**
 
-The MatchGPT study (Peeters & Bizer, EDBT 2025) shows GPT-4 achieves 73-98% F1 across six benchmarks at ~0.5s/pair. But calling the LLM for every candidate pair is prohibitively expensive. GoldenMatch (2025) demonstrates that using LLM scoring only for borderline pairs (where string similarity is ambiguous, e.g. combined score 0.4-0.7) boosted product matching F1 from 44.5% to 66.3% for $0.04 total cost. This is the pattern to adopt.
+The MatchGPT study (Peeters & Bizer, EDBT 2025) shows GPT-4 achieves 76-98% F1 across six benchmarks; GPT-4o runs at ~0.5s/pair. But calling the LLM for every candidate pair is prohibitively expensive. GoldenMatch (2025) demonstrates that using LLM scoring only for borderline pairs (where string similarity is ambiguous, e.g. combined score 0.4-0.7) boosted product matching F1 from 44.5% to 66.3% for $0.04 total cost. This is the pattern to adopt.
 
 Source: [MatchGPT (arXiv:2310.11244)](https://arxiv.org/abs/2310.11244), [GoldenMatch (GitHub)](https://github.com/benzsevern/goldenmatch)
 
@@ -213,32 +245,32 @@ B-Cubed F1 is the preferred metric for cluster-based ER (already implemented in 
 ### Gap Map
 
 ```mermaid
-flowchart TD
+flowchart LR
     subgraph Current["Current State"]
-        C1["Hard-coded thresholds<br/>k=10, dist 0.4, match 0.5"]
-        C2["String matching only<br/>JW + cosine cascade"]
-        C3["No type filtering<br/>cross-type merges possible"]
-        C4["No graph cleanup<br/>false positives propagate"]
-        C5["Febrl-only benchmarks<br/>limited evaluation"]
-        C6["LlmERAdapter unwired<br/>CPU-only, no GBNF"]
+        C1["Hard-coded thresholds<br/>k=10, dist 0.4, match 0.5"]:::currentNode
+        C2["String matching only<br/>JW + cosine cascade"]:::currentNode
+        C3["No type filtering<br/>cross-type merges possible"]:::currentNode
+        C4["No graph cleanup<br/>false positives propagate"]:::currentNode
+        C5["Febrl-only benchmarks<br/>limited evaluation"]:::currentNode
+        C6["LlmERAdapter unwired<br/>CPU-only, no GBNF"]:::currentNode
     end
 
     subgraph Gaps["Gaps to Close"]
-        G1["G1: Configurable pipeline"]
-        G2["G2: LLM matching stage"]
-        G3["G3: Type-aware matching"]
-        G4["G4: Betweenness cleanup"]
-        G5["G5: Academic benchmarks"]
-        G6["G6: GBNF grammar + SQL"]
+        G1["G1: Configurable pipeline"]:::gapNode
+        G2["G2: LLM matching stage"]:::gapNode
+        G3["G3: Type-aware matching"]:::gapNode
+        G4["G4: Betweenness cleanup"]:::gapNode
+        G5["G5: Academic benchmarks"]:::gapNode
+        G6["G6: GBNF grammar + SQL"]:::gapNode
     end
 
     subgraph Desired["Desired State"]
-        D1["Parameterized thresholds"]
-        D2["Tiered: string + LLM<br/>borderline pairs"]
-        D3["Entity type guard<br/>in matching cascade"]
-        D4["graph_betweenness<br/>false positive removal"]
-        D5["DeepMatcher + Leipzig<br/>benchmarks with F1"]
-        D6["muninn_chat() with<br/>ER GBNF grammar"]
+        D1["Parameterized thresholds"]:::desiredNode
+        D2["Tiered: string + LLM<br/>borderline pairs"]:::desiredNode
+        D3["Entity type guard<br/>in matching cascade"]:::desiredNode
+        D4["graph_betweenness<br/>false positive removal"]:::desiredNode
+        D5["DeepMatcher + Leipzig<br/>benchmarks with F1"]:::desiredNode
+        D6["muninn_chat() with<br/>ER GBNF grammar"]:::desiredNode
     end
 
     C1 --> G1 --> D1
@@ -247,18 +279,26 @@ flowchart TD
     C4 --> G4 --> D4
     C5 --> G5 --> D5
     C6 --> G6 --> D6
+
+    classDef currentNode  fill:#dc2626,stroke:#b91c1c,color:#fff,stroke-width:2px
+    classDef gapNode      fill:#d97706,stroke:#b45309,color:#fff,stroke-width:2px
+    classDef desiredNode  fill:#059669,stroke:#047857,color:#fff,stroke-width:2px
+
+    style Current fill:#fee2e2,stroke:#ef4444,color:#1e293b
+    style Gaps fill:#fef3c7,stroke:#f59e0b,color:#1e293b
+    style Desired fill:#d1fae5,stroke:#10b981,color:#1e293b
 ```
 
 ### Dependencies
 
 ```mermaid
 flowchart LR
-    G1["G1: Configurable<br/>pipeline params"]
-    G3["G3: Type-aware<br/>matching"]
-    G6["G6: GBNF grammar<br/>+ SQL integration"]
-    G5["G5: Academic<br/>benchmark suite"]
-    G2["G2: LLM matching<br/>stage (tiered)"]
-    G4["G4: Betweenness<br/>graph cleanup"]
+    G1["G1: Configurable<br/>pipeline params"]:::g1
+    G3["G3: Type-aware<br/>matching"]:::g3
+    G6["G6: GBNF grammar<br/>+ SQL integration"]:::g6
+    G5["G5: Academic<br/>benchmark suite"]:::g5
+    G2["G2: LLM matching<br/>stage (tiered)"]:::g2
+    G4["G4: Betweenness<br/>graph cleanup"]:::g4
 
     G1 --> G2
     G1 --> G5
@@ -266,6 +306,13 @@ flowchart LR
     G5 -.->|validates| G2
     G5 -.->|validates| G3
     G5 -.->|validates| G4
+
+    classDef g1 fill:#2563eb,stroke:#1e40af,color:#fff,stroke-width:2px
+    classDef g2 fill:#7c3aed,stroke:#6d28d9,color:#fff,stroke-width:2px
+    classDef g3 fill:#059669,stroke:#047857,color:#fff,stroke-width:2px
+    classDef g4 fill:#dc2626,stroke:#b91c1c,color:#fff,stroke-width:2px
+    classDef g5 fill:#d97706,stroke:#b45309,color:#fff,stroke-width:2px
+    classDef g6 fill:#0891b2,stroke:#0e7490,color:#fff,stroke-width:2px
 ```
 
 **Recommended implementation order:** G1 -> G3 -> G6 -> G5 -> G2 -> G4
@@ -276,7 +323,37 @@ flowchart LR
 
 **Gap:** Expose `k_neighbors`, `cosine_threshold`, `match_threshold`, and `canonical_strategy` as constructor parameters of `PhaseEntityResolution`. Default values remain the same (backward-compatible). This is a prerequisite for G2 and G5 — you cannot benchmark different configurations without parameterization.
 
-**Effort:** Small. Refactor `PhaseEntityResolution.__init__()` to accept threshold kwargs.
+**Output(s):**
+- Modified `benchmarks/demo_builder/phases/entity_resolution.py` (Python) — `PhaseEntityResolution.__init__()` accepts `k_neighbors`, `cosine_threshold`, `match_threshold`, `canonical_strategy` kwargs with current defaults
+- Modified `benchmarks/demo_builder/common.py` (Python) — remove `jaro_winkler()` at line 105
+- Modified `benchmarks/harness/common.py` (Python) — single canonical `jaro_winkler()` imported by both demo_builder and harness
+- Modified `benchmarks/harness/treatments/kg_resolve.py` (Python) — remove duplicate `_jaro_winkler()` at lines 33-83, import from common
+
+**References:**
+
+Current hard-coded parameters in `entity_resolution.py`:
+```python
+# Line 74: blocking
+neighbors = conn.execute(
+    "SELECT rowid, distance FROM entities_vec WHERE vss_search(embedding, ?) LIMIT 10",  # k=10
+    (vec,),
+).fetchall()
+
+# Lines 127-130: matching cascade
+jw = jaro_winkler(n1.lower(), n2.lower())
+combined = 0.4 * jw + 0.6 * cosine_sim  # hard-coded weights
+if combined > 0.5:                        # hard-coded threshold
+```
+
+Parameterized version already exists in `kg_resolve.py:94-114`:
+```python
+def _run_er_pipeline(
+    conn, entity_names, entity_vectors,
+    k_neighbors: int = 10,
+    cosine_threshold: float = 0.4,
+    match_threshold: float = 0.5,
+) -> dict[str, str]:
+```
 
 ### G2: LLM-Augmented Matching Stage (Tiered)
 
@@ -288,112 +365,31 @@ flowchart LR
 - **Pairwise mode:** One `muninn_chat()` call per borderline pair. Simple, but O(borderline_pairs) LLM calls.
 - **In-context clustering mode (preferred):** Group borderline candidates by HNSW neighborhood (up to ~9 per group per LLM-CER findings), one `muninn_chat()` call per group. Reduces calls by ~5x.
 
-**Effort:** Medium. Requires G6 (GBNF grammar) first. Python-side orchestration in `PhaseEntityResolution.run()`. The LLM call itself is a single `SELECT muninn_chat(model, prompt, grammar)` SQL query.
+**Output(s):**
+- Modified `benchmarks/demo_builder/phases/entity_resolution.py` (Python) — new LLM matching tier inserted into the cascade at lines 108-132, routing borderline pairs (combined score 0.4-0.7) to `muninn_chat()`
+- Modified `benchmarks/harness/treatments/kg_resolve.py` (Python) — retire `LlmERAdapter` class (lines 227-334) in favor of `muninn_chat()` SQL calls via the extension
+- New or modified GBNF grammar string (Python constant or from `src/llama_constants.h`) for ER match/cluster output
 
-### G3: Type-Aware Matching
+**References:**
 
-**Current:** All entity types are matched uniformly. "London" (GPE) and "London" (PERSON) could be merged.
+Current `LlmERAdapter.should_merge()` pattern (kg_resolve.py:252-329) — to be replaced:
+```python
+def should_merge(self, candidates: list[str]) -> list[list[str]]:
+    # Uses llama-cpp-python create_chat_completion() with response_format
+    # Returns merge groups: [["NYC", "New York City"], ["London"]]
+```
 
-**Gap:** Add an optional type guard to the matching cascade: skip pairs where `entity_type_a != entity_type_b` (unless both are unknown/null). This is a precision improvement with zero cost.
+Target pattern using `muninn_chat()` SQL function:
+```python
+# Single SQL call per candidate group
+result = conn.execute(
+    "SELECT muninn_chat(?, ?, ?, ?)",
+    (model_name, prompt, gbnf_grammar, max_tokens),
+).fetchone()[0]
+# result is grammar-constrained JSON, e.g. {"groups": [["NYC", "New York City"], ["London"]]}
+```
 
-**Effort:** Small. A 3-line conditional in the matching loop.
-
-### G4: Graph Cleanup via Edge Betweenness
-
-**Current:** Leiden clustering runs directly on all match edges. A single false positive edge can transitively merge large clusters.
-
-**Gap:** After Leiden clustering, compute edge betweenness centrality on the match graph using the existing `graph_betweenness` TVF. Remove edges with betweenness above a threshold (bridge edges between incorrectly merged clusters). Re-cluster. GraLMatch (EDBT 2025) reports significant precision improvements with this technique.
-
-**Effort:** Small-medium. The TVF exists. The gap is orchestration logic to identify and remove high-betweenness edges, then re-run Leiden.
-
-### G5: Academic Benchmark Suite
-
-**Current:** Only Febrl datasets (personal name matching). No evaluation on product, citation, or text-heavy benchmarks.
-
-**Gap:** Add the **Abt-Buy** dataset (9,575 pairs, product descriptions, SOTA ~90-96% F1) as the primary benchmark. This is a textual/noisy dataset where string matching alone is weaker, making the LLM tier's contribution clearly measurable. DBLP-ACM may be added later as a secondary sanity check.
-
-Create an `examples/entity_resolution/` directory with composable pipeline modes:
-
-**Individual modes (testable in isolation):**
-- `uv run examples/entity_resolution/er_benchmark.py string-only --limit 100` — current pipeline (HNSW + JW + cosine + Leiden)
-- `uv run examples/entity_resolution/er_benchmark.py llm-tiered --limit 100` — upgraded pipeline (adds LLM matching tier for borderline pairs)
-
-**Combined comparison mode:**
-- `uv run examples/entity_resolution/er_benchmark.py compare --limit 100` — runs both pipelines on the same data, prints a side-by-side F1 comparison table
-
-Each mode independently:
-1. Downloads the Abt-Buy benchmark dataset (cached after first run)
-2. Runs its ER pipeline variant against it
-3. Reports pairwise F1, B-Cubed F1, precision, recall, and wall-clock latency
-
-The `compare` mode composes both individual modes and adds the delta. This design allows testing each pipeline in isolation for correctness before validating the integrated comparison.
-
-**Logarithmic scale-up for fast iteration:**
-
-| Tier | Pairs | Purpose | Expected runtime |
-|------|-------|---------|-----------------|
-| `--limit 10` | 10 | Smoke test — schema, I/O, metric plumbing | < 1s |
-| `--limit 100` | 100 | Algorithm correctness — verify blocking, matching, clustering produce sane F1 | ~seconds |
-| `--limit 1000` | 1,000 | Performance profiling — LLM call count, latency breakdown, threshold tuning | ~minutes |
-| (no limit) | 9,575 | Full evaluation — publishable F1 numbers for comparison to SOTA | ~minutes-tens of minutes |
-
-The `--limit N` flag selects the first N pairs from the dataset. Early tiers expose plumbing bugs, parsing errors, and threshold miscalibrations at sub-second iteration speed. Only the final full-scale run produces numbers comparable to published results.
-
-**Effort:** Medium. Dataset loading + ground truth parsing + integration with existing `bcubed_f1` and `_pairwise_f1` metrics.
-
-### G6: GBNF Grammar and SQL Integration
-
-**Current:** No ER-specific GBNF grammar in `src/llama_constants.h`. No `muninn_extract_matches()` or similar SQL function.
-
-**Gap:** Two grammar formats to evaluate empirically, both prototyped via `muninn_chat(model, prompt, grammar)` — no C code changes needed.
-
-**Format A — Pairwise:** `{"match": true, "confidence": 0.95}`
-- One LLM call per borderline pair
-- Tiny output (< 20 tokens), fast generation
-- Independent decisions — easy to debug, failure affects one pair
-- Risk: no transitive consistency (A=B, B=C, but A≠C possible)
-
-**Format B — Clustering:** `{"groups": [["NYC", "New York City"], ["London"]]}`
-- One LLM call per HNSW neighborhood (~9 candidates)
-- Fewer total calls (~5x reduction per LLM-CER findings)
-- Holistic grouping — transitive consistency built-in
-- Risk: larger output tokens, failure affects ~9 entities per bad call
-- SOTA-recommended approach (SIGMOD 2026)
-
-**Empirical evaluation plan:**
-
-Both formats tested at three scales on the Abt-Buy dataset:
-
-| Scale | Pairs | Purpose |
-|-------|-------|---------|
-| 10 | 10 | Grammar correctness — does Qwen3.5-2B produce valid JSON for each format? |
-| 50 | 50 | Quality signal — pairwise F1 and B-Cubed F1 per format, compare to string-only baseline |
-| 100 | 100 | Latency profile — total LLM time, calls/sec, output tokens per call |
-
-**Debugging methodology (proven in `examples/llm_extract/`):**
-
-The `examples/llm_extract/` experience established a critical debugging pattern: run `muninn_chat()` **without** a GBNF grammar first to see what the LLM is actually trying to generate. This reveals:
-- Whether the model understands the task (is it producing match/group-like output at all?)
-- What output format the model naturally gravitates toward (informing grammar design)
-- Failure modes (thinking loops, hallucinated entity names, refusals)
-
-Only after understanding the model's natural output do you constrain it with a GBNF grammar. If the grammar-constrained output stalls or produces garbage, add one-shot examples to the prompt to demonstrate the expected format — this fixed the NER/RE stalls with Qwen3.5-2B.
-
-**The three debug tiers for each grammar format:**
-
-1. **No grammar** — `muninn_chat(model, prompt)` — see raw LLM output, diagnose understanding
-2. **With grammar** — `muninn_chat(model, prompt, grammar)` — validate grammar constrains correctly
-3. **With grammar + one-shot** — add example in prompt if tier 2 fails — fix generation stalls
-
-This produces six test configurations (2 formats x 3 tiers) at scale 10 before committing to a format. All runnable as individual subcommands of the benchmark script.
-
-**Recommendation:** Lean toward Format B (clustering) based on SOTA research, but let the empirical evidence at scale 10-100 decide. If Format B proves unreliable with Qwen3.5-2B, Format A is the reliable fallback. Both must be implemented as individual modes per the composable design.
-
-**Effort:** Small (Python only). Both formats use `muninn_chat()` with runtime grammar strings — zero C code changes.
-
-### Model Decision: Qwen3.5-2B
-
-**Default GGUF chat model for LLM-based ER matching: Qwen3.5-2B**
+#### ADR: Default Chat Model — Qwen3.5-2B
 
 | Candidate | Params | Status | Rationale |
 |-----------|--------|--------|-----------|
@@ -405,13 +401,215 @@ This produces six test configurations (2 formats x 3 tiers) at scale 10 before c
 
 **Why not smaller:** The Qwen3.5-0.8B is prone to entering thinking loops (documented in the Unsloth GGUF model card) and produced unreliable structured output during NER/RE testing. The 2B model is the reliability floor for grammar-constrained generation tasks in this project.
 
+### G3: Type-Aware Matching
+
+**Current:** All entity types are matched uniformly. "London" (GPE) and "London" (PERSON) could be merged.
+
+**Gap:** Add an optional type guard to the matching cascade: skip pairs where `entity_type_a != entity_type_b` (unless both are unknown/null). This is a precision improvement with zero cost.
+
+**Output(s):**
+- Modified `benchmarks/demo_builder/phases/entity_resolution.py` (Python) — type guard conditional inserted at line ~113 in the matching loop, before string/cosine scoring
+- Modified `benchmarks/harness/treatments/kg_resolve.py` (Python) — same guard in `_run_er_pipeline()`, optional `type_map` parameter
+
+**References:**
+
+Type data is already loaded (entity_resolution.py:51):
+```python
+rows = conn.execute(
+    "SELECT name, entity_type, count(*) as mention_count FROM entities GROUP BY name, entity_type"
+).fetchall()
+self._entity_name_to_type: dict[str, str] = {r[0]: r[1] for r in rows}
+```
+
+Guard insertion point (entity_resolution.py, inside the `for n1, n2, cosine_dist in unique_pairs:` loop at line 108):
+```python
+# Type guard — skip cross-type pairs (unless either is unknown/null)
+t1 = self._entity_name_to_type.get(n1)
+t2 = self._entity_name_to_type.get(n2)
+if t1 and t2 and t1 != t2:
+    continue
+```
+
+### G4: Graph Cleanup via Edge Betweenness
+
+**Current:** Leiden clustering runs directly on all match edges. A single false positive edge can transitively merge large clusters.
+
+**Gap:** After Leiden clustering, compute edge betweenness centrality on the match graph using the existing `graph_betweenness` TVF. Remove edges with betweenness above a threshold (bridge edges between incorrectly merged clusters). Re-cluster. GraLMatch (EDBT 2025) reports significant precision improvements with this technique.
+
+**Output(s):**
+- Modified `benchmarks/demo_builder/phases/entity_resolution.py` (Python) — post-Leiden cleanup step after line ~164: query `graph_betweenness` on `_match_edges`, remove high-betweenness bridge edges, re-run `graph_leiden`
+- Modified `benchmarks/harness/treatments/kg_resolve.py` (Python) — same cleanup in `_run_er_pipeline()`, optional `betweenness_threshold` parameter
+
+**References:**
+
+Leiden clustering call (entity_resolution.py:157-164):
+```python
+leiden_results = conn.execute(
+    "SELECT node, community_id FROM graph_leiden"
+    " WHERE edge_table = '_match_edges'"
+    "   AND src_col = 'src'"
+    "   AND dst_col = 'dst'"
+    "   AND weight_col = 'weight'"
+).fetchall()
+```
+
+Post-Leiden betweenness cleanup pattern:
+```python
+# Compute edge betweenness on match graph
+betweenness = conn.execute(
+    "SELECT src, dst, centrality FROM graph_betweenness"
+    " WHERE edge_table = '_match_edges'"
+    "   AND src_col = 'src' AND dst_col = 'dst'"
+    "   AND weight_col = 'weight'"
+).fetchall()
+# Remove bridge edges (high betweenness = false positive connectors)
+for src, dst, bc in betweenness:
+    if bc > betweenness_threshold:
+        conn.execute("DELETE FROM _match_edges WHERE src=? AND dst=?", (src, dst))
+# Re-cluster without false positive bridges
+leiden_results = conn.execute("SELECT node, community_id FROM graph_leiden ...")
+```
+
+### G5: Academic Benchmark Suite
+
+**Current:** Only Febrl datasets (personal name matching) via `_run_er_dataset()` in `kg_resolve.py:465-568`. No evaluation on product, citation, or text-heavy benchmarks. Metrics (`bcubed_f1` in `kg_metrics.py:81-131`, `_pairwise_f1` in `kg_resolve.py:571-615`) exist but are only exercised on Febrl data.
+
+**Gap:** Add the **Abt-Buy** dataset (9,575 pairs, product descriptions, SOTA ~90-96% F1) as the primary benchmark. This is a textual/noisy dataset where string matching alone is weaker, making the LLM tier's contribution clearly measurable. DBLP-ACM may be added later as a secondary sanity check.
+
+**Output(s):**
+- New `examples/entity_resolution/` directory (does not exist yet)
+- New `examples/entity_resolution/er_benchmark.py` (Python) — argparse CLI with three composable subcommands: `string-only`, `llm-tiered`, `compare`
+- New `examples/entity_resolution/README.md` — usage examples and expected output
+- Dataset cached in `tmp/er_benchmark/abt_buy/` after first download
+
+**References:**
+
+Composable CLI modes (each testable in isolation):
+```bash
+# Individual modes
+uv run examples/entity_resolution/er_benchmark.py string-only --limit 100
+uv run examples/entity_resolution/er_benchmark.py llm-tiered --limit 100
+# Combined comparison
+uv run examples/entity_resolution/er_benchmark.py compare --limit 100
+```
+
+Each mode independently: (1) downloads Abt-Buy (cached), (2) runs its ER pipeline variant, (3) reports pairwise F1, B-Cubed F1, precision, recall, and wall-clock latency. The `compare` mode composes both individual modes and adds the delta.
+
+Logarithmic scale-up for fast iteration:
+
+| Tier | Pairs | Purpose | Expected runtime |
+|------|-------|---------|-----------------|
+| `--limit 10` | 10 | Smoke test — schema, I/O, metric plumbing | < 1s |
+| `--limit 100` | 100 | Algorithm correctness — verify blocking, matching, clustering produce sane F1 | ~seconds |
+| `--limit 1000` | 1,000 | Performance profiling — LLM call count, latency breakdown, threshold tuning | ~minutes |
+| (no limit) | 9,575 | Full evaluation — publishable F1 numbers for comparison to SOTA | ~minutes-tens of minutes |
+
+Existing metrics to reuse:
+```python
+# kg_metrics.py:81 — primary metric
+def bcubed_f1(predicted_clusters: dict[str, int], gold_clusters: dict[str, int]) -> dict[str, float]:
+    """Compute B-Cubed F1 for clustering evaluation."""
+    # Returns {"precision": float, "recall": float, "f1": float}
+
+# kg_resolve.py:571 — secondary metric
+def _pairwise_f1(predicted: dict[str, int], gold: dict[str, int]) -> dict[str, float]:
+```
+
+### G6: GBNF Grammar and SQL Integration
+
+**Current:** No ER-specific GBNF grammar in `src/llama_constants.h` (existing grammars: `GBNF_NER` at line 35, `GBNF_RE` at line 44, `GBNF_NER_RE` at line 54). No `muninn_extract_matches()` or similar SQL function. The `LlmERAdapter` in `kg_resolve.py` uses llama-cpp-python's `response_format` instead of GBNF.
+
+**Gap:** Two grammar formats to evaluate empirically, both prototyped via `muninn_chat(model, prompt, grammar)` — no C code changes needed. Lean toward Format B (clustering) based on SOTA research, but let the empirical evidence at scale 10-100 decide.
+
+**Output(s):**
+- New Python constants for ER GBNF grammars (Format A: pairwise, Format B: clustering) — defined in the benchmark script, not in `src/llama_constants.h` (Python-only prototyping phase)
+- New subcommands in `examples/entity_resolution/er_benchmark.py` (Python) — 6 test configurations (2 formats x 3 debug tiers) as individual subcommands
+- No C code changes — grammars passed as runtime strings to `muninn_chat()`
+
+**References:**
+
+#### Format A — Pairwise
+
+```json
+{"match": true, "confidence": 0.95}
+```
+- One LLM call per borderline pair, tiny output (< 20 tokens)
+- Independent decisions — easy to debug, failure affects one pair
+- Risk: no transitive consistency (A=B, B=C, but A≠C possible)
+
+#### Format B — Clustering (SOTA-recommended)
+
+```json
+{"groups": [["NYC", "New York City"], ["London"]]}
+```
+- One LLM call per HNSW neighborhood (~9 candidates)
+- ~5x fewer total calls (per LLM-CER findings)
+- Holistic grouping — transitive consistency built-in
+- Risk: larger output tokens, failure affects ~9 entities per bad call
+
+#### Empirical evaluation plan
+
+Both formats tested at three scales on Abt-Buy:
+
+| Scale | Pairs | Purpose |
+|-------|-------|---------|
+| 10 | 10 | Grammar correctness — does Qwen3.5-2B produce valid JSON for each format? |
+| 50 | 50 | Quality signal — pairwise F1 and B-Cubed F1 per format, compare to string-only baseline |
+| 100 | 100 | Latency profile — total LLM time, calls/sec, output tokens per call |
+
+#### Debug methodology (proven in `examples/llm_extract/`)
+
+Three debug tiers per grammar format (6 total configurations):
+
+1. **No grammar** — `muninn_chat(model, prompt)` — see raw LLM output, diagnose understanding
+2. **With grammar** — `muninn_chat(model, prompt, grammar)` — validate grammar constrains correctly
+3. **With grammar + one-shot** — add example in prompt if tier 2 fails — fix generation stalls
+
+Existing GBNF pattern to follow (`src/llama_constants.h:29-41`):
+```c
+#define GBNF_COMMON_RULES \
+    "string ::= \"\\\"\" [^\"\\\\]* \"\\\"\" \n" \
+    "number ::= \"-\"? [0-9]+ (\".\" [0-9]+)? \n" \
+    "ws     ::= \" \"? \n"
+
+#define GBNF_NER \
+    "root   ::= \"{\" ws ... "  // pattern for ER grammars to follow
+```
+
 ## Success Measures
+
+### Project Quality Bar (CI Gates)
+
+These are the project's existing quality gates enforced in CI. All deliverables from this gap analysis must pass every applicable gate. This is the floor, not the ceiling.
+
+| Gate | Command | Threshold | Applies to |
+|------|---------|-----------|------------|
+| C compilation | `make all` | Zero warnings (`-Wall -Wextra -Wpedantic -Werror -std=c11`) | Any C changes (GBNF grammars in `llama_constants.h`) |
+| C unit tests | `make test` | 50% line coverage (gcovr), ASan+UBSan clean | Any C changes |
+| C formatting | `make lint-c` | clang-format `--dry-run --Werror` on `src/*.c src/*.h test/*.c test/*.h` | Any C changes |
+| Python linting | `make lint-python` | ruff rules `E,W,F,I,B,C4,UP`, 120-char lines | All Python deliverables |
+| Python formatting | `make format-python` | ruff format | All Python deliverables |
+| Python type checking | `make typecheck-python` | Strict mode (relaxed for `benchmarks.*` modules — no untyped defs/calls required) | All Python deliverables |
+| Python test coverage | `make test-python` | **90% line coverage** (`--cov-fail-under=90`) | New/modified code in `sqlite_muninn/`, `pytests/` |
+| demo_builder tests | `make -C benchmarks/demo_builder test` | All pass | Modified `PhaseEntityResolution`, consolidated `jaro_winkler` |
+| Documentation | `make docs-build` | `mkdocs build --strict` (valid links) | If docs updated |
+
+**Minimum pre-merge check:** `make ci` + `make -C benchmarks/demo_builder ci` + `make dist`
+
+**Python conventions (enforced by ruff + code review):**
+- No `unittest.mock`, `pytest-mock`, or `@patch` — test real code or skip the test
+- All imports at module top level — no nested imports
+- Use `pathlib` — never `os.path`
+- Use `logging` — never `print()` for program output
+- Type annotations on all public interfaces (benchmark modules may omit internal annotations)
+
+### Domain-Specific Measures
 
 1. **Benchmark example exists at `examples/entity_resolution/`** with three composable modes: `string-only`, `llm-tiered`, and `compare`. Each runs the Abt-Buy dataset and reports pairwise F1, B-Cubed F1, precision, recall, and wall-clock latency. Supports `--limit N` for logarithmic scale-up (10/100/1000/full). Individual modes must work in isolation; `compare` composes both.
 
 2. **Measurable F1 improvement on at least one benchmark** when comparing the upgraded pipeline (with LLM matching tier) to the current string-only pipeline. The improvement must be statistically meaningful (not within measurement noise).
 
-3. **demo_builder `PhaseEntityResolution` updated** to use the same upgraded pipeline. The phase must remain backward-compatible (string-only mode as default, LLM tier opt-in when a chat model is registered).
+3. **demo_builder `PhaseEntityResolution` updated** to use the same upgraded pipeline. The phase must remain backward-compatible (string-only mode as default, LLM tier opt-in when a chat model is registered). Must pass `make -C benchmarks/demo_builder ci` including existing phase tests.
 
 4. **B-Cubed F1 and pairwise F1 reported for all benchmark runs.** No ER evaluation that only reports node count reduction or singleton ratio — those are proxy metrics, not quality metrics.
 
@@ -419,18 +617,38 @@ This produces six test configurations (2 formats x 3 tiers) at scale 10 before c
 
 6. **All published SOTA numbers cited in this document are traceable to verified sources.** Every claim of "X achieves Y F1 on Z dataset" must link to a paper or repository where that number appears.
 
+7. **`PhaseEntityResolution` accepts configurable thresholds.** `k_neighbors`, `cosine_threshold`, `match_threshold`, and `canonical_strategy` are constructor parameters with backward-compatible defaults. The duplicate Jaro-Winkler implementation is consolidated into `benchmarks/harness/common.py` — one function, two importers.
+
+8. **Type-aware matching prevents cross-type merges.** On a corpus with entities of different types sharing the same name (e.g., "London" as GPE and PERSON), the type guard prevents their merger. Testable on the benchmark suite by injecting synthetic cross-type pairs.
+
+9. **Edge betweenness cleanup improves precision on at least one benchmark.** Comparing Leiden-only vs Leiden+betweenness-cleanup on the same dataset shows a measurable reduction in false-positive merges (higher B-Cubed precision) without significant recall loss.
+
 ## Negative Measures
 
-1. **Hollow benchmark.** The `examples/` script runs but uses a trivial dataset, toy thresholds, or skips the LLM tier — producing numbers that cannot be compared to published SOTA. This looks like success (script runs, metrics printed) but provides no signal about quality.
+### Quality Bar Violations
 
-2. **Over-engineering the C extension.** Adding `muninn_match_entities()`, `muninn_cluster_entities()`, batch variants, and new virtual tables before validating the approach with a Python-only prototype using `muninn_chat()`. Premature C code is expensive to iterate on and creates rework.
+These Type 2 failures occur when the deliverables appear to work but silently violate the project's own quality standards.
 
-3. **Graceful degradation of LLM tier.** The pipeline silently falls back to string-only matching when the LLM model is not loaded, logging a warning instead of raising an error. If the user configured LLM matching, failure to use it must be an error, not a silent downgrade.
+1. **Tests pass but coverage drops.** New code in `entity_resolution.py` or `er_benchmark.py` is exercised by a single happy-path test but untested branches drop coverage below the 90% floor (`--cov-fail-under=90`). The CI gate catches this, but the signal is "tests pass locally" while the PR fails.
 
-4. **Threshold cargo-culting.** Copying thresholds from published papers (e.g., "GraLMatch uses betweenness cutoff X") without validating them on the project's own benchmark datasets. Every threshold must be empirically justified on at least one benchmark run.
+2. **Mocking the extension.** Tests use `unittest.mock` to patch `conn.execute()` or `muninn_chat()` instead of loading the real extension. Tests pass, but they test the mock, not the pipeline. The project explicitly forbids mocking.
 
-5. **Citation hallucination.** Claiming "AnyMatch achieves 95% F1 on DBLP-ACM" without verifying this specific number exists in the paper. Unverified claims erode trust in the entire analysis.
+3. **Implicit print debugging.** The benchmark script uses `print()` instead of `logging`. Output looks correct in the terminal but breaks structured log collection and violates the project's `logging`-only convention.
 
-6. **Unbounded LLM cost.** The LLM tier fires for all candidate pairs (not just borderline), turning a 2-second ER phase into a 20-minute LLM inference marathon. The tiered design exists specifically to avoid this — removing the tiering is a regression.
+4. **Untyped benchmark code.** New functions in `benchmarks/demo_builder/phases/entity_resolution.py` omit type annotations, relying on the relaxed mypy override for `benchmarks.*`. The code works, but downstream consumers (the benchmark script, tests) lose type safety at call boundaries.
 
-7. **Feature creep beyond ER.** Adding NER improvements, relation extraction changes, or embedding model upgrades as part of this ER work. Each of those is a separate initiative with its own gap analysis. Bundling them creates rework when any single piece needs revision.
+### Domain-Specific Failures
+
+5. **Hollow benchmark.** The `examples/` script runs but uses a trivial dataset, toy thresholds, or skips the LLM tier — producing numbers that cannot be compared to published SOTA. This looks like success (script runs, metrics printed) but provides no signal about quality.
+
+6. **Over-engineering the C extension.** Adding `muninn_match_entities()`, `muninn_cluster_entities()`, batch variants, and new virtual tables before validating the approach with a Python-only prototype using `muninn_chat()`. Premature C code is expensive to iterate on and creates rework.
+
+7. **Graceful degradation of LLM tier.** The pipeline silently falls back to string-only matching when the LLM model is not loaded, logging a warning instead of raising an error. If the user configured LLM matching, failure to use it must be an error, not a silent downgrade.
+
+8. **Threshold cargo-culting.** Copying thresholds from published papers (e.g., "GraLMatch uses betweenness cutoff X") without validating them on the project's own benchmark datasets. Every threshold must be empirically justified on at least one benchmark run.
+
+9. **Citation hallucination.** Claiming "AnyMatch achieves 95% F1 on DBLP-ACM" without verifying this specific number exists in the paper. Unverified claims erode trust in the entire analysis.
+
+10. **Unbounded LLM cost.** The LLM tier fires for all candidate pairs (not just borderline), turning a 2-second ER phase into a 20-minute LLM inference marathon. The tiered design exists specifically to avoid this — removing the tiering is a regression.
+
+11. **Feature creep beyond ER.** Adding NER improvements, relation extraction changes, or embedding model upgrades as part of this ER work. Each of those is a separate initiative with its own gap analysis. Bundling them creates rework when any single piece needs revision.

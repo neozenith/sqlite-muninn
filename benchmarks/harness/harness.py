@@ -25,6 +25,7 @@ from benchmarks.harness.common import (
     platform_info,
     write_jsonl,
 )
+from benchmarks.harness.s3_mirror import get_s3_mirror
 from benchmarks.harness.treatments.base import Treatment
 
 log = logging.getLogger(__name__)
@@ -183,6 +184,11 @@ def run_treatment(treatment: Treatment, results_dir: Path | None = None, force: 
     jsonl_path = results_dir / f"{treatment.category}_{variant}.jsonl"
 
     write_jsonl(jsonl_path, record)
+
+    # Upload results to S3 if configured
+    mirror = get_s3_mirror()
+    mirror.sync_to_s3(jsonl_path)
+    mirror.sync_to_s3(db_path)
 
     log.info("  Setup: %.1f ms, Run: %.1f ms, DB: %d bytes", wall_time_setup_ms, wall_time_run_ms, db_size_bytes)
     log.info("  Results: %s", jsonl_path)
