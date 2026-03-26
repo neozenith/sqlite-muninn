@@ -17,33 +17,33 @@ The current ER implementation is a three-stage pipeline: **HNSW blocking** (embe
 ```mermaid
 flowchart LR
     subgraph Inputs
-        EVM["entity_vec_map<br/>(name-to-rowid)"]
-        EVT["entities_vec<br/>(HNSW VT, cosine)"]
-        ENT["entities<br/>(name, type, mentions)"]
-        REL["relations<br/>(src, dst, rel_type, weight)"]
+        EVM["entity_vec_map<br/>(name-to-rowid)"]:::sourcePrimary
+        EVT["entities_vec<br/>(HNSW VT, cosine)"]:::sourcePrimary
+        ENT["entities<br/>(name, type, mentions)"]:::sourceSecondary
+        REL["relations<br/>(src, dst, rel_type, weight)"]:::sourceSecondary
     end
 
     subgraph Stage1["Stage 1: HNSW Blocking"]
-        KNN["KNN search per entity<br/>k=10, distance &lt;= 0.4"]
-        DEDUP["Deduplicate pairs<br/>(lexicographic sort)"]
+        KNN["KNN search per entity<br/>k=10, distance &lt;= 0.4"]:::transformPrimary
+        DEDUP["Deduplicate pairs<br/>(lexicographic sort)"]:::transformSecondary
     end
 
     subgraph Stage2["Stage 2: Matching Cascade"]
-        EXACT["Exact match: 1.0"]
-        ICASE["Case-insensitive: 0.9"]
-        COMBO["0.4*JW + 0.6*cosine_sim<br/>threshold &gt; 0.5"]
+        EXACT["Exact match: 1.0"]:::orchPrimary
+        ICASE["Case-insensitive: 0.9"]:::orchPrimary
+        COMBO["0.4*JW + 0.6*cosine_sim<br/>threshold &gt; 0.5"]:::orchPrimary
     end
 
     subgraph Stage3["Stage 3: Leiden Clustering"]
-        EDGES["_match_edges<br/>(bidirectional weighted)"]
-        LEIDEN["graph_leiden TVF"]
-        CANON["Canonical selection<br/>(max mention count)"]
+        EDGES["_match_edges<br/>(bidirectional weighted)"]:::loadSecondary
+        LEIDEN["graph_leiden TVF"]:::loadPrimary
+        CANON["Canonical selection<br/>(max mention count)"]:::loadPrimary
     end
 
     subgraph Outputs
-        EC["entity_clusters<br/>(name -> canonical)"]
-        NODES["nodes<br/>(canonical entities)"]
-        COALESCE["edges<br/>(coalesced relations)"]
+        EC["entity_clusters<br/>(name -> canonical)"]:::dataPrimary
+        NODES["nodes<br/>(canonical entities)"]:::dataPrimary
+        COALESCE["edges<br/>(coalesced relations)"]:::dataPrimary
     end
 
     EVM --> KNN
@@ -60,6 +60,21 @@ flowchart LR
     EC --> NODES
     EC --> COALESCE
     REL --> COALESCE
+
+    classDef sourcePrimary     fill:#d97706,stroke:#b45309,color:#fff,stroke-width:2px
+    classDef sourceSecondary   fill:#fde68a,stroke:#f59e0b,color:#1e293b,stroke-width:1px
+    classDef transformPrimary  fill:#ea580c,stroke:#c2410c,color:#fff,stroke-width:2px
+    classDef transformSecondary fill:#fed7aa,stroke:#f97316,color:#1e293b,stroke-width:1px
+    classDef orchPrimary       fill:#4f46e5,stroke:#4338ca,color:#fff,stroke-width:2px
+    classDef loadPrimary       fill:#059669,stroke:#047857,color:#fff,stroke-width:2px
+    classDef loadSecondary     fill:#a7f3d0,stroke:#10b981,color:#1e293b,stroke-width:1px
+    classDef dataPrimary       fill:#0d9488,stroke:#0f766e,color:#fff,stroke-width:2px
+
+    style Inputs fill:#fef3c7,stroke:#f59e0b,color:#1e293b
+    style Stage1 fill:#fff7ed,stroke:#f97316,color:#1e293b
+    style Stage2 fill:#e0e7ff,stroke:#6366f1,color:#1e293b
+    style Stage3 fill:#d1fae5,stroke:#10b981,color:#1e293b
+    style Outputs fill:#ccfbf1,stroke:#14b8a6,color:#1e293b
 ```
 
 ### Implementation Details
@@ -115,34 +130,34 @@ A hybrid ER pipeline that uses the existing HNSW blocking and Leiden clustering 
 ```mermaid
 flowchart LR
     subgraph Inputs
-        EVM["entity_vec_map"]
-        EVT["entities_vec (HNSW)"]
-        ENT["entities"]
-        REL["relations"]
+        EVM["entity_vec_map"]:::sourcePrimary
+        EVT["entities_vec (HNSW)"]:::sourcePrimary
+        ENT["entities"]:::sourceSecondary
+        REL["relations"]:::sourceSecondary
     end
 
     subgraph Stage1["Stage 1: HNSW Blocking"]
-        KNN["KNN search<br/>k configurable"]
-        DEDUP["Deduplicate pairs"]
+        KNN["KNN search<br/>k configurable"]:::transformPrimary
+        DEDUP["Deduplicate pairs"]:::transformSecondary
     end
 
     subgraph Stage2["Stage 2: Tiered Matching"]
-        EXACT["Tier 1: Exact/case-insensitive<br/>score = 1.0 / 0.9"]
-        STRING["Tier 2: String similarity<br/>JW + cosine combined"]
-        LLM["Tier 3: LLM verification<br/>muninn_chat() + GBNF<br/>borderline pairs only"]
+        EXACT["Tier 1: Exact/case-insensitive<br/>score = 1.0 / 0.9"]:::orchPrimary
+        STRING["Tier 2: String similarity<br/>JW + cosine combined"]:::orchPrimary
+        LLM["Tier 3: LLM verification<br/>muninn_chat() + GBNF<br/>borderline pairs only"]:::llmAccent
     end
 
     subgraph Stage3["Stage 3: Clustering + Cleanup"]
-        EDGES["Match edges (weighted)"]
-        LEIDEN["graph_leiden TVF"]
-        BETWEEN["graph_betweenness TVF<br/>false-positive edge removal"]
-        CANON["Canonical selection<br/>(configurable strategy)"]
+        EDGES["Match edges (weighted)"]:::loadSecondary
+        LEIDEN["graph_leiden TVF"]:::loadPrimary
+        BETWEEN["graph_betweenness TVF<br/>false-positive edge removal"]:::danger
+        CANON["Canonical selection<br/>(configurable strategy)"]:::loadPrimary
     end
 
     subgraph Outputs
-        EC["entity_clusters"]
-        NODES["nodes"]
-        COALESCE["edges"]
+        EC["entity_clusters"]:::dataPrimary
+        NODES["nodes"]:::dataPrimary
+        COALESCE["edges"]:::dataPrimary
     end
 
     EVM --> KNN
@@ -160,6 +175,23 @@ flowchart LR
     EC --> NODES
     EC --> COALESCE
     REL --> COALESCE
+
+    classDef sourcePrimary     fill:#d97706,stroke:#b45309,color:#fff,stroke-width:2px
+    classDef sourceSecondary   fill:#fde68a,stroke:#f59e0b,color:#1e293b,stroke-width:1px
+    classDef transformPrimary  fill:#ea580c,stroke:#c2410c,color:#fff,stroke-width:2px
+    classDef transformSecondary fill:#fed7aa,stroke:#f97316,color:#1e293b,stroke-width:1px
+    classDef orchPrimary       fill:#4f46e5,stroke:#4338ca,color:#fff,stroke-width:2px
+    classDef llmAccent         fill:#7c3aed,stroke:#6d28d9,color:#fff,stroke-width:3px
+    classDef loadPrimary       fill:#059669,stroke:#047857,color:#fff,stroke-width:2px
+    classDef loadSecondary     fill:#a7f3d0,stroke:#10b981,color:#1e293b,stroke-width:1px
+    classDef dataPrimary       fill:#0d9488,stroke:#0f766e,color:#fff,stroke-width:2px
+    classDef danger            fill:#dc2626,stroke:#b91c1c,color:#fff,stroke-width:2px
+
+    style Inputs fill:#fef3c7,stroke:#f59e0b,color:#1e293b
+    style Stage1 fill:#fff7ed,stroke:#f97316,color:#1e293b
+    style Stage2 fill:#e0e7ff,stroke:#6366f1,color:#1e293b
+    style Stage3 fill:#d1fae5,stroke:#10b981,color:#1e293b
+    style Outputs fill:#ccfbf1,stroke:#14b8a6,color:#1e293b
 ```
 
 ### Key Design Decisions Informed by Literature
@@ -215,30 +247,30 @@ B-Cubed F1 is the preferred metric for cluster-based ER (already implemented in 
 ```mermaid
 flowchart LR
     subgraph Current["Current State"]
-        C1["Hard-coded thresholds<br/>k=10, dist 0.4, match 0.5"]
-        C2["String matching only<br/>JW + cosine cascade"]
-        C3["No type filtering<br/>cross-type merges possible"]
-        C4["No graph cleanup<br/>false positives propagate"]
-        C5["Febrl-only benchmarks<br/>limited evaluation"]
-        C6["LlmERAdapter unwired<br/>CPU-only, no GBNF"]
+        C1["Hard-coded thresholds<br/>k=10, dist 0.4, match 0.5"]:::currentNode
+        C2["String matching only<br/>JW + cosine cascade"]:::currentNode
+        C3["No type filtering<br/>cross-type merges possible"]:::currentNode
+        C4["No graph cleanup<br/>false positives propagate"]:::currentNode
+        C5["Febrl-only benchmarks<br/>limited evaluation"]:::currentNode
+        C6["LlmERAdapter unwired<br/>CPU-only, no GBNF"]:::currentNode
     end
 
     subgraph Gaps["Gaps to Close"]
-        G1["G1: Configurable pipeline"]
-        G2["G2: LLM matching stage"]
-        G3["G3: Type-aware matching"]
-        G4["G4: Betweenness cleanup"]
-        G5["G5: Academic benchmarks"]
-        G6["G6: GBNF grammar + SQL"]
+        G1["G1: Configurable pipeline"]:::gapNode
+        G2["G2: LLM matching stage"]:::gapNode
+        G3["G3: Type-aware matching"]:::gapNode
+        G4["G4: Betweenness cleanup"]:::gapNode
+        G5["G5: Academic benchmarks"]:::gapNode
+        G6["G6: GBNF grammar + SQL"]:::gapNode
     end
 
     subgraph Desired["Desired State"]
-        D1["Parameterized thresholds"]
-        D2["Tiered: string + LLM<br/>borderline pairs"]
-        D3["Entity type guard<br/>in matching cascade"]
-        D4["graph_betweenness<br/>false positive removal"]
-        D5["DeepMatcher + Leipzig<br/>benchmarks with F1"]
-        D6["muninn_chat() with<br/>ER GBNF grammar"]
+        D1["Parameterized thresholds"]:::desiredNode
+        D2["Tiered: string + LLM<br/>borderline pairs"]:::desiredNode
+        D3["Entity type guard<br/>in matching cascade"]:::desiredNode
+        D4["graph_betweenness<br/>false positive removal"]:::desiredNode
+        D5["DeepMatcher + Leipzig<br/>benchmarks with F1"]:::desiredNode
+        D6["muninn_chat() with<br/>ER GBNF grammar"]:::desiredNode
     end
 
     C1 --> G1 --> D1
@@ -247,18 +279,26 @@ flowchart LR
     C4 --> G4 --> D4
     C5 --> G5 --> D5
     C6 --> G6 --> D6
+
+    classDef currentNode  fill:#dc2626,stroke:#b91c1c,color:#fff,stroke-width:2px
+    classDef gapNode      fill:#d97706,stroke:#b45309,color:#fff,stroke-width:2px
+    classDef desiredNode  fill:#059669,stroke:#047857,color:#fff,stroke-width:2px
+
+    style Current fill:#fee2e2,stroke:#ef4444,color:#1e293b
+    style Gaps fill:#fef3c7,stroke:#f59e0b,color:#1e293b
+    style Desired fill:#d1fae5,stroke:#10b981,color:#1e293b
 ```
 
 ### Dependencies
 
 ```mermaid
 flowchart LR
-    G1["G1: Configurable<br/>pipeline params"]
-    G3["G3: Type-aware<br/>matching"]
-    G6["G6: GBNF grammar<br/>+ SQL integration"]
-    G5["G5: Academic<br/>benchmark suite"]
-    G2["G2: LLM matching<br/>stage (tiered)"]
-    G4["G4: Betweenness<br/>graph cleanup"]
+    G1["G1: Configurable<br/>pipeline params"]:::g1
+    G3["G3: Type-aware<br/>matching"]:::g3
+    G6["G6: GBNF grammar<br/>+ SQL integration"]:::g6
+    G5["G5: Academic<br/>benchmark suite"]:::g5
+    G2["G2: LLM matching<br/>stage (tiered)"]:::g2
+    G4["G4: Betweenness<br/>graph cleanup"]:::g4
 
     G1 --> G2
     G1 --> G5
@@ -266,6 +306,13 @@ flowchart LR
     G5 -.->|validates| G2
     G5 -.->|validates| G3
     G5 -.->|validates| G4
+
+    classDef g1 fill:#2563eb,stroke:#1e40af,color:#fff,stroke-width:2px
+    classDef g2 fill:#7c3aed,stroke:#6d28d9,color:#fff,stroke-width:2px
+    classDef g3 fill:#059669,stroke:#047857,color:#fff,stroke-width:2px
+    classDef g4 fill:#dc2626,stroke:#b91c1c,color:#fff,stroke-width:2px
+    classDef g5 fill:#d97706,stroke:#b45309,color:#fff,stroke-width:2px
+    classDef g6 fill:#0891b2,stroke:#0e7490,color:#fff,stroke-width:2px
 ```
 
 **Recommended implementation order:** G1 -> G3 -> G6 -> G5 -> G2 -> G4

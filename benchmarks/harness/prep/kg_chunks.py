@@ -12,6 +12,7 @@ from pathlib import Path
 from benchmarks.harness.common import KG_DIR, TEXTS_DIR
 from benchmarks.harness.prep.base import PrepTask
 from benchmarks.harness.prep.common import fmt_size
+from benchmarks.harness.s3_mirror import get_s3_mirror
 
 log = logging.getLogger(__name__)
 
@@ -50,15 +51,16 @@ class KGChunksPrepTask(PrepTask):
 def chunks_prep_tasks() -> list[PrepTask]:
     """Dynamically discover all available texts and return a KGChunksPrepTask per book.
 
-    Globs TEXTS_DIR for gutenberg_*.txt, union with {3300} as the minimum.
+    Checks both local TEXTS_DIR and S3 (if --s3-bucket configured) for gutenberg_*.txt,
+    union with {3300} as the minimum.
     """
+    mirror = get_s3_mirror()
     book_ids = {3300}
-    if TEXTS_DIR.exists():
-        for path in TEXTS_DIR.glob("gutenberg_*.txt"):
-            stem = path.stem
-            parts = stem.split("_", 1)
-            if len(parts) == 2 and parts[1].isdigit():
-                book_ids.add(int(parts[1]))
+    for path in mirror.list_union(TEXTS_DIR, "gutenberg_*.txt"):
+        stem = path.stem
+        parts = stem.split("_", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            book_ids.add(int(parts[1]))
     return [KGChunksPrepTask(bid) for bid in sorted(book_ids)]
 
 
@@ -93,8 +95,11 @@ def create_chunks_db(book_id, window=256, overlap=50):
         Path to the created chunks database.
     """
     text_path = TEXTS_DIR / f"gutenberg_{book_id}.txt"
-    if not text_path.exists():
-        raise FileNotFoundError(f"Text not found: {text_path}. Run 'prep texts --book-id {book_id}' first.")
+    mirror = get_s3_mirror()
+    if not mirror.ensure_local(text_path):
+        raise FileNotFoundError(
+            f"Text not found locally or in S3: {text_path}. Run 'prep texts --book-id {book_id}' first."
+        )
 
     KG_DIR.mkdir(parents=True, exist_ok=True)
     db_path = KG_DIR / f"{book_id}_chunks.db"

@@ -26,6 +26,7 @@ from llama_cpp import Llama, llama_log_callback, llama_log_set
 from benchmarks.harness.common import DATASETS, EMBEDDING_MODELS, GGUF_MODELS_DIR, TEXTS_DIR, VECTORS_DIR, VSS_SIZES
 from benchmarks.harness.prep.base import PrepTask
 from benchmarks.harness.prep.common import fmt_size
+from benchmarks.harness.s3_mirror import get_s3_mirror
 
 log = logging.getLogger(__name__)
 
@@ -410,9 +411,10 @@ def prep_vectors(only_model=None, only_dataset=None, status_only=False, force=Fa
         query_prefix = model_info["query_prefix"]
         dim = model_info["dim"]
 
-        if not model_path.exists():
+        mirror = get_s3_mirror()
+        if not mirror.ensure_local(model_path):
             log.error(
-                "  %s: GGUF model not found at %s. Run 'prep gguf' first.",
+                "  %s: GGUF model not found locally or in S3 at %s. Run 'prep gguf' first.",
                 model_label,
                 model_path,
             )
@@ -426,12 +428,12 @@ def prep_vectors(only_model=None, only_dataset=None, status_only=False, force=Fa
             docs_path = VECTORS_DIR / f"{model_label}_{dataset_key}_docs.npy"
             queries_path = VECTORS_DIR / f"{model_label}_{dataset_key}_queries.npy"
 
-            if force or not docs_path.exists():
+            if force or not mirror.ensure_local(docs_path):
                 datasets_needing_docs.append(dataset_key)
             else:
                 log.info("  %s/%s docs: cached (%s)", model_label, dataset_key, fmt_size(docs_path.stat().st_size))
 
-            if force or not queries_path.exists():
+            if force or not mirror.ensure_local(queries_path):
                 datasets_needing_queries.append(dataset_key)
             else:
                 log.info(
@@ -465,6 +467,7 @@ def prep_vectors(only_model=None, only_dataset=None, status_only=False, force=Fa
             )
             doc_embeddings = _embed_texts(model_path, doc_texts, prefix=doc_prefix)
             np.save(docs_path, doc_embeddings)
+            mirror.sync_to_s3(docs_path)
             log.info("  %s/%s docs: cached %d embeddings to %s", model_label, dataset_key, n, docs_path)
 
         # Embed queries
@@ -486,6 +489,7 @@ def prep_vectors(only_model=None, only_dataset=None, status_only=False, force=Fa
             )
             query_embeddings = _embed_texts(model_path, query_texts, prefix=query_prefix)
             np.save(queries_path, query_embeddings)
+            mirror.sync_to_s3(queries_path)
             log.info("  %s/%s queries: cached %d embeddings to %s", model_label, dataset_key, n, queries_path)
 
         log.info("Done with model: %s", model_label)

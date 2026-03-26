@@ -14,6 +14,7 @@ from typing import Any
 
 from benchmarks.harness.analysis.color_system import DISPLAY_LABELS
 from benchmarks.harness.common import CHARTS_DIR, RESULTS_DIR
+from benchmarks.harness.s3_mirror import get_s3_mirror
 
 log = logging.getLogger(__name__)
 
@@ -62,10 +63,18 @@ class ChartSeries:
 
 
 def load_jsonl_files(results_dir: Path, patterns: list[str]) -> list[dict[str, Any]]:
-    """Load all JSONL records matching the given glob patterns."""
+    """Load all JSONL records matching the given glob patterns.
+
+    When --s3-bucket is configured, discovers files from both local and S3,
+    downloading any S3-only files before reading.
+    """
+    mirror = get_s3_mirror()
     records: list[dict[str, Any]] = []
     for pattern in patterns:
-        for filepath in sorted(results_dir.glob(pattern)):
+        for filepath in sorted(mirror.list_union(results_dir, pattern)):
+            if not mirror.ensure_local(filepath):
+                log.warning("Skipping %s: listed but could not be downloaded", filepath.name)
+                continue
             for line in filepath.read_text(encoding="utf-8").strip().split("\n"):
                 if line.strip():
                     records.append(json.loads(line))

@@ -52,9 +52,27 @@ class PrepTask(ABC):
         return "MISSING"
 
     def run(self, force: bool = False) -> None:
-        """Execute the full prep lifecycle: check cache → fetch → transform."""
-        if not force and self.status() == "READY":
-            log.info("  %s: cached (skip)", self.task_id)
-            return
+        """Execute the full prep lifecycle: check cache → fetch → transform.
+
+        When --s3-bucket is configured:
+        - Before fetch: tries to download missing outputs from S3
+        - After fetch+transform: uploads generated outputs to S3
+        """
+        from benchmarks.harness.s3_mirror import get_s3_mirror
+
+        mirror = get_s3_mirror()
+
+        if not force:
+            # Try S3 download for any missing outputs before checking cache
+            for p in self.outputs():
+                mirror.ensure_local(p)
+            if self.status() == "READY":
+                log.info("  %s: cached (skip)", self.task_id)
+                return
+
         self.fetch(force=force)
         self.transform()
+
+        # Upload generated outputs to S3
+        for p in self.outputs():
+            mirror.sync_to_s3(p)

@@ -17,6 +17,7 @@ from pathlib import Path
 from benchmarks.harness.common import TEXTS_DIR
 from benchmarks.harness.prep.base import PrepTask
 from benchmarks.harness.prep.common import fmt_size
+from benchmarks.harness.s3_mirror import get_s3_mirror
 
 log = logging.getLogger(__name__)
 
@@ -153,21 +154,21 @@ def format_book_info(book):
 
 
 def list_cached_texts():
-    """List all cached Gutenberg text files.
+    """List all cached Gutenberg text files (local + S3 if configured).
 
-    Returns list of (book_id, path, size_bytes) tuples sorted by book_id.
+    Returns list of (book_id, path, size_bytes_or_none) tuples sorted by book_id.
+    Files only in S3 are included with size_bytes=None.
     """
-    if not TEXTS_DIR.exists():
-        return []
-
+    mirror = get_s3_mirror()
     results = []
-    for path in sorted(TEXTS_DIR.glob("gutenberg_*.txt")):
+    for path in mirror.list_union(TEXTS_DIR, "gutenberg_*.txt"):
         stem = path.stem  # gutenberg_3300
         parts = stem.split("_", 1)
         if len(parts) == 2 and parts[1].isdigit():
             book_id = int(parts[1])
-            results.append((book_id, path, path.stat().st_size))
-    return results
+            size = path.stat().st_size if path.exists() else None
+            results.append((book_id, path, size))
+    return sorted(results, key=lambda t: t[0])
 
 
 def get_cached_book_ids():
@@ -240,7 +241,8 @@ def print_status():
     for book_id in DEFAULT_BOOK_IDS:
         if book_id in cached:
             path, size = cached[book_id]
-            print(f"  {book_id:>7d}   {path.name:<28s}   {fmt_size(size):>8s}   CACHED")
+            status = "CACHED" if size is not None else "S3 ONLY"
+            print(f"  {book_id:>7d}   {path.name:<28s}   {fmt_size(size):>8s}   {status}")
         else:
             expected_name = f"gutenberg_{book_id}.txt"
             print(f"  {book_id:>7d}   {expected_name:<28s}   {'':>8s}   MISSING")
@@ -249,7 +251,8 @@ def print_status():
     extra_ids = sorted(set(cached.keys()) - set(DEFAULT_BOOK_IDS))
     for book_id in extra_ids:
         path, size = cached[book_id]
-        print(f"  {book_id:>7d}   {path.name:<28s}   {fmt_size(size):>8s}   CACHED (extra)")
+        status = "CACHED (extra)" if size is not None else "S3 ONLY (extra)"
+        print(f"  {book_id:>7d}   {path.name:<28s}   {fmt_size(size):>8s}   {status}")
 
     print()
 
@@ -267,8 +270,11 @@ def print_cached_list():
     print(f"  {'-' * 7}   {'-' * 28}   {'-' * 8}   {'-' * 8}")
 
     for book_id, path, size in cached:
-        word_count = len(path.read_text(encoding="utf-8").split())
-        print(f"  {book_id:>7d}   {path.name:<28s}   {fmt_size(size):>8s}   {word_count:>8,d}")
+        if path.exists():
+            word_count = len(path.read_text(encoding="utf-8").split())
+            print(f"  {book_id:>7d}   {path.name:<28s}   {fmt_size(size):>8s}   {word_count:>8,d}")
+        else:
+            print(f"  {book_id:>7d}   {path.name:<28s}   {'S3 only':>8s}   {'':>8s}")
 
     print(f"\n  Directory: {TEXTS_DIR}")
     print()
