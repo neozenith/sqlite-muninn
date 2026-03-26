@@ -182,7 +182,7 @@ jobs:
   build-macos-x86_64:
     runs-on: macos-15
     name: Build (macos-x86_64)
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
         with:
