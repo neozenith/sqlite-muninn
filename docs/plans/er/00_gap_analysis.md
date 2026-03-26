@@ -249,6 +249,27 @@ flowchart TD
     C6 --> G6 --> D6
 ```
 
+### Dependencies
+
+```mermaid
+flowchart LR
+    G1["G1: Configurable<br/>pipeline params"]
+    G3["G3: Type-aware<br/>matching"]
+    G6["G6: GBNF grammar<br/>+ SQL integration"]
+    G5["G5: Academic<br/>benchmark suite"]
+    G2["G2: LLM matching<br/>stage (tiered)"]
+    G4["G4: Betweenness<br/>graph cleanup"]
+
+    G1 --> G2
+    G1 --> G5
+    G6 --> G2
+    G5 -.->|validates| G2
+    G5 -.->|validates| G3
+    G5 -.->|validates| G4
+```
+
+**Recommended implementation order:** G1 -> G3 -> G6 -> G5 -> G2 -> G4
+
 ### G1: Configurable Pipeline Parameters
 
 **Current:** All thresholds are hard-coded in `PhaseEntityResolution`. The harness's `_run_er_pipeline()` exposes them as function args but the demo_builder does not.
@@ -289,13 +310,34 @@ flowchart TD
 
 **Current:** Only Febrl datasets (personal name matching). No evaluation on product, citation, or text-heavy benchmarks.
 
-**Gap:** Add DeepMatcher benchmark datasets (DBLP-ACM, Abt-Buy, Walmart-Amazon) and optionally Leipzig MusicBrainz 20K to the harness's `_run_er_dataset` mode. These are the standard benchmarks that every ER paper reports against, enabling direct comparison to published SOTA numbers.
+**Gap:** Add the **Abt-Buy** dataset (9,575 pairs, product descriptions, SOTA ~90-96% F1) as the primary benchmark. This is a textual/noisy dataset where string matching alone is weaker, making the LLM tier's contribution clearly measurable. DBLP-ACM may be added later as a secondary sanity check.
 
-Create an `examples/entity_resolution/` directory with a self-contained script that:
-1. Downloads a benchmark dataset (e.g., DBLP-ACM)
-2. Runs the ER pipeline (current and upgraded) against it
-3. Reports pairwise F1, B-Cubed F1, precision, recall, and latency
-4. Compares results to published SOTA numbers
+Create an `examples/entity_resolution/` directory with composable pipeline modes:
+
+**Individual modes (testable in isolation):**
+- `uv run examples/entity_resolution/er_benchmark.py string-only --limit 100` — current pipeline (HNSW + JW + cosine + Leiden)
+- `uv run examples/entity_resolution/er_benchmark.py llm-tiered --limit 100` — upgraded pipeline (adds LLM matching tier for borderline pairs)
+
+**Combined comparison mode:**
+- `uv run examples/entity_resolution/er_benchmark.py compare --limit 100` — runs both pipelines on the same data, prints a side-by-side F1 comparison table
+
+Each mode independently:
+1. Downloads the Abt-Buy benchmark dataset (cached after first run)
+2. Runs its ER pipeline variant against it
+3. Reports pairwise F1, B-Cubed F1, precision, recall, and wall-clock latency
+
+The `compare` mode composes both individual modes and adds the delta. This design allows testing each pipeline in isolation for correctness before validating the integrated comparison.
+
+**Logarithmic scale-up for fast iteration:**
+
+| Tier | Pairs | Purpose | Expected runtime |
+|------|-------|---------|-----------------|
+| `--limit 10` | 10 | Smoke test — schema, I/O, metric plumbing | < 1s |
+| `--limit 100` | 100 | Algorithm correctness — verify blocking, matching, clustering produce sane F1 | ~seconds |
+| `--limit 1000` | 1,000 | Performance profiling — LLM call count, latency breakdown, threshold tuning | ~minutes |
+| (no limit) | 9,575 | Full evaluation — publishable F1 numbers for comparison to SOTA | ~minutes-tens of minutes |
+
+The `--limit N` flag selects the first N pairs from the dataset. Early tiers expose plumbing bugs, parsing errors, and threshold miscalibrations at sub-second iteration speed. Only the final full-scale run produces numbers comparable to published results.
 
 **Effort:** Medium. Dataset loading + ground truth parsing + integration with existing `bcubed_f1` and `_pairwise_f1` metrics.
 
@@ -303,36 +345,69 @@ Create an `examples/entity_resolution/` directory with a self-contained script t
 
 **Current:** No ER-specific GBNF grammar in `src/llama_constants.h`. No `muninn_extract_matches()` or similar SQL function.
 
-**Gap:** Two options (not mutually exclusive):
+**Gap:** Two grammar formats to evaluate empirically, both prototyped via `muninn_chat(model, prompt, grammar)` — no C code changes needed.
 
-**Option A (minimal):** Define a GBNF grammar for ER match decisions and use it via the existing `muninn_chat(model, prompt, grammar)` SQL function. No C code changes — only a Python-side prompt template and grammar string.
+**Format A — Pairwise:** `{"match": true, "confidence": 0.95}`
+- One LLM call per borderline pair
+- Tiny output (< 20 tokens), fast generation
+- Independent decisions — easy to debug, failure affects one pair
+- Risk: no transitive consistency (A=B, B=C, but A≠C possible)
 
-**Option B (full integration):** Add dedicated SQL functions:
-- `muninn_match_entities(model, entity_a, entity_b)` -> `{"match": bool, "confidence": float}`
-- `muninn_cluster_entities(model, candidates_json)` -> `{"groups": [[...], ...]}`
+**Format B — Clustering:** `{"groups": [["NYC", "New York City"], ["London"]]}`
+- One LLM call per HNSW neighborhood (~9 candidates)
+- Fewer total calls (~5x reduction per LLM-CER findings)
+- Holistic grouping — transitive consistency built-in
+- Risk: larger output tokens, failure affects ~9 entities per bad call
+- SOTA-recommended approach (SIGMOD 2026)
 
-With embedded GBNF grammars and batch support via `llama_batch`.
+**Empirical evaluation plan:**
 
-**Recommendation:** Start with Option A for the benchmark example, then graduate to Option B if the approach proves effective. Option A requires zero C code changes and can be implemented entirely in Python.
+Both formats tested at three scales on the Abt-Buy dataset:
 
-**Effort:** Option A = small (Python only). Option B = medium-large (C extension + tests).
+| Scale | Pairs | Purpose |
+|-------|-------|---------|
+| 10 | 10 | Grammar correctness — does Qwen3.5-2B produce valid JSON for each format? |
+| 50 | 50 | Quality signal — pairwise F1 and B-Cubed F1 per format, compare to string-only baseline |
+| 100 | 100 | Latency profile — total LLM time, calls/sec, output tokens per call |
 
-### Dependencies
+**Debugging methodology (proven in `examples/llm_extract/`):**
 
-```
-G1 (parameterize) ─┬──> G2 (LLM matching)
-                    └──> G5 (benchmarks)
-G6 (GBNF grammar) ───> G2 (LLM matching)
-G3 (type guard) ──────> standalone
-G4 (betweenness) ─────> standalone
-G5 (benchmarks) ──────> validates G2, G3, G4
-```
+The `examples/llm_extract/` experience established a critical debugging pattern: run `muninn_chat()` **without** a GBNF grammar first to see what the LLM is actually trying to generate. This reveals:
+- Whether the model understands the task (is it producing match/group-like output at all?)
+- What output format the model naturally gravitates toward (informing grammar design)
+- Failure modes (thinking loops, hallucinated entity names, refusals)
 
-**Recommended implementation order:** G1 -> G3 -> G6 -> G5 -> G2 -> G4
+Only after understanding the model's natural output do you constrain it with a GBNF grammar. If the grammar-constrained output stalls or produces garbage, add one-shot examples to the prompt to demonstrate the expected format — this fixed the NER/RE stalls with Qwen3.5-2B.
+
+**The three debug tiers for each grammar format:**
+
+1. **No grammar** — `muninn_chat(model, prompt)` — see raw LLM output, diagnose understanding
+2. **With grammar** — `muninn_chat(model, prompt, grammar)` — validate grammar constrains correctly
+3. **With grammar + one-shot** — add example in prompt if tier 2 fails — fix generation stalls
+
+This produces six test configurations (2 formats x 3 tiers) at scale 10 before committing to a format. All runnable as individual subcommands of the benchmark script.
+
+**Recommendation:** Lean toward Format B (clustering) based on SOTA research, but let the empirical evidence at scale 10-100 decide. If Format B proves unreliable with Qwen3.5-2B, Format A is the reliable fallback. Both must be implemented as individual modes per the composable design.
+
+**Effort:** Small (Python only). Both formats use `muninn_chat()` with runtime grammar strings — zero C code changes.
+
+### Model Decision: Qwen3.5-2B
+
+**Default GGUF chat model for LLM-based ER matching: Qwen3.5-2B**
+
+| Candidate | Params | Status | Rationale |
+|-----------|--------|--------|-----------|
+| Qwen3.5-0.8B | 0.8B | Rejected | Too small — thinking loops and reliability issues observed in `examples/llm_extract/` |
+| **Qwen3.5-2B** | **2B** | **Selected** | Lowest viable parameter count. Prioritises speed (fewer params = faster forward pass) while maintaining reliable structured output |
+| Qwen3.5-4B | 4B | Fallback | ~2x slower than 2B. Only if 2B proves insufficient on benchmarks |
+
+**Why prioritise speed over size:** The LLM tier fires only for borderline pairs. Even with tiered design, ER must process tens to hundreds of LLM calls per pipeline run. At 2B params with GGUF Q4_K_M quantization and Metal GPU offload, each call completes in sub-second time on Apple Silicon. This keeps the total LLM overhead under ~30 seconds for a typical 1,000-entity corpus.
+
+**Why not smaller:** The Qwen3.5-0.8B is prone to entering thinking loops (documented in the Unsloth GGUF model card) and produced unreliable structured output during NER/RE testing. The 2B model is the reliability floor for grammar-constrained generation tasks in this project.
 
 ## Success Measures
 
-1. **Benchmark example exists at `examples/entity_resolution/`** that runs at least one DeepMatcher dataset (DBLP-ACM or Abt-Buy) through the ER pipeline and reports pairwise F1, B-Cubed F1, precision, recall, and wall-clock latency. Results must be reproducible with a single `make` or `uv run` command.
+1. **Benchmark example exists at `examples/entity_resolution/`** with three composable modes: `string-only`, `llm-tiered`, and `compare`. Each runs the Abt-Buy dataset and reports pairwise F1, B-Cubed F1, precision, recall, and wall-clock latency. Supports `--limit N` for logarithmic scale-up (10/100/1000/full). Individual modes must work in isolation; `compare` composes both.
 
 2. **Measurable F1 improvement on at least one benchmark** when comparing the upgraded pipeline (with LLM matching tier) to the current string-only pipeline. The improvement must be statistically meaningful (not within measurement noise).
 
