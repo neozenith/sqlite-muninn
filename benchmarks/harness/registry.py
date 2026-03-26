@@ -3,6 +3,7 @@
 Used by the manifest and benchmark subcommands to list, filter, and execute permutations.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -273,21 +274,51 @@ def filter_permutations(
     return perms
 
 
+def _load_completed_permutation_ids(results_dir: Path) -> set[str]:
+    """Scan JSONL result files to find which permutation_ids have been run.
+
+    Checks both local and S3 (if --s3-bucket configured) for .jsonl files.
+    A permutation is "done" if its permutation_id appears in any JSONL record.
+    """
+    from benchmarks.harness.s3_mirror import get_s3_mirror
+
+    mirror = get_s3_mirror()
+    completed: set[str] = set()
+
+    for filepath in mirror.list_union(results_dir, "*.jsonl"):
+        if not mirror.ensure_local(filepath):
+            continue
+        for line in filepath.read_text(encoding="utf-8").strip().split("\n"):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            pid = record.get("permutation_id")
+            if pid:
+                completed.add(pid)
+
+    return completed
+
+
 def permutation_status(results_dir: Path | None = None) -> list[dict[str, Any]]:
-    """Check which permutations have db.sqlite (done vs missing).
+    """Check which permutations have results in JSONL files (done vs missing).
+
+    Scans benchmarks/results/*.jsonl for permutation_id fields rather than
+    checking for db.sqlite files on disk. This works correctly when benchmark
+    databases have been cleaned up but JSONL results are preserved (locally or in S3).
 
     Returns list of dicts with keys: permutation_id, category, label, done, sort_key.
     """
     results_dir = results_dir or RESULTS_DIR
+    completed = _load_completed_permutation_ids(results_dir)
+
     status = []
     for perm in all_permutations():
-        db_path = results_dir / perm.permutation_id / "db.sqlite"
         status.append(
             {
                 "permutation_id": perm.permutation_id,
                 "category": perm.category,
                 "label": perm.label,
-                "done": db_path.exists(),
+                "done": perm.permutation_id in completed,
                 "sort_key": perm.sort_key,
             }
         )
