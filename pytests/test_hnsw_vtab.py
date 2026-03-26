@@ -9,12 +9,8 @@ import pathlib
 import random
 import struct
 
+import pysqlite3 as sqlite3
 import pytest
-
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
 
 
 def make_vector(values: list[float]) -> bytes:

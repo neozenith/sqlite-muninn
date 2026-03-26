@@ -86,3 +86,4 @@ wasm/assets/
 
 a.out.*
 
+.*_cache

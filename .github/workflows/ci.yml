@@ -17,18 +17,19 @@ jobs:
     name: Code Quality
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.13"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
-      - name: Install Python dev tools
-        run: pip install ruff mypy
+      - name: Sync Python dev tools (skip heavy project deps)
+        run: uv sync --group dev --no-install-project
 
       - name: Install Node.js dependencies
         run: npm --prefix npm ci
@@ -40,204 +41,362 @@ jobs:
 
       - name: Lint Python (ruff)
         run: |
-          ruff check .
-          ruff format --check .
+          uv run ruff check .
+          uv run ruff format --check .
 
       - name: Lint TypeScript (biome)
         run: make lint-js
 
       - name: Type-check Python (mypy)
-        run: mypy sqlite_muninn/
+        run: uv run mypy sqlite_muninn/
 
       - name: Type-check TypeScript (tsc)
         run: make typecheck-js
 
-  # ── Build & Test (All Platforms) ─────────────────────────
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            name: Linux x86_64
-            ext: so
-          - os: ubuntu-22.04-arm
-            name: Linux ARM64
-            ext: so
-          - os: macos-15
-            name: macOS Universal
-            ext: dylib
-          - os: windows-2022
-            name: Windows x86_64
-            ext: dll
-    runs-on: ${{ matrix.os }}
-    name: Build (${{ matrix.name }})
-    timeout-minutes: 5
+  # ── Linux x86_64 (Build + Test) ─────────────────────────
+  linux-x64:
+    needs: [quality]
+    runs-on: ubuntu-22.04
+    name: Build (Linux x86_64)
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      # ── Cache llama.cpp build ───────────────────────────
-      - uses: actions/cache@v4
+      - uses: astral-sh/setup-uv@v7
         with:
-          path: vendor/llama.cpp/build
-          key: llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.gitmodules') }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
-      # ── Unix build ──────────────────────────────────────
-      - name: Build extension (Unix)
-        if: runner.os != 'Windows'
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ubuntu-22.04
+          max-size: 200M
+          evict-old-files: 1d
+
+      - name: Build extension
         run: make all
 
       - name: Run C unit tests
-        if: runner.os != 'Windows'
-        run: |
-          sudo apt-get install -y libsqlite3-dev 2>/dev/null || true
-          make test
+        run: make test
 
       - name: SQLite CLI smoke test
-        if: runner.os != 'Windows'
         run: |
-          if [ "$(uname -s)" = "Darwin" ]; then
-            SQLITE3="$(brew --prefix sqlite)/bin/sqlite3"
-          else
-            SQLITE3="sqlite3"
-          fi
-          "$SQLITE3" :memory: ".load ./build/muninn" "SELECT 1"
+          sqlite3 :memory: ".load ./build/muninn" "SELECT 1"
 
-      # ── Windows build ───────────────────────────────────
-      - name: Setup MSVC
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Generate Windows build script
-        if: runner.os == 'Windows'
-        run: python3 scripts/generate_build.py windows  # stdlib-only, no uv needed
-
-      - name: Build extension (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: build\generated\build_windows.bat
-
-      # ── Python integration tests ────────────────────────
-      - uses: actions/setup-python@v5
-        if: runner.os != 'Windows'
+      - name: Cache .venv
+        uses: actions/cache@v5
         with:
-          python-version: "3.13"
+          path: .venv
+          key: venv-ubuntu-22.04-${{ hashFiles('uv.lock') }}
 
-      - uses: actions/cache@v4
-        if: runner.os != 'Windows'
+      - name: Sync Python environment
+        run: uv sync --group dev
+
+      - uses: actions/cache@v5
         with:
           path: models
-          key: gguf-test-models
+          key: gguf-models-${{ hashFiles('pytests/test_embed_gguf.py') }}
 
       - name: Python integration tests
-        if: runner.os != 'Windows'
-        run: |
-          pip install pytest pytest-cov
-          pip install pysqlite3-binary 2>/dev/null || pip install pysqlite3
-          python -m pytest pytests/ -v
+        run: uv run pytest pytests/ -v
 
-      # ── Node.js tests ──────────────────────────────────
-      - uses: actions/setup-node@v4
-        if: runner.os != 'Windows'
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: TypeScript tests
-        if: runner.os != 'Windows'
         run: |
           npm --prefix npm ci
           npm --prefix npm test
 
-      # ── Upload artifact ─────────────────────────────────
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: muninn-${{ matrix.name }}
-          path: build/muninn.${{ matrix.ext }}
+          name: muninn-linux-x86_64
+          path: build/muninn.so
 
-  # ── macOS Universal Binary ──────────────────────────────
-  build-macos-universal:
-    runs-on: macos-15
-    name: Build (macOS Universal Binary)
-    timeout-minutes: 5
+  # ── Linux ARM64 (Build + Test) ─────────────────────────
+  linux-arm64:
+    needs: [quality]
+    runs-on: ubuntu-22.04-arm
+    name: Build (Linux ARM64)
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Build arm64
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ubuntu-22.04-arm
+          max-size: 200M
+          evict-old-files: 1d
+
+      - name: Build extension
+        run: make all
+
+      - name: Run C unit tests
+        run: make test
+
+      - name: SQLite CLI smoke test
+        run: |
+          sqlite3 :memory: ".load ./build/muninn" "SELECT 1"
+
+      - name: Cache .venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-ubuntu-22.04-arm-${{ hashFiles('uv.lock') }}
+
+      - name: Sync Python environment
+        run: uv sync --group dev
+
+      - uses: actions/cache@v5
+        with:
+          path: models
+          key: gguf-models-${{ hashFiles('pytests/test_embed_gguf.py') }}
+
+      - name: Python integration tests
+        run: uv run pytest pytests/ -v
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: TypeScript tests
+        run: |
+          npm --prefix npm ci
+          npm --prefix npm test
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: muninn-linux-arm64
+          path: build/muninn.so
+
+  # ── Windows x86_64 (Build only) ────────────────────────
+  windows-x64:
+    needs: [quality]
+    runs-on: windows-2022
+    name: Build (Windows x86_64)
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Generate Windows build script
+        run: python3 scripts/generate_build.py windows
+
+      - name: Build extension
+        shell: cmd
+        run: build\generated\build_windows.bat
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: muninn-windows-x86_64
+          path: build/muninn.dll
+
+  # ── macOS arm64 (Build + Test) ───────────────────────────
+  macos-arm64:
+    needs: [quality]
+    runs-on: macos-15
+    name: Build (macOS arm64)
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-arm64
+          max-size: 200M
+          evict-old-files: 1d
+
+      - name: Build extension (arm64)
         run: make ARCH=arm64 all
 
-      - name: Save arm64 binary
-        run: cp build/muninn.dylib muninn_arm64.dylib
+      - name: Run C unit tests
+        run: make test
 
-      - name: Build x86_64
-        run: make clean all ARCH=x86_64
+      - name: SQLite CLI smoke test
+        run: |
+          SQLITE3="$(brew --prefix sqlite)/bin/sqlite3"
+          "$SQLITE3" :memory: ".load ./build/muninn" "SELECT 1"
+
+      # ── Python integration tests ─────────────────────────
+      - name: Cache .venv
+        uses: actions/cache@v5
+        with:
+          path: .venv
+          key: venv-macos-${{ hashFiles('uv.lock') }}
+
+      - name: Sync Python environment (pysqlite3 from source against Homebrew SQLite)
+        run: |
+          CFLAGS="-I$(brew --prefix sqlite)/include" \
+          LDFLAGS="-L$(brew --prefix sqlite)/lib" \
+            uv sync --group dev --no-binary-package pysqlite3
+
+      - uses: actions/cache@v5
+        with:
+          path: models
+          key: gguf-models-${{ hashFiles('pytests/test_embed_gguf.py') }}
+
+      - name: Verify sqlite3 has extension loading
+        run: uv run scripts/verify_sqlite3_ext.py
+
+      - name: Python integration tests
+        run: uv run pytest pytests/ -v
+
+      # ── Node.js tests ────────────────────────────────────
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: TypeScript tests
+        run: |
+          npm --prefix npm ci
+          npm --prefix npm test
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: muninn-macos-arm64
+          path: build/muninn.dylib
+
+  # ── macOS x86_64 (Build only, cross-compile) ────────────
+  macos-x86_64:
+    needs: [quality]
+    runs-on: macos-15
+    name: Build (macOS x86_64)
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-x86_64
+          max-size: 200M
+          evict-old-files: 1d
+
+      - name: Build extension (x86_64)
+        run: make ARCH=x86_64 all
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: muninn-macos-x86_64
+          path: build/muninn.dylib
+
+  # ── macOS Universal Binary (lipo combine only) ──────────
+  macos-universal:
+    needs: [macos-arm64, macos-x86_64]
+    runs-on: macos-15
+    name: Build (macOS Universal)
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: muninn-macos-arm64
+          path: arm64/
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: muninn-macos-x86_64
+          path: x86_64/
 
       - name: Create universal binary
         run: |
-          lipo -create muninn_arm64.dylib build/muninn.dylib -output build/muninn_universal.dylib
-          mv build/muninn_universal.dylib build/muninn.dylib
-          rm -f muninn_arm64.dylib
+          mkdir -p build
+          lipo -create arm64/muninn.dylib x86_64/muninn.dylib -output build/muninn.dylib
           lipo -info build/muninn.dylib
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: muninn-macos-universal
           path: build/muninn.dylib
 
   # ── Sanitizers (Linux only) ──────────────────────────────
   sanitize:
+    needs: [quality]
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        sanitizer:
-          - name: ASan+UBSan
-            flags: "-fsanitize=address,undefined -fno-sanitize-recover=all"
-    name: Sanitize (${{ matrix.sanitizer.name }})
-    timeout-minutes: 5
+
+    name: Sanitize (ASan+UBSan)
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - uses: actions/cache@v4
+      - uses: astral-sh/setup-uv@v7
         with:
-          path: vendor/llama.cpp/build
-          key: llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.gitmodules') }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
-      - name: Install SQLite dev headers
-        run: sudo apt-get install -y libsqlite3-dev
+      # No ccache here: --coverage needs real compilation to produce .gcno files
+      - name: Install build dependencies
+        run: sudo apt-get install -y libsqlite3-dev llvm
 
-      - name: Build and test with ${{ matrix.sanitizer.name }}
+      - name: Build and test with ASan+UBSan
         run: |
-          CC=clang make test \
-            CFLAGS_EXTRA="${{ matrix.sanitizer.flags }} -g -O1 -fno-omit-frame-pointer"
+          CCACHE_DISABLE=1 GCOV_EXECUTABLE="llvm-cov gcov" CC=clang make test \
+            CFLAGS_EXTRA="-fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -fno-omit-frame-pointer"
 
   # ── Amalgamation ─────────────────────────────────────────
   amalgamation:
+    needs: [quality]
     runs-on: ubuntu-22.04
     name: Amalgamation
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Create amalgamation
         run: make amalgamation
 
       - name: Verify amalgamation compiles (syntax check only)
         run: |
-          # The amalgamation includes llama.h which requires llama.cpp headers.
-          # We verify it compiles with the vendored headers available.
           cc -O2 -fPIC -shared dist/muninn.c -o dist/muninn.so \
             -Ivendor/llama.cpp/include -Ivendor/llama.cpp/ggml/include \
             -lm 2>&1 || echo "Note: link errors expected without llama.cpp libs"
           ls -la dist/muninn.c dist/muninn.h
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: amalgamation
           path: |
@@ -246,18 +405,26 @@ jobs:
 
   # ── Package Install Tests ────────────────────────────────
   package-install:
+    needs: [quality]
     runs-on: ubuntu-22.04
     name: Package Install Tests
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - uses: actions/cache@v4
+      - uses: astral-sh/setup-uv@v7
         with:
-          path: vendor/llama.cpp/build
-          key: llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.gitmodules') }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ubuntu-22.04
+          max-size: 200M
+          evict-old-files: 1d
 
       - name: Install SQLite dev headers
         run: sudo apt-get install -y libsqlite3-dev
@@ -265,15 +432,9 @@ jobs:
       - name: Build extension
         run: make all
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
-
-      - uses: astral-sh/setup-uv@v4
 
       - name: Build npm package
         run: |
@@ -282,34 +443,41 @@ jobs:
 
       - name: Run install integration tests
         run: |
-          pip install pytest
-          pip install pysqlite3-binary 2>/dev/null || pip install pysqlite3
-          python -m pytest pytests/test_install.py -v -m integration --override-ini="addopts="
+          uv sync --group dev
+          uv run pytest pytests/test_install.py -v -m integration --override-ini="addopts="
 
   # ── WASM Build ───────────────────────────────────────────
   wasm:
+    needs: [quality]
     runs-on: ubuntu-22.04
     name: WASM Build
-    timeout-minutes: 5
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - uses: actions/cache@v4
+      - uses: astral-sh/setup-uv@v7
         with:
-          path: vendor/llama.cpp/build-wasm
-          key: llama-wasm-${{ hashFiles('.gitmodules') }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: wasm
+          max-size: 200M
+          evict-old-files: 1d
 
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
 
-      - name: Build WASM
-        run: make -C wasm dist
+      - name: Build WASM (full, with llama.cpp)
+        run: make build-wasm
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wasm
           path: |
-            dist/nodejs/platforms/wasm/muninn_sqlite3.js
-            dist/nodejs/platforms/wasm/muninn_sqlite3.wasm
+            build/wasm/muninn_sqlite3.js
+            build/wasm/muninn_sqlite3.wasm

@@ -8,11 +8,7 @@ import pathlib
 import subprocess
 from collections.abc import Generator
 
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
-
+import pysqlite3 as sqlite3
 import pytest
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent

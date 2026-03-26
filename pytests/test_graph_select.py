@@ -4,11 +4,7 @@ Integration tests for graph_select TVF — dbt-inspired selector syntax.
 Tests the full pipeline: SQL → graph_select TVF → parser → evaluator → results.
 """
 
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
-
+import pysqlite3 as sqlite3
 import pytest
 
 

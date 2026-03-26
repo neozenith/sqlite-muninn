@@ -16,13 +16,8 @@ import struct
 import urllib.request
 from pathlib import Path
 
+import pysqlite3 as sqlite3
 import pytest
-
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_ROOT / "models"

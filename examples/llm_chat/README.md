@@ -15,7 +15,7 @@ structured JSON output via GBNF.
 
 ## Prerequisites
 
-Build the muninn extension — that's it. No `pip install` needed.
+Build the muninn extension — that's it. No `pip install` needed. 
 
 ```bash
 make all

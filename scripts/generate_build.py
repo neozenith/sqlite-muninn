@@ -93,6 +93,10 @@ def _platform_cmake_overrides() -> dict[str, str]:
             "GGML_METAL_EMBED_LIBRARY": "ON",
             "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3",
         }
+    if UNAME_S == "Windows":
+        return {
+            "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        }
     return {}
 
 
@@ -183,7 +187,9 @@ _HEADERS_EXCLUDE = {"sqlite3.h", "sqlite3ext.h"}
 def _discover(directory: str, pattern: str, exclude: set[str]) -> list[str]:
     """Discover files matching pattern in directory, minus exclusions."""
     return sorted(
-        str(p.relative_to(PROJECT_ROOT)) for p in (PROJECT_ROOT / directory).glob(pattern) if p.name not in exclude
+        p.relative_to(PROJECT_ROOT).as_posix()
+        for p in (PROJECT_ROOT / directory).glob(pattern)
+        if p.name not in exclude
     )
 
 
@@ -330,6 +336,10 @@ def _llama_lib_paths_full() -> list[str]:
 def _cmake_flags_platform() -> str:
     """CMAKE_FLAGS_BASE merged with platform overrides, as -DKEY=VAL string."""
     merged = {**CMAKE_FLAGS_BASE, **_platform_cmake_overrides()}
+    # Auto-detect ccache and use it as compiler launcher
+    if shutil.which("ccache"):
+        merged["CMAKE_C_COMPILER_LAUNCHER"] = "ccache"
+        merged["CMAKE_CXX_COMPILER_LAUNCHER"] = "ccache"
     return _cmake_flags_str(merged)
 
 
@@ -419,7 +429,8 @@ cl.exe /O2 /MT /W4 /LD /Isrc ^
 {include_flags} ^
 {source_files} ^
 {lib_files} ^
-    /Fe:build\\muninn.dll
+    /Fe:build\\muninn.dll ^
+    /link kernel32.lib advapi32.lib
 
 if %ERRORLEVEL% neq 0 (
     echo Build failed with error %ERRORLEVEL%
@@ -458,7 +469,9 @@ def cmd_windows(args: argparse.Namespace) -> int:
 
     bs = "\\"  # backslash for f-strings
     content = _WINDOWS_BAT_TEMPLATE.format(
-        cmake_flags=_bat_continuation(f"    -D{k}={v}" for k, v in CMAKE_FLAGS_BASE.items()),
+        cmake_flags=_bat_continuation(
+            f"    -D{k}={v}" for k, v in {**CMAKE_FLAGS_BASE, **_platform_cmake_overrides()}.items()
+        ),
         include_flags=_bat_continuation(
             f"    /I{d.replace('/', bs)}" for d in VENDOR_INCLUDE_DIRS + LLAMA_INCLUDE_DIRS
         ),
