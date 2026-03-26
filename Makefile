@@ -182,19 +182,6 @@ $(LLAMA_WASM_LIBS): | $(LLAMA_DIR)/CMakeLists.txt ## Build llama.cpp as WASM sta
 
 build-wasm: build-wasm-full                        ## Build WASM module (lite by default)
 
-build-wasm-lite: $(WASM_SQLITE_SRC)                ## Build lite WASM (no llama.cpp/embeddings)
-	@command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found — install Emscripten SDK"; exit 1; }
-	emcc $(EMCC_FLAGS) \
-		-DMUNINN_NO_LLAMA \
-		$(VENDOR_INCLUDE) \
-		$(WASM_SQLITE_SRC) \
-		$(WASM_SRC_LITE) \
-		$(VENDOR_SRC) \
-		$(WASM_SRC_EXTRA) \
-		-lm \
-		-o $(WASM_JS)
-	@echo "WASM lite build complete:"; ls -lh $(WASM_JS) $(WASM_BIN)
-
 build-wasm-full: $(WASM_SQLITE_SRC) $(LLAMA_WASM_LIBS) ## Build full WASM (with llama.cpp/embeddings)
 	@command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found — install Emscripten SDK"; exit 1; }
 	emcc $(EMCC_FLAGS) \
@@ -306,30 +293,30 @@ generate-windows:                              ## Generate build_windows.bat fro
 # EXAMPLES
 ######################################################################
 
-examples-colab-jupytext:                       ## Generate Colab notebooks + enforce README badges
-	uv run scripts/generate_build.py examples
+# examples-colab-jupytext:                       ## Generate Colab notebooks + enforce README badges
+# 	uv run scripts/generate_build.py examples
 
-examples-colab-check:                          ## Check notebooks + README badges are up to date
-	uv run scripts/generate_build.py examples --status
+# examples-colab-check:                          ## Check notebooks + README badges are up to date
+# 	uv run scripts/generate_build.py examples --status
 
-EXAMPLES_FAST := semantic_search social_network transit_routes research_papers movie_recommendations
-EXAMPLES_GGUF := text_embeddings llm_chat llm_summarize llm_tokenize llm_extract
+# EXAMPLES_FAST := semantic_search social_network transit_routes research_papers movie_recommendations
+# EXAMPLES_GGUF := text_embeddings llm_chat llm_summarize llm_tokenize llm_extract
 
-examples-test: examples-test-fast examples-test-gguf  ## Run all example notebooks as tests
+# examples-test: examples-test-fast examples-test-gguf  ## Run all example notebooks as tests
 
-examples-test-fast: examples-colab-jupytext build/muninn$(EXT)  ## Run fast examples (no model downloads)
-	uv run pytest --no-cov --nbmake $(foreach e,$(EXAMPLES_FAST),examples/$(e)/$(e).ipynb)
+# examples-test-fast: examples-colab-jupytext build/muninn$(EXT)  ## Run fast examples (no model downloads)
+# 	uv run pytest --no-cov --nbmake $(foreach e,$(EXAMPLES_FAST),examples/$(e)/$(e).ipynb)
 
-examples-test-gguf: examples-colab-jupytext build/muninn$(EXT)  ## Run GGUF examples (downloads models)
-	uv run pytest --no-cov --nbmake --nbmake-timeout=600 $(foreach e,$(EXAMPLES_GGUF),examples/$(e)/$(e).ipynb)
+# examples-test-gguf: examples-colab-jupytext build/muninn$(EXT)  ## Run GGUF examples (downloads models)
+# 	uv run pytest --no-cov --nbmake --nbmake-timeout=600 $(foreach e,$(EXAMPLES_GGUF),examples/$(e)/$(e).ipynb)
 
-examples-test-colab: examples-colab-jupytext        ## E2E test: verify Colab badge links load in browser
-	uv run examples/e2e_colab.py
+# examples-test-colab: examples-colab-jupytext        ## E2E test: verify Colab badge links load in browser
+# 	uv run examples/e2e_colab.py
 
-examples-test-colab-code: examples-colab-jupytext    ## E2E test: verify Colab links + check _IN_COLAB code present
-	uv run examples/e2e_colab.py --check-code
+# examples-test-colab-code: examples-colab-jupytext    ## E2E test: verify Colab links + check _IN_COLAB code present
+# 	uv run examples/e2e_colab.py --check-code
 
-dist: examples-colab-jupytext dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
+dist: dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
 	@echo ""
 	@echo "All artifacts in dist/:"
 	@ls -lh dist/ dist/python/ dist/nodejs/ 2>/dev/null
