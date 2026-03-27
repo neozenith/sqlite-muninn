@@ -80,6 +80,7 @@ npm/README.md
 benchmarks/refactored_outputs/
 docs/benchmarks/refactored_output/
 .env
+benchmarks/infra/config.yml
 
 .hf_cache/
 wasm/assets/

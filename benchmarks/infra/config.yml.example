@@ -1,0 +1,27 @@
+# EC2 Benchmark Runner Configuration
+# Copy to config.yml and fill in your values.
+# All values can be overridden with BENCH_* environment variables.
+
+aws:
+  ec2_region: ap-southeast-2           # BENCH_EC2_REGION
+  s3_bucket: my-benchmark-bucket       # BENCH_S3_BUCKET
+  s3_region: us-west-2                 # BENCH_S3_REGION
+  instance_type: t3.xlarge             # BENCH_INSTANCE_TYPE
+  use_spot: true                       # BENCH_USE_SPOT (true/false)
+  ami_id: ami-095e8c26af3940dc2        # BENCH_AMI_ID (Ubuntu 24.04 ap-southeast-2)
+  key_name: ""                         # BENCH_KEY_NAME (created by 'setup')
+  security_group_id: ""                # BENCH_SECURITY_GROUP_ID (created by 'setup')
+  instance_profile_name: ""            # BENCH_INSTANCE_PROFILE_NAME (created by 'setup')
+
+repo:
+  url: https://github.com/org/repo.git # BENCH_REPO_URL
+  branch: main                         # BENCH_BRANCH
+
+benchmark:
+  category: ""                         # BENCH_CATEGORY (empty = all, or "graph", "kg-extract", etc.)
+  limit: 1                             # BENCH_LIMIT (benchmarks per run)
+
+heartbeat:
+  interval: 15                         # seconds between heartbeats from instance
+  stale_threshold: 60                  # seconds before declaring stale
+  hung_threshold: 180                  # seconds before auto-terminating a hung instance
