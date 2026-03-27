@@ -9,17 +9,22 @@ so it always picks the next incomplete work. If interrupted (spot reclamation),
 the benchmark stays "missing" and the next run retries it automatically.
 
 Usage:
-    uv run benchmarks/infra/runner.py setup
-    uv run benchmarks/infra/runner.py run
-    uv run benchmarks/infra/runner.py status
-    uv run benchmarks/infra/runner.py teardown
-    uv run benchmarks/infra/runner.py teardown --all
+    uv run benchmarks/infra/runner.py setup              # create AWS resources
+    uv run benchmarks/infra/runner.py prime              # cold start + create AMI
+    uv run benchmarks/infra/runner.py run                # single instance, 1 benchmark
+    uv run benchmarks/infra/runner.py submit             # enqueue to SQS for parallel
+    uv run benchmarks/infra/runner.py submit --limit 10  # enqueue up to 10
+    uv run benchmarks/infra/runner.py status             # check instance + heartbeat
+    uv run benchmarks/infra/runner.py teardown           # terminate instance
+    uv run benchmarks/infra/runner.py teardown --all     # terminate + delete all resources
 """
 
 import argparse
 import json
 import logging
 import os
+import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -293,7 +298,205 @@ def cmd_setup(args: argparse.Namespace) -> None:
     log.info("Setup complete. Run 'uv run benchmarks/infra/runner.py run' to launch.")
 
 
-def cmd_run(args: argparse.Namespace) -> None:
+def _sanitize_branch(branch: str) -> str:
+    """Sanitize branch name for AWS resource names (alphanumeric + hyphens)."""
+    return re.sub(r"[^a-zA-Z0-9]", "-", branch).strip("-")[:64]
+
+
+def _get_git_short_hash() -> str:
+    """Get the current git short hash."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=PROJECT_ROOT,
+    )
+    return result.stdout.strip() or "unknown"
+
+
+def cmd_prime(args: argparse.Namespace) -> None:
+    """Launch an on-demand instance, run cold start, create AMI for warm launches.
+
+    The instance runs the full bootstrap (deps, clone, build, uv sync) then shuts down.
+    Once stopped, an AMI is created from its EBS volume. Future workers launched from
+    this AMI skip the cold start entirely.
+    """
+    cfg = load_config()
+    aws_cfg = _aws(cfg)
+    branch = cfg["repo"]["branch"]
+    safe_branch = _sanitize_branch(branch)
+    commit_hash = _get_git_short_hash()
+
+    ec2 = boto3.client("ec2", region_name=aws_cfg["ec2_region"])
+    s3 = boto3.client("s3", region_name=aws_cfg["s3_region"])
+
+    # Check for existing tracked instance
+    state = _load_state()
+    if state.get("instance_id"):
+        log.error("Instance %s already tracked. Run 'teardown' first.", state["instance_id"])
+        sys.exit(1)
+
+    # Render user-data — set limit=0 so no benchmarks run (prime only)
+    prime_cfg = json.loads(json.dumps(cfg))  # deep copy
+    prime_cfg.setdefault("benchmark", {})["limit"] = "0"
+    user_data = _render_user_data(prime_cfg)
+
+    log.info("Priming AMI for branch '%s' (commit %s)...", branch, commit_hash)
+    log.info("Launching on-demand %s (cold start, no benchmarks)...", aws_cfg["instance_type"])
+
+    resp = ec2.run_instances(
+        ImageId=aws_cfg["ami_id"],
+        InstanceType=aws_cfg["instance_type"],
+        KeyName=aws_cfg["key_name"],
+        SecurityGroupIds=[aws_cfg["security_group_id"]],
+        IamInstanceProfile={"Name": aws_cfg["instance_profile_name"]},
+        InstanceInitiatedShutdownBehavior="stop",
+        BlockDeviceMappings=[{
+            "DeviceName": "/dev/sda1",
+            "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
+        }],
+        UserData=user_data,
+        TagSpecifications=[{
+            "ResourceType": "instance",
+            "Tags": [
+                {"Key": "Name", "Value": f"muninn-prime-{safe_branch}"},
+                {"Key": TAG_KEY, "Value": TAG_VALUE},
+                {"Key": "branch", "Value": branch},
+            ],
+        }],
+        MinCount=1,
+        MaxCount=1,
+    )
+
+    instance_id = resp["Instances"][0]["InstanceId"]
+    launch_time = datetime.now(timezone.utc)
+
+    ec2.get_waiter("instance_running").wait(InstanceIds=[instance_id])
+    desc = ec2.describe_instances(InstanceIds=[instance_id])
+    public_ip = desc["Reservations"][0]["Instances"][0].get("PublicIpAddress", "none")
+
+    key_path = KEY_DIR / f"{aws_cfg['key_name']}.pem"
+    _save_state({
+        "instance_id": instance_id,
+        "instance_type": aws_cfg["instance_type"],
+        "mode": "prime",
+        "region": aws_cfg["ec2_region"],
+        "public_ip": public_ip,
+        "launched_at": launch_time.isoformat(),
+        "key_file": str(key_path),
+    })
+
+    log.info("Instance %s running at %s", instance_id, public_ip)
+    log.info("SSH: ssh -i %s ubuntu@%s", key_path, public_ip)
+    log.info("")
+
+    # ── Monitor until instance stops (cold start complete) ────────
+    hb_cfg = cfg.get("heartbeat", {})
+    poll_interval = hb_cfg.get("interval", 15)
+    stale_threshold = hb_cfg.get("stale_threshold", 60)
+    hung_threshold = hb_cfg.get("hung_threshold", 180)
+
+    consecutive_stale = 0
+    last_phase = None
+
+    log.info("Monitoring cold start (waiting for instance to stop after bootstrap)...")
+
+    while True:
+        now = datetime.now(timezone.utc)
+        ts_str = now.strftime("%H:%M:%S")
+
+        try:
+            desc = ec2.describe_instances(InstanceIds=[instance_id])
+            ec2_state = desc["Reservations"][0]["Instances"][0]["State"]["Name"]
+        except Exception:
+            ec2_state = "unknown"
+
+        hb = _get_heartbeat(s3, cfg, instance_id)
+        age = _heartbeat_age(hb)
+
+        if ec2_state == "stopped":
+            log.info("[%s] Instance stopped. Cold start complete.", ts_str)
+            break
+
+        if ec2_state in ("terminated", "shutting-down"):
+            log.error("[%s] Instance %s unexpectedly. Aborting prime.", ts_str, ec2_state)
+            _clear_state()
+            sys.exit(1)
+
+        if hb:
+            phase = hb.get("phase", "?")
+            if phase != last_phase:
+                if last_phase is not None:
+                    log.info("[%s] PHASE: %s -> %s", ts_str, last_phase, phase)
+                last_phase = phase
+
+            if age > stale_threshold:
+                consecutive_stale += 1
+                log.warning("[%s] STALE (%.0fs) phase=%s [%d]", ts_str, age, phase, consecutive_stale)
+            else:
+                consecutive_stale = 0
+                log.info("[%s] OK (%.0fs ago) phase=%s", ts_str, age, phase)
+        else:
+            consecutive_stale += 1
+            if consecutive_stale > 4:
+                log.warning("[%s] NO heartbeat (%d consecutive)", ts_str, consecutive_stale)
+
+        if consecutive_stale * poll_interval >= hung_threshold:
+            log.error("[%s] HUNG. Terminating %s.", ts_str, instance_id)
+            ec2.terminate_instances(InstanceIds=[instance_id])
+            _clear_state()
+            sys.exit(1)
+
+        time.sleep(poll_interval)
+
+    # ── Create AMI from the stopped instance ──────────────────────
+    ami_name = f"muninn-bench-{safe_branch}-{commit_hash}-{launch_time.strftime('%Y%m%d')}"
+    log.info("Creating AMI: %s", ami_name)
+
+    ami_resp = ec2.create_image(
+        InstanceId=instance_id,
+        Name=ami_name,
+        Description=f"Primed benchmark runner for branch {branch} at {commit_hash}",
+        NoReboot=True,
+        TagSpecifications=[{
+            "ResourceType": "image",
+            "Tags": [
+                {"Key": TAG_KEY, "Value": TAG_VALUE},
+                {"Key": "branch", "Value": branch},
+                {"Key": "commit", "Value": commit_hash},
+            ],
+        }],
+    )
+
+    ami_id = ami_resp["ImageId"]
+    log.info("AMI %s creating (this takes 5-15 minutes)...", ami_id)
+
+    ec2.get_waiter("image_available").wait(ImageIds=[ami_id])
+    log.info("AMI %s ready.", ami_id)
+
+    # Terminate the prime instance (AMI captured the volume)
+    log.info("Terminating prime instance %s...", instance_id)
+    ec2.terminate_instances(InstanceIds=[instance_id])
+    _clear_state()
+
+    # Update config with the new AMI
+    cfg["aws"]["ami_id"] = ami_id
+    with CONFIG_PATH.open("w", encoding="utf-8") as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+    elapsed = (datetime.now(timezone.utc) - launch_time).total_seconds()
+    log.info("")
+    log.info("Prime complete in %.0fs.", elapsed)
+    log.info("AMI: %s", ami_id)
+    log.info("Branch: %s (commit %s)", branch, commit_hash)
+    log.info("config.yml updated with new ami_id.")
+    log.info("")
+    log.info("Next steps:")
+    log.info("  uv run benchmarks/infra/runner.py run       # single instance from AMI")
+    log.info("  uv run benchmarks/infra/runner.py submit    # enqueue to SQS for parallel workers")
+
+
+
     """Launch an instance, run benchmarks, monitor heartbeat, collect results."""
     cfg = load_config()
     aws_cfg = _aws(cfg)
@@ -498,6 +701,198 @@ def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_run(args: argparse.Namespace) -> None:
+    """Launch an instance, run benchmarks, monitor heartbeat, collect results."""
+    cfg = load_config()
+    aws_cfg = _aws(cfg)
+
+    state = _load_state()
+    if state.get("instance_id"):
+        log.error("Instance %s already tracked. Run 'teardown' first.", state["instance_id"])
+        sys.exit(1)
+
+    ec2 = boto3.client("ec2", region_name=aws_cfg["ec2_region"])
+    s3 = boto3.client("s3", region_name=aws_cfg["s3_region"])
+
+    user_data = _render_user_data(cfg)
+    use_spot = aws_cfg.get("use_spot", True)
+    shutdown_behavior = "terminate" if use_spot else "stop"
+
+    run_params = {
+        "ImageId": aws_cfg["ami_id"],
+        "InstanceType": aws_cfg["instance_type"],
+        "KeyName": aws_cfg["key_name"],
+        "SecurityGroupIds": [aws_cfg["security_group_id"]],
+        "IamInstanceProfile": {"Name": aws_cfg["instance_profile_name"]},
+        "InstanceInitiatedShutdownBehavior": shutdown_behavior,
+        "BlockDeviceMappings": [{
+            "DeviceName": "/dev/sda1",
+            "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
+        }],
+        "UserData": user_data,
+        "TagSpecifications": [{
+            "ResourceType": "instance",
+            "Tags": [
+                {"Key": "Name", "Value": "muninn-benchmark"},
+                {"Key": TAG_KEY, "Value": TAG_VALUE},
+            ],
+        }],
+        "MinCount": 1,
+        "MaxCount": 1,
+    }
+
+    if use_spot:
+        run_params["InstanceMarketOptions"] = {
+            "MarketType": "spot",
+            "SpotOptions": {"SpotInstanceType": "one-time"},
+        }
+
+    mode = "spot" if use_spot else "on-demand"
+    log.info("Launching %s %s instance in %s...", mode, aws_cfg["instance_type"], aws_cfg["ec2_region"])
+
+    try:
+        resp = ec2.run_instances(**run_params)
+    except ClientError as e:
+        if use_spot and "InsufficientInstanceCapacity" in str(e):
+            log.warning("Spot capacity unavailable. Falling back to on-demand.")
+            run_params.pop("InstanceMarketOptions")
+            run_params["InstanceInitiatedShutdownBehavior"] = "stop"
+            mode = "on-demand (fallback)"
+            resp = ec2.run_instances(**run_params)
+        else:
+            raise
+
+    instance = resp["Instances"][0]
+    instance_id = instance["InstanceId"]
+    launch_time = datetime.now(timezone.utc)
+
+    log.info("Instance %s launching (%s)...", instance_id, mode)
+
+    waiter = ec2.get_waiter("instance_running")
+    waiter.wait(InstanceIds=[instance_id])
+
+    desc = ec2.describe_instances(InstanceIds=[instance_id])
+    public_ip = desc["Reservations"][0]["Instances"][0].get("PublicIpAddress", "none")
+
+    key_path = KEY_DIR / f"{aws_cfg['key_name']}.pem"
+
+    state = {
+        "instance_id": instance_id,
+        "instance_type": aws_cfg["instance_type"],
+        "mode": mode,
+        "region": aws_cfg["ec2_region"],
+        "public_ip": public_ip,
+        "launched_at": launch_time.isoformat(),
+        "key_file": str(key_path),
+    }
+    _save_state(state)
+
+    log.info("Instance %s running at %s", instance_id, public_ip)
+    log.info("SSH: ssh -i %s ubuntu@%s", key_path, public_ip)
+    log.info("")
+
+    # ── Monitor heartbeat ─────────────────────────────────────────
+    hb_cfg = cfg.get("heartbeat", {})
+    poll_interval = hb_cfg.get("interval", 15)
+    stale_threshold = hb_cfg.get("stale_threshold", 60)
+    hung_threshold = hb_cfg.get("hung_threshold", 180)
+
+    timing = {
+        "launch_at": launch_time.isoformat(),
+        "mode": mode,
+        "instance_id": instance_id,
+        "instance_type": aws_cfg["instance_type"],
+        "first_heartbeat_at": None,
+        "phases": [],
+        "outcome": None,
+        "stopped_at": None,
+    }
+
+    consecutive_stale = 0
+    last_phase = None
+    first_heartbeat = False
+
+    log.info("Monitoring heartbeat every %ds (stale >%ds, hung >%ds)", poll_interval, stale_threshold, hung_threshold)
+
+    while True:
+        now = datetime.now(timezone.utc)
+        ts_str = now.strftime("%H:%M:%S")
+
+        try:
+            desc = ec2.describe_instances(InstanceIds=[instance_id])
+            ec2_state = desc["Reservations"][0]["Instances"][0]["State"]["Name"]
+        except Exception:
+            ec2_state = "unknown"
+
+        hb = _get_heartbeat(s3, cfg, instance_id)
+        age = _heartbeat_age(hb)
+
+        if ec2_state in ("stopped", "terminated", "shutting-down"):
+            timing["stopped_at"] = now.isoformat()
+            if hb is None or (hb and hb.get("phase") == "stopped"):
+                timing["outcome"] = "completed"
+                log.info("[%s] Instance %s — job completed.", ts_str, ec2_state)
+            else:
+                timing["outcome"] = "interrupted" if use_spot else "stopped"
+                log.warning("[%s] Instance %s — %s", ts_str, ec2_state, timing["outcome"])
+            break
+
+        if hb:
+            phase = hb.get("phase", "?")
+
+            if not first_heartbeat:
+                first_heartbeat = True
+                timing["first_heartbeat_at"] = now.isoformat()
+                log.info("[%s] First heartbeat received (phase=%s)", ts_str, phase)
+
+            if phase != last_phase:
+                timing["phases"].append({"phase": phase, "at": now.isoformat()})
+                if last_phase is not None:
+                    log.info("[%s] PHASE: %s -> %s", ts_str, last_phase, phase)
+                last_phase = phase
+
+            if age > stale_threshold:
+                consecutive_stale += 1
+                log.warning("[%s] STALE heartbeat (%.0fs old, %d consecutive) phase=%s", ts_str, age, consecutive_stale, phase)
+            else:
+                if consecutive_stale > 0:
+                    log.info("[%s] Heartbeat recovered after %d stale polls", ts_str, consecutive_stale)
+                consecutive_stale = 0
+                log.info("[%s] OK (%.0fs ago) ec2=%s phase=%s", ts_str, age, ec2_state, phase)
+        else:
+            consecutive_stale += 1
+            log.warning("[%s] NO heartbeat (ec2=%s, %d consecutive)", ts_str, ec2_state, consecutive_stale)
+
+        if consecutive_stale * poll_interval >= hung_threshold:
+            log.error(
+                "[%s] HUNG: no heartbeat for %ds. Terminating %s.",
+                ts_str, consecutive_stale * poll_interval, instance_id,
+            )
+            ec2.terminate_instances(InstanceIds=[instance_id])
+            timing["outcome"] = "hung_terminated"
+            timing["stopped_at"] = now.isoformat()
+            break
+
+        time.sleep(poll_interval)
+
+    # ── Save timing log ───────────────────────────────────────────
+    _clear_state()
+    timing_path = STATE_DIR / f"{launch_time.strftime('%Y%m%d_%H%M%S')}.json"
+    timing_path.write_text(json.dumps(timing, indent=2), encoding="utf-8")
+    log.info("Timing log: %s", timing_path)
+
+    _show_latest_phase_log(s3, cfg)
+
+    if timing["outcome"] == "completed":
+        log.info("Success.")
+    elif timing["outcome"] == "interrupted":
+        log.warning("Spot instance interrupted. Re-run to retry the benchmark.")
+        sys.exit(2)
+    else:
+        log.error("Instance hung or failed.")
+        sys.exit(1)
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     """Quick status check — instance state + heartbeat."""
     cfg = load_config()
@@ -532,6 +927,221 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"Heartbeat: {phase} ({age:.0f}s ago)" if hb else "Heartbeat: none")
     key_file = state.get("key_file", "?")
     print(f"SSH:       ssh -i {key_file} ubuntu@{public_ip}")
+
+
+
+    """Enqueue missing benchmark IDs to the branch's SQS queue.
+
+    Queries the local harness manifest for missing benchmarks and sends each
+    permutation ID as an SQS message. The CDK-managed ASG will scale up
+    workers to process them.
+
+    Requires the CDK bench stack to be deployed (provides the SQS queue).
+    """
+    cfg = load_config()
+    aws_cfg = _aws(cfg)
+    branch = cfg["repo"]["branch"]
+    safe_branch = _sanitize_branch(branch)
+    category = cfg.get("benchmark", {}).get("category") or ""
+    limit = args.limit
+
+    # Find the SQS queue URL from CloudFormation outputs
+    cf = boto3.client("cloudformation", region_name=aws_cfg["ec2_region"])
+    stack_name = f"MuninnBench-{safe_branch}"
+
+    try:
+        stack = cf.describe_stacks(StackName=stack_name)
+        outputs = {o["OutputKey"]: o["OutputValue"] for o in stack["Stacks"][0].get("Outputs", [])}
+        queue_url = outputs.get("QueueUrl")
+        if not queue_url:
+            log.error("Stack %s has no QueueUrl output. Is it deployed?", stack_name)
+            sys.exit(1)
+    except ClientError as e:
+        if "does not exist" in str(e):
+            log.error("Stack %s not found. Deploy it first with CDK.", stack_name)
+            log.error(
+                "  npx aws-cdk@latest deploy %s --app 'uv run --group cdk benchmarks/infra/cdk/app.py' "
+                "-c branch=%s -c ami_id=%s -c account=%s",
+                stack_name, branch, aws_cfg["ami_id"],
+                os.environ.get("CDK_DEFAULT_ACCOUNT", "<account>"),
+            )
+            sys.exit(1)
+        raise
+
+    # Query the harness manifest for missing benchmarks
+    manifest_cmd = [
+        "uv", "run", "--no-sync", "-m", "benchmarks.harness",
+        "manifest", "--commands", "--missing",
+    ]
+    if category:
+        manifest_cmd.extend(["--category", category])
+    if limit:
+        manifest_cmd.extend(["--limit", str(limit)])
+
+    log.info("Querying manifest for missing benchmarks (category=%s, limit=%s)...", category or "all", limit or "all")
+
+    result = subprocess.run(manifest_cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    if result.returncode != 0:
+        log.error("Manifest query failed: %s", result.stderr)
+        sys.exit(1)
+
+    # Parse benchmark IDs from the manifest output
+    # Each line: "uv run -m benchmarks.harness benchmark --id {permutation_id}"
+    bench_ids = []
+    for line in result.stdout.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        match = re.search(r"--id\s+(\S+)", line)
+        if match:
+            bench_ids.append(match.group(1))
+
+    if not bench_ids:
+        log.info("No missing benchmarks found. Nothing to enqueue.")
+        return
+
+    # Enqueue to SQS
+    sqs = boto3.client("sqs", region_name=aws_cfg["ec2_region"])
+
+    log.info("Enqueuing %d benchmark(s) to %s", len(bench_ids), queue_url)
+
+    # SQS SendMessageBatch handles up to 10 per call
+    for i in range(0, len(bench_ids), 10):
+        batch = bench_ids[i : i + 10]
+        entries = [
+            {"Id": str(j), "MessageBody": bid}
+            for j, bid in enumerate(batch)
+        ]
+        resp = sqs.send_message_batch(QueueUrl=queue_url, Entries=entries)
+        failed = resp.get("Failed", [])
+        if failed:
+            log.error("Failed to enqueue %d message(s): %s", len(failed), failed)
+        else:
+            for bid in batch:
+                log.info("  enqueued: %s", bid)
+
+    log.info("")
+    log.info("Submitted %d benchmark(s) to SQS.", len(bench_ids))
+    log.info("Queue: %s", queue_url)
+    log.info("The ASG will scale up workers automatically.")
+
+
+
+    """Quick status check — instance state + heartbeat."""
+    cfg = load_config()
+    state = _load_state()
+    instance_id = state.get("instance_id")
+    if not instance_id:
+        log.info("No instance tracked.")
+        return
+
+    ec2 = boto3.client("ec2", region_name=_aws(cfg)["ec2_region"])
+    s3 = boto3.client("s3", region_name=_aws(cfg)["s3_region"])
+
+    try:
+        desc = ec2.describe_instances(InstanceIds=[instance_id])
+        inst = desc["Reservations"][0]["Instances"][0]
+        ec2_state = inst["State"]["Name"]
+        public_ip = inst.get("PublicIpAddress", "none")
+    except Exception as e:
+        log.error("Instance lookup failed: %s", e)
+        return
+
+    hb = _get_heartbeat(s3, cfg, instance_id)
+    age = _heartbeat_age(hb)
+    phase = hb.get("phase", "?") if hb else "none"
+
+    print(f"Instance:  {instance_id}")
+    print(f"State:     {ec2_state}")
+    print(f"IP:        {public_ip}")
+    print(f"Type:      {state.get('instance_type', '?')}")
+    print(f"Mode:      {state.get('mode', '?')}")
+    print(f"Launched:  {state.get('launched_at', '?')}")
+    print(f"Heartbeat: {phase} ({age:.0f}s ago)" if hb else "Heartbeat: none")
+    key_file = state.get("key_file", "?")
+    print(f"SSH:       ssh -i {key_file} ubuntu@{public_ip}")
+
+
+def cmd_submit(args: argparse.Namespace) -> None:
+    """Enqueue missing benchmark IDs to the branch's SQS queue.
+
+    Queries the local harness manifest for missing benchmarks and sends each
+    permutation ID as an SQS message. The CDK-managed ASG will scale up
+    workers to process them.
+    """
+    cfg = load_config()
+    aws_cfg = _aws(cfg)
+    branch = cfg["repo"]["branch"]
+    safe_branch = _sanitize_branch(branch)
+    category = cfg.get("benchmark", {}).get("category") or ""
+    limit = args.limit
+
+    # Find the SQS queue URL from CloudFormation outputs
+    cf = boto3.client("cloudformation", region_name=aws_cfg["ec2_region"])
+    stack_name = f"MuninnBench-{safe_branch}"
+
+    try:
+        stack = cf.describe_stacks(StackName=stack_name)
+        outputs = {o["OutputKey"]: o["OutputValue"] for o in stack["Stacks"][0].get("Outputs", [])}
+        queue_url = outputs.get("QueueUrl")
+        if not queue_url:
+            log.error("Stack %s has no QueueUrl output. Is it deployed?", stack_name)
+            sys.exit(1)
+    except ClientError as e:
+        if "does not exist" in str(e):
+            log.error("Stack %s not found. Deploy it first with CDK.", stack_name)
+            sys.exit(1)
+        raise
+
+    # Query the harness manifest for missing benchmarks
+    manifest_cmd = [
+        "uv", "run", "--no-sync", "-m", "benchmarks.harness",
+        "manifest", "--commands", "--missing",
+    ]
+    if category:
+        manifest_cmd.extend(["--category", category])
+    if limit:
+        manifest_cmd.extend(["--limit", str(limit)])
+
+    log.info("Querying manifest for missing benchmarks (category=%s, limit=%s)...", category or "all", limit or "all")
+
+    result = subprocess.run(manifest_cmd, capture_output=True, text=True, cwd=PROJECT_ROOT)
+    if result.returncode != 0:
+        log.error("Manifest query failed: %s", result.stderr)
+        sys.exit(1)
+
+    # Parse benchmark IDs from manifest output
+    bench_ids = []
+    for line in result.stdout.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        match = re.search(r"--id\s+(\S+)", line)
+        if match:
+            bench_ids.append(match.group(1))
+
+    if not bench_ids:
+        log.info("No missing benchmarks found. Nothing to enqueue.")
+        return
+
+    # Enqueue to SQS (batches of 10)
+    sqs_client = boto3.client("sqs", region_name=aws_cfg["ec2_region"])
+
+    log.info("Enqueuing %d benchmark(s) to %s", len(bench_ids), queue_url)
+
+    for i in range(0, len(bench_ids), 10):
+        batch = bench_ids[i : i + 10]
+        entries = [{"Id": str(j), "MessageBody": bid} for j, bid in enumerate(batch)]
+        resp = sqs_client.send_message_batch(QueueUrl=queue_url, Entries=entries)
+        failed = resp.get("Failed", [])
+        if failed:
+            log.error("Failed to enqueue %d message(s): %s", len(failed), failed)
+        else:
+            for bid in batch:
+                log.info("  enqueued: %s", bid)
+
+    log.info("")
+    log.info("Submitted %d benchmark(s). ASG will scale up automatically.", len(bench_ids))
 
 
 def cmd_teardown(args: argparse.Namespace) -> None:
@@ -650,8 +1260,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     subs.add_parser("setup", help="Create AWS resources (IAM, key pair, security group)").set_defaults(func=cmd_setup)
 
-    run_p = subs.add_parser("run", help="Launch instance, run benchmarks, monitor heartbeat")
-    run_p.set_defaults(func=cmd_run)
+    subs.add_parser("prime", help="Cold start an instance, create AMI for warm launches").set_defaults(func=cmd_prime)
+
+    subs.add_parser("run", help="Launch instance, run benchmarks, monitor heartbeat").set_defaults(func=cmd_run)
+
+    submit_p = subs.add_parser("submit", help="Enqueue missing benchmarks to SQS for parallel workers")
+    submit_p.add_argument("--limit", type=int, default=None, help="Max benchmarks to enqueue (default: all missing)")
+    submit_p.set_defaults(func=cmd_submit)
 
     subs.add_parser("status", help="Quick status check").set_defaults(func=cmd_status)
 
