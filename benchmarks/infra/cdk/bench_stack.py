@@ -1,0 +1,201 @@
+"""Per-branch benchmark infrastructure: SQS queue, ASG, scaling, IAM.
+
+Creates an isolated pipeline per git branch:
+  SQS (work queue) → ASG (spot workers from AMI) → S3 (results)
+
+Workers poll SQS for benchmark permutation IDs, run them via the harness CLI,
+upload results to S3, and terminate when the queue is empty. The ASG scales
+from 0 to max_workers based on queue depth.
+"""
+
+from pathlib import Path
+
+import aws_cdk as cdk
+from aws_cdk import Duration, Tags
+from aws_cdk import aws_autoscaling as autoscaling
+from aws_cdk import aws_ec2 as ec2
+from aws_cdk import aws_iam as iam
+from aws_cdk import aws_sqs as sqs
+from constructs import Construct
+
+PROJECT_TAG = "muninn-benchmarks"
+USER_DATA_TEMPLATE = Path(__file__).parent.parent / "worker_user_data.sh"
+
+
+class BenchStack(cdk.Stack):
+    """Per-branch benchmark stack: SQS + ASG + scaling."""
+
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        branch: str,
+        ami_id: str,
+        s3_bucket: str,
+        s3_region: str,
+        max_workers: int = 5,
+        **kwargs,
+    ) -> None:
+        super().__init__(scope, construct_id, **kwargs)
+
+        Tags.of(self).add("project", PROJECT_TAG)
+        Tags.of(self).add("branch", branch)
+
+        # ── SQS: work queue + dead letter queue ───────────────────
+        dlq = sqs.Queue(
+            self,
+            "DLQ",
+            retention_period=Duration.days(14),
+        )
+
+        queue = sqs.Queue(
+            self,
+            "Queue",
+            visibility_timeout=Duration.hours(2),
+            dead_letter_queue=sqs.DeadLetterQueue(
+                max_receive_count=3,
+                queue=dlq,
+            ),
+        )
+
+        # ── IAM: worker role ──────────────────────────────────────
+        role = iam.Role(
+            self,
+            "WorkerRole",
+            assumed_by=iam.ServicePrincipal("ec2.amazonaws.com"),
+        )
+
+        # S3 access for results + heartbeat
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"],
+                resources=[
+                    f"arn:aws:s3:::{s3_bucket}",
+                    f"arn:aws:s3:::{s3_bucket}/*",
+                ],
+            )
+        )
+
+        # SQS consume
+        queue.grant_consume_messages(role)
+
+        # SSM for remote access
+        role.add_managed_policy(
+            iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore")
+        )
+
+        # CloudWatch Logs
+        role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                ],
+                resources=["arn:aws:logs:*:*:log-group:/muninn/*"],
+            )
+        )
+
+        # Instance profile
+        instance_profile = iam.CfnInstanceProfile(
+            self,
+            "InstanceProfile",
+            roles=[role.role_name],
+        )
+
+        # ── Security group ────────────────────────────────────────
+        # Use default VPC
+        vpc = ec2.Vpc.from_lookup(self, "VPC", is_default=True)
+
+        sg = ec2.SecurityGroup(
+            self,
+            "SG",
+            vpc=vpc,
+            description="Muninn benchmark workers - SSH access",
+            allow_all_outbound=True,
+        )
+        sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(22), "SSH")
+
+        # ── User data ────────────────────────────────────────────
+        user_data = ec2.UserData.for_linux()
+        user_data_script = USER_DATA_TEMPLATE.read_text(encoding="utf-8")
+
+        # Inject configuration
+        user_data_script = user_data_script.replace("__S3_BUCKET__", s3_bucket)
+        user_data_script = user_data_script.replace("__S3_REGION__", s3_region)
+        user_data_script = user_data_script.replace("__SQS_QUEUE_URL__", queue.queue_url)
+        user_data_script = user_data_script.replace("__REPO_URL__", "https://github.com/neozenith/sqlite-muninn.git")
+        user_data_script = user_data_script.replace("__BRANCH__", branch)
+
+        user_data.add_commands(user_data_script)
+
+        # ── Launch template ───────────────────────────────────────
+        lt = ec2.LaunchTemplate(
+            self,
+            "LT",
+            machine_image=ec2.MachineImage.generic_linux({self.region: ami_id}),
+            instance_type=ec2.InstanceType("t3.xlarge"),
+            user_data=user_data,
+            security_group=sg,
+            role=role,
+            block_devices=[
+                ec2.BlockDevice(
+                    device_name="/dev/sda1",
+                    volume=ec2.BlockDeviceVolume.ebs(
+                        20,
+                        volume_type=ec2.EbsDeviceVolumeType.GP3,
+                        delete_on_termination=True,
+                    ),
+                ),
+            ],
+        )
+
+        # ── ASG: spot workers with on-demand fallback ─────────────
+        asg = autoscaling.AutoScalingGroup(
+            self,
+            "ASG",
+            vpc=vpc,
+            min_capacity=0,
+            max_capacity=max_workers,
+            desired_capacity=0,
+            mixed_instances_policy=autoscaling.MixedInstancesPolicy(
+                launch_template=lt,
+                instances_distribution=autoscaling.InstancesDistribution(
+                    on_demand_base_capacity=0,
+                    on_demand_percentage_above_base_capacity=0,
+                    spot_allocation_strategy=autoscaling.SpotAllocationStrategy.PRICE_CAPACITY_OPTIMIZED,
+                ),
+                launch_template_overrides=[
+                    autoscaling.LaunchTemplateOverrides(instance_type=ec2.InstanceType("t3.xlarge")),
+                    autoscaling.LaunchTemplateOverrides(instance_type=ec2.InstanceType("m5.xlarge")),
+                    autoscaling.LaunchTemplateOverrides(instance_type=ec2.InstanceType("c5.xlarge")),
+                ],
+            ),
+            cooldown=Duration.minutes(5),
+            new_instances_protected_from_scale_in=False,
+        )
+
+        # ── Scaling policy: queue depth → ASG size ────────────────
+        # Scale out: 1+ messages → add capacity
+        # Scale in:  0 messages for cooldown → remove capacity (to zero)
+        asg.scale_on_metric(
+            "ScaleOnQueueDepth",
+            metric=queue.metric_approximate_number_of_messages_visible(
+                period=Duration.minutes(1),
+                statistic="Maximum",
+            ),
+            scaling_steps=[
+                autoscaling.ScalingInterval(change=-1, upper=0),
+                autoscaling.ScalingInterval(change=+1, lower=1, upper=5),
+                autoscaling.ScalingInterval(change=+2, lower=5),
+            ],
+            adjustment_type=autoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
+        )
+
+        # ── Outputs ───────────────────────────────────────────────
+        cdk.CfnOutput(self, "QueueUrl", value=queue.queue_url)
+        cdk.CfnOutput(self, "QueueArn", value=queue.queue_arn)
+        cdk.CfnOutput(self, "DlqUrl", value=dlq.queue_url)
+        cdk.CfnOutput(self, "AsgName", value=asg.auto_scaling_group_name)
+        cdk.CfnOutput(self, "Branch", value=branch)

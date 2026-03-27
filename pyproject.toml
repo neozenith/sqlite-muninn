@@ -98,6 +98,10 @@ dev = [
     "pytest-cov>=7.0.0",
     "ruff>=0.15.0",
 ]
+cdk = [
+    "aws-cdk-lib>=2.245.0",
+    "constructs>=10.6.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["pytests"]
