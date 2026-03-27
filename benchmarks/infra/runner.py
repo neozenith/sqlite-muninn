@@ -259,7 +259,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
     try:
         resp = ec2.create_security_group(
             GroupName=sg_name,
-            Description="Muninn benchmark runner — SSH access",
+            Description="Muninn benchmark runner - SSH access",
             TagSpecifications=[{
                 "ResourceType": "security-group",
                 "Tags": [{"Key": TAG_KEY, "Value": TAG_VALUE}],
@@ -267,7 +267,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         )
         sg_id = resp["GroupId"]
         ec2.authorize_security_group_ingress(
-            GroupId=sg_id, Protocol="tcp", FromPort=22, ToPort=22, CidrIp="0.0.0.0/0",
+            GroupId=sg_id, IpProtocol="tcp", FromPort=22, ToPort=22, CidrIp="0.0.0.0/0",
         )
         log.info("  Security group created: %s", sg_id)
     except ClientError as e:
