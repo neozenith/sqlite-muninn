@@ -109,6 +109,12 @@ CHAT_MODELS = [
         2.7,
     ),
     ChatModelConfig(
+        "Gemma-3-1B",
+        "google_gemma-3-1b-it-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF/resolve/main/google_gemma-3-1b-it-Q4_K_M.gguf",
+        0.81,
+    ),
+    ChatModelConfig(
         "Gemma-3-4B",
         "google_gemma-3-4b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
@@ -720,8 +726,8 @@ def run_llm_pairwise(
     dist_threshold: float = 0.4,
     llm_low: float = 0.3,
     llm_high: float = 0.7,
-) -> dict[str, int]:
-    """Run LLM-pairwise ER pipeline (Format A grammar). Returns entity_id -> cluster_id.
+) -> tuple[dict[str, int], int]:
+    """Run LLM-pairwise ER pipeline (Format A grammar). Returns (clusters, llm_calls).
 
     Three matching tiers:
       score > llm_high  -> auto-accept (string similarity is confident)
@@ -767,7 +773,7 @@ def run_llm_pairwise(
                 match_edges.append((id_map[r1], id_map[r2], confidence))
 
     log.info("LLM-pairwise: %d edges, %d LLM calls (%.2fs)", len(match_edges), llm_calls, llm_time)
-    return _leiden_cluster(conn, entities, match_edges)
+    return _leiden_cluster(conn, entities, match_edges), llm_calls
 
 
 # ── Pipeline: LLM-Cluster ────────────────────────────────────────
@@ -781,8 +787,8 @@ def run_llm_cluster(
     dist_threshold: float = 0.4,
     llm_low: float = 0.3,
     llm_high: float = 0.7,
-) -> dict[str, int]:
-    """Run LLM-cluster ER pipeline (Format B′ numbered grammar). Returns entity_id -> cluster_id.
+) -> tuple[dict[str, int], int]:
+    """Run LLM-cluster ER pipeline (Format B′ numbered grammar). Returns (clusters, llm_calls).
 
     Instead of one LLM call per pair, sends entire neighborhoods for batch clustering.
     Uses GBNF_ER_CLUSTER_NUM with numbered indices for reliable output parsing.
@@ -857,7 +863,7 @@ def run_llm_cluster(
         llm_time,
         len(components),
     )
-    return _leiden_cluster(conn, entities, match_edges)
+    return _leiden_cluster(conn, entities, match_edges), llm_calls
 
 
 def _connected_components(pairs: list[tuple[int, int]]) -> list[list[int]]:
@@ -1048,13 +1054,13 @@ def cmd_llm_tiered(args: argparse.Namespace) -> None:
     conn = create_db(chat_model=model)
 
     t0 = time.perf_counter()
-    predicted = run_llm_pairwise(conn, entities, model_name=model.name)
+    predicted, n_llm = run_llm_pairwise(conn, entities, model_name=model.name)
     elapsed = time.perf_counter() - t0
 
     bc = bcubed_f1(predicted, gold)
     pw = pairwise_f1(predicted, gold)
     report_metrics(predicted, gold, elapsed, f"LLM-Pairwise ({model.name})")
-    _save_result("pairwise", model.name, args.limit, len(entities), bc, pw, elapsed)
+    _save_result("pairwise", model.name, args.limit, len(entities), bc, pw, elapsed, llm_calls=n_llm)
     conn.close()
 
 
@@ -1094,12 +1100,12 @@ def cmd_compare(args: argparse.Namespace) -> None:
             label = f"{grammar_label}/{model.name}"
             log.info("Running: %s", label)
             t0 = time.perf_counter()
-            pred = pipeline_fn(conn, entities, model_name=model.name)
+            pred, n_llm = pipeline_fn(conn, entities, model_name=model.name)
             elapsed = time.perf_counter() - t0
             bc = bcubed_f1(pred, gold)
             pw = pairwise_f1(pred, gold)
             report_metrics(pred, gold, elapsed, label)
-            _save_result(grammar_label, model.name, args.limit, len(entities), bc, pw, elapsed)
+            _save_result(grammar_label, model.name, args.limit, len(entities), bc, pw, elapsed, llm_calls=n_llm)
         # Unregister chat model to free memory before loading the next one
         conn.execute("DELETE FROM temp.muninn_chat_models WHERE name = ?", (model.name,))
         log.info("Unloaded chat model: %s", model.name)

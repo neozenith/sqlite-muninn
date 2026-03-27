@@ -362,8 +362,8 @@ def _run_er_pipeline(
 **Gap:** Add a third tier to the matching cascade that routes **borderline pairs** (combined score between a low and high threshold, e.g., 0.4-0.7) to `muninn_chat()` with an ER-specific GBNF grammar. High-confidence matches and rejects from tiers 1-2 skip the LLM entirely.
 
 **Design options:**
-- **Pairwise mode:** One `muninn_chat()` call per borderline pair. Simple, but O(borderline_pairs) LLM calls.
-- **In-context clustering mode (preferred):** Group borderline candidates by HNSW neighborhood (up to ~9 per group per LLM-CER findings), one `muninn_chat()` call per group. Reduces calls by ~5x.
+- ~~**Pairwise mode:** One `muninn_chat()` call per borderline pair.~~ **Rejected (2026-03-28):** 8-11x more LLM calls for equal or worse F1. See ADR: Grammar Format.
+- **In-context clustering mode (selected):** Group borderline candidates by connected component (capped at ~20 entities), one `muninn_chat()` call per component. Empirically confirmed 11.5x fewer calls than pairwise at equal or higher F1.
 
 **Output(s):**
 - Modified `benchmarks/demo_builder/phases/entity_resolution.py` (Python) — new LLM matching tier inserted into the cascade at lines 108-132, routing borderline pairs (combined score 0.4-0.7) to `muninn_chat()`
@@ -389,17 +389,72 @@ result = conn.execute(
 # result is grammar-constrained JSON, e.g. {"groups": [["NYC", "New York City"], ["London"]]}
 ```
 
-#### ADR: Default Chat Model — Qwen3.5-2B
+#### ADR: Grammar Format — Cluster Only (decided 2026-03-28)
 
-| Candidate | Params | Status | Rationale |
-|-----------|--------|--------|-----------|
-| Qwen3.5-0.8B | 0.8B | Rejected | Too small — thinking loops and reliability issues observed in `examples/llm_extract/` |
-| **Qwen3.5-2B** | **2B** | **Selected** | Lowest viable parameter count. Prioritises speed (fewer params = faster forward pass) while maintaining reliable structured output |
-| Qwen3.5-4B | 4B | Fallback | ~2x slower than 2B. Only if 2B proves insufficient on benchmarks |
+| Format | Description | Status | Rationale |
+|--------|-------------|--------|-----------|
+| Format A — Pairwise | `{"match": true, "confidence": 0.95}` per pair | **Rejected** | 8-11x more LLM calls for equal or worse F1. All models underperform in pairwise mode — the format itself is the problem, not the models. |
+| **Format B′ — Cluster (numbered)** | `{"groups": [[1, 3], [2]]}` per component | **Selected** | Fewer calls, better F1, transitive consistency built-in |
 
-**Why prioritise speed over size:** The LLM tier fires only for borderline pairs. Even with tiered design, ER must process tens to hundreds of LLM calls per pipeline run. At 2B params with GGUF Q4_K_M quantization and Metal GPU offload, each call completes in sub-second time on Apple Silicon. This keeps the total LLM overhead under ~30 seconds for a typical 1,000-entity corpus.
+**Benchmark evidence (Abt-Buy, pairwise vs cluster, 1000 entities):**
 
-**Why not smaller:** The Qwen3.5-0.8B is prone to entering thinking loops (documented in the Unsloth GGUF model card) and produced unreliable structured output during NER/RE testing. The 2B model is the reliability floor for grammar-constrained generation tasks in this project.
+| Pipeline | Best Model | B³ F1 | Delta | LLM Calls | Time |
+|----------|-----------|-------|-------|-----------|------|
+| string-only | - | 0.461 | - | 0 | 9s |
+| pairwise | Qwen3.5-4B | 0.568 | +0.108 | 816 | 953s |
+| **cluster** | **Qwen3.5-4B** | **0.581** | **+0.120** | **71** | **243s** |
+
+Cluster achieves higher F1 with **11.5x fewer LLM calls** and **3.9x less wall time**. The connected-component batching sends one LLM call per component rather than one per pair.
+
+**Why pairwise was rejected (not the models):** Pairwise mode makes independent per-pair decisions without transitive context. This leads to inconsistent results (A≈B, B≈C, but A≠C) and requires many more LLM calls for worse quality. Every model tested produced better results in cluster mode — the format itself is the bottleneck. Models that appeared "harmful" in pairwise (e.g., Gemma-3-4B at -0.007) performed competitively in cluster mode (+0.050).
+
+**Known limitation:** Large components (>20 entities) can exceed the model's reliable generation length, causing truncated JSON output. G2 implementation must cap component size (split oversized components before sending to LLM).
+
+**Pairwise format is retained** only in the grammar-debug subcommands for diagnostic purposes. It is excluded from the production pipeline and the `compare` permutation matrix.
+
+#### ADR: Default Chat Model — Qwen3.5-4B (revised 2026-03-28)
+
+Model evaluation based on **cluster format only** (pairwise rejected — see above).
+
+**Cluster-mode B³ F1 delta vs string-only baseline:**
+
+| Model | @100 | @500 | @1000 | Size | Notes |
+|-------|------|------|-------|------|-------|
+| **Qwen3.5-4B** | +0.023 | **+0.101** | **+0.120** | 2.7 GB | Highest delta at scale, consistent across all tiers |
+| Gemma-3-1B | - | - | +0.095 | 0.8 GB | Strong value/size ratio (3.4x smaller than 4B for 79% of the delta) |
+| Qwen3.5-2B | +0.016 | +0.067 | +0.090 | 1.3 GB | Reliable mid-tier option |
+| Gemma-3-4B | **+0.025** | +0.035 | +0.050 | 2.5 GB | Wins at small scale (@100), trails at larger scales; some parse failures |
+
+| Candidate | Status | Rationale |
+|-----------|--------|-----------|
+| Qwen3.5-0.8B | Rejected | Thinking loops, unreliable structured output (from `examples/llm_extract/` testing) |
+| Qwen3.5-2B | Reserve | Solid +0.090 @1000, reliable. Good default for resource-constrained environments |
+| **Qwen3.5-4B** | **Selected** | Highest B³ F1 delta at every scale tested. The quality leader |
+| Gemma-3-1B | Reserve | Best delta-per-GB ratio. Consider for constrained environments or as speed-optimised alternative |
+| Gemma-3-4B | Reserve | Competitive at small scale, trails at 500+. Parse failures on large components need investigation |
+
+**Why Qwen3.5-4B:** Only model with the highest cluster delta at every scale (100, 500, 1000). At 1000 entities: +0.120 B³ F1 in 243s with 71 LLM calls.
+
+**Why not dismiss Gemma:** In cluster mode, all Gemma variants produce positive deltas. Gemma-3-1B at 0.8 GB achieves +0.095 — within 79% of Qwen3.5-4B's delta at 30% of the model size. The negative pairwise results were a property of the pairwise format, not the model.
+
+#### ADR: Hybrid Tuning Strategy — String-First, LLM-Minimal (decided 2026-03-28)
+
+The benchmark data reveals that **string-only is fast and surprisingly competitive** — the precision bottleneck comes from the score floor problem (hard-coded thresholds), not from the absence of LLM. The hybrid strategy is:
+
+1. **G1 priority: tune string-only thresholds first.** Lower `dist_threshold` (0.4 → ~0.25) and raise `match_threshold` (0.5 → ~0.75) to fix the score floor. This alone should substantially improve precision at near-zero cost.
+2. **G2: LLM only for the residual fringe.** After threshold tuning, the LLM cluster tier handles only the truly ambiguous pairs that better string matching cannot resolve. Target: <50 LLM calls for a 1,000-entity corpus.
+3. **G4: betweenness cleanup as safety net.** Prunes any remaining false-positive bridge edges that slip through both string matching and LLM.
+
+**Tunable parameter grid for G1 validation:**
+
+| Parameter | Current | Search Range | Step |
+|-----------|---------|-------------|------|
+| `dist_threshold` | 0.4 | 0.15 – 0.40 | 0.05 |
+| `match_threshold` | 0.5 | 0.50 – 0.85 | 0.05 |
+| `jw_weight` | 0.4 | 0.2 – 0.6 | 0.1 |
+| `llm_low` | 0.3 | 0.3 – 0.6 | 0.1 |
+| `llm_high` | 0.7 | 0.7 – 0.9 | 0.05 |
+| `max_component_size` | unbounded | 10 – 30 | 5 |
 
 ### G3: Type-Aware Matching
 
@@ -519,7 +574,7 @@ def _pairwise_f1(predicted: dict[str, int], gold: dict[str, int]) -> dict[str, f
 
 **Current:** No ER-specific GBNF grammar in `src/llama_constants.h` (existing grammars: `GBNF_NER` at line 35, `GBNF_RE` at line 44, `GBNF_NER_RE` at line 54). No `muninn_extract_matches()` or similar SQL function. The `LlmERAdapter` in `kg_resolve.py` uses llama-cpp-python's `response_format` instead of GBNF.
 
-**Gap:** Two grammar formats to evaluate empirically, both prototyped via `muninn_chat(model, prompt, grammar)` — no C code changes needed. Lean toward Format B (clustering) based on SOTA research, but let the empirical evidence at scale 10-100 decide.
+**Gap:** ~~Two grammar formats to evaluate empirically~~ **Resolved (2026-03-28):** Empirical evaluation via `examples/entity_resolution/er_benchmark.py` across 25 permutations (4 models × 2 formats × 4 scales) confirmed Format B′ (numbered cluster) as the clear winner. See ADR above. Pairwise format retained only in grammar-debug subcommands for diagnostics.
 
 **Output(s):**
 - New Python constants for ER GBNF grammars (Format A: pairwise, Format B: clustering) — defined in the benchmark script, not in `src/llama_constants.h` (Python-only prototyping phase)
