@@ -4,28 +4,92 @@ Run muninn benchmarks on EC2 instead of locally. Supports single-instance runs f
 
 ## Architecture
 
+### Single Instance Mode
+
+```mermaid
+flowchart LR
+    subgraph local["fa:fa-laptop Local Machine"]
+        runner["runner.py<br/>setup / prime / run<br/>status / teardown"]
+    end
+
+    subgraph aws["fa:fa-cloud AWS"]
+        s3["fa:fa-database S3 Bucket<br/>/prep/ /heartbeat/ /runs/"]
+        ec2["fa:fa-server EC2 Instance<br/>spot or on-demand"]
+    end
+
+    runner -- "launch + monitor<br/>heartbeat 15s" --> ec2
+    ec2 -- "PUT heartbeat<br/>every 15s" --> s3
+    ec2 -- "upload results<br/>+ phase logs" --> s3
+    runner -- "poll heartbeat<br/>+ read results" --> s3
+
+    style local fill:#1a1a2e,stroke:#e94560,color:#eee
+    style aws fill:#0f3460,stroke:#16213e,color:#eee
+    style runner fill:#533483,stroke:#e94560,color:#eee
+    style s3 fill:#e94560,stroke:#fff,color:#fff
+    style ec2 fill:#16213e,stroke:#0f3460,color:#eee
 ```
-                                    ┌────────────────────────────┐
-                                    │   runner.py (local CLI)    │
-                                    │   prime / run / submit /   │
-                                    │   monitor / status /       │
-                                    │   teardown                 │
-                                    └──────┬─────────────────────┘
-                                           │
-                    ┌──────────────────────┼──────────────────────┐
-                    │                      │                      │
-              ┌─────▼─────┐         ┌──────▼──────┐        ┌─────▼─────┐
-              │ S3 Bucket │         │  SQS Queue  │        │    EC2    │
-              │           │         │  (per branch)│        │ Instance  │
-              │ /prep/    │◄────────│             │───────▶│ (spot or  │
-              │ /heartbeat│  enqueue│  + DLQ      │  poll  │  on-demand)│
-              │ /runs/    │         └─────────────┘        └───────────┘
-              └───────────┘                                      │
-                    ▲                                             │
-                    │              ┌─────────────┐               │
-                    └──────────────│  S3 Heartbeat│◄──────────────┘
-                     results +     │  every 15s   │   PUT heartbeat
-                     phase logs    └──────────────┘
+
+### Parallel Workers Mode (CDK)
+
+```mermaid
+flowchart LR
+    subgraph local["fa:fa-laptop Local"]
+        submit["runner.py submit"]
+        manifest["harness manifest<br/>--missing --commands"]
+    end
+
+    subgraph aws["fa:fa-cloud AWS (per branch)"]
+        sqs["fa:fa-inbox SQS Queue"]
+        dlq["fa:fa-archive DLQ<br/>poison pills"]
+        asg["fa:fa-layer-group ASG<br/>min=0 max=N"]
+        w1["fa:fa-server Worker 1"]
+        w2["fa:fa-server Worker 2"]
+        wn["fa:fa-server Worker N"]
+        s3["fa:fa-database S3<br/>results + heartbeats"]
+        cw["fa:fa-bell CW Alarm<br/>queue depth"]
+    end
+
+    manifest --> submit
+    submit -- "enqueue IDs" --> sqs
+    sqs -- "3 failures" --> dlq
+    cw -- "scale 0..N" --> asg
+    sqs -- "depth metric" --> cw
+    asg --> w1 & w2 & wn
+    w1 & w2 & wn -- "poll" --> sqs
+    w1 & w2 & wn -- "results + heartbeat" --> s3
+
+    style local fill:#1a1a2e,stroke:#e94560,color:#eee
+    style aws fill:#0f3460,stroke:#16213e,color:#eee
+    style submit fill:#533483,stroke:#e94560,color:#eee
+    style manifest fill:#533483,stroke:#e94560,color:#eee
+    style sqs fill:#e94560,stroke:#fff,color:#fff
+    style dlq fill:#7a1533,stroke:#e94560,color:#eee
+    style asg fill:#16213e,stroke:#0f3460,color:#eee
+    style s3 fill:#e94560,stroke:#fff,color:#fff
+    style cw fill:#16213e,stroke:#0f3460,color:#eee
+    style w1 fill:#2d4a22,stroke:#4ade80,color:#eee
+    style w2 fill:#2d4a22,stroke:#4ade80,color:#eee
+    style wn fill:#2d4a22,stroke:#4ade80,color:#eee
+```
+
+### AMI Lifecycle
+
+```mermaid
+flowchart LR
+    prime["runner.py prime<br/>cold start ~10min"] --> ami["fa:fa-compact-disc AMI<br/>branch + commit"]
+    ami --> w1["fa:fa-server Worker<br/>warm start ~30s"]
+    ami --> w2["fa:fa-server Worker<br/>warm start ~30s"]
+    ami --> w3["fa:fa-server Worker<br/>warm start ~30s"]
+    schedule["fa:fa-clock EventBridge<br/>weekly"] --> lambda["fa:fa-bolt Lambda<br/>prune >7 days"]
+    lambda -- "deregister AMI<br/>+ delete snapshots" --> ami
+
+    style prime fill:#533483,stroke:#e94560,color:#eee
+    style ami fill:#e94560,stroke:#fff,color:#fff
+    style w1 fill:#2d4a22,stroke:#4ade80,color:#eee
+    style w2 fill:#2d4a22,stroke:#4ade80,color:#eee
+    style w3 fill:#2d4a22,stroke:#4ade80,color:#eee
+    style schedule fill:#16213e,stroke:#0f3460,color:#eee
+    style lambda fill:#16213e,stroke:#0f3460,color:#eee
 ```
 
 ## Two Execution Models
