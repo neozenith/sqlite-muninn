@@ -225,6 +225,10 @@ echo ""
 echo "=== PHASE SUMMARY ==="
 cat "$PHASE_LOG"
 
+# ── Clean cloud-init so next boot from this AMI re-runs user-data ─
+cloud-init clean --logs 2>/dev/null || true
+rm -f /var/lib/cloud/instance/sem/config_scripts_user 2>/dev/null || true
+
 # ── Shutdown ──────────────────────────────────────────────────────
 set_phase "shutdown"
 echo ">>> Shutting down (ran $BENCHMARKS_RUN benchmark(s))..."

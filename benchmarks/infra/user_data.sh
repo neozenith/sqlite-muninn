@@ -235,6 +235,12 @@ echo ""
 echo "=== PHASE SUMMARY ==="
 cat "$PHASE_LOG"
 
+# ── Clean cloud-init state so next boot re-runs user-data ─────────
+# Without this, AMIs created from this instance would skip user-data
+# on launch (cloud-init considers it "already ran").
+cloud-init clean --logs 2>/dev/null || true
+rm -f /var/lib/cloud/instance/sem/config_scripts_user 2>/dev/null || true
+
 # ── Shutdown ──────────────────────────────────────────────────────
 set_phase "shutdown"
 echo ">>> Shutting down..."
