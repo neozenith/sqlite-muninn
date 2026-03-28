@@ -20,6 +20,7 @@ import boto3
 import dash
 import yaml
 from botocore.exceptions import ClientError
+import plotly.graph_objects as go
 from dash import dash_table, dcc, html
 from dash.dependencies import Input, Output
 
@@ -195,6 +196,13 @@ def create_app() -> dash.Dash:
                 ],
             ),
 
+            # ── Time Series Chart ─────────────────────────────
+            html.H3("Queue & Workers Over Time", style={"color": "#e94560", "marginBottom": "10px"}),
+            dcc.Graph(id="timeseries-chart", style={"height": "350px"}),
+
+            # Hidden store for time-series data
+            dcc.Store(id="timeseries-store", data={"timestamps": [], "visible": [], "inflight": [], "dlq": [], "workers": []}),
+
             # ── Instance Table ────────────────────────────────
             html.H3("Workers", style={"color": "#e94560", "marginBottom": "10px"}),
             html.Div(id="instance-table"),
@@ -225,15 +233,17 @@ def create_app() -> dash.Dash:
             Output("sqs-inflight-value", "children"),
             Output("sqs-dlq-value", "children"),
             Output("asg-desired-value", "children"),
+            Output("timeseries-chart", "figure"),
+            Output("timeseries-store", "data"),
             Output("instance-table", "children"),
             Output("event-log", "children"),
             Output("event-store", "data"),
             Output("last-updated", "children"),
         ],
         [Input("refresh", "n_intervals")],
-        [dash.State("event-store", "data")],
+        [dash.State("event-store", "data"), dash.State("timeseries-store", "data")],
     )
-    def update_dashboard(n_intervals, events):
+    def update_dashboard(n_intervals, events, ts_data):
         now = datetime.now(timezone.utc)
         ts = now.strftime("%H:%M:%S UTC")
 
@@ -245,7 +255,9 @@ def create_app() -> dash.Dash:
             instance_ids = [i["instance_id"] for i in instances]
             heartbeats = _get_heartbeats(cfg, instance_ids)
         except Exception as e:
-            return "?", "?", "?", "?", html.P(f"Error: {e}"), "", events, f"Error at {ts}"
+            empty_fig = go.Figure()
+            empty_fig.update_layout(template="plotly_dark", paper_bgcolor="#1a1a2e", plot_bgcolor="#0f3460")
+            return "?", "?", "?", "?", empty_fig, ts_data, html.P(f"Error: {e}"), "", events, f"Error at {ts}"
 
         # Build instance table rows
         rows = []
@@ -289,6 +301,52 @@ def create_app() -> dash.Dash:
         else:
             table = html.P("No workers running", style={"color": "#666", "padding": "20px"})
 
+        # ── Time series accumulation ──────────────────────
+        ts_data["timestamps"].append(ts)
+        ts_data["visible"].append(queue["visible"])
+        ts_data["inflight"].append(queue["in_flight"])
+        ts_data["dlq"].append(queue["dlq"])
+        ts_data["workers"].append(desired)
+
+        # Keep last 240 data points (~1 hour at 15s intervals)
+        max_points = 240
+        for k in ts_data:
+            if len(ts_data[k]) > max_points:
+                ts_data[k] = ts_data[k][-max_points:]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=ts_data["timestamps"], y=ts_data["visible"],
+            name="Queue Visible", mode="lines+markers",
+            line={"color": "#e94560", "width": 2}, marker={"size": 4},
+        ))
+        fig.add_trace(go.Scatter(
+            x=ts_data["timestamps"], y=ts_data["inflight"],
+            name="In Flight", mode="lines+markers",
+            line={"color": "#533483", "width": 2}, marker={"size": 4},
+        ))
+        fig.add_trace(go.Scatter(
+            x=ts_data["timestamps"], y=ts_data["dlq"],
+            name="Dead Letter", mode="lines+markers",
+            line={"color": "#7a1533", "width": 2, "dash": "dot"}, marker={"size": 4},
+        ))
+        fig.add_trace(go.Scatter(
+            x=ts_data["timestamps"], y=ts_data["workers"],
+            name="ASG Workers", mode="lines+markers",
+            line={"color": "#4ade80", "width": 2}, marker={"size": 4},
+            yaxis="y2",
+        ))
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#1a1a2e",
+            plot_bgcolor="#0f3460",
+            margin={"l": 50, "r": 50, "t": 30, "b": 40},
+            legend={"orientation": "h", "y": 1.12},
+            xaxis={"title": None, "gridcolor": "#16213e"},
+            yaxis={"title": "Messages", "gridcolor": "#16213e", "rangemode": "tozero"},
+            yaxis2={"title": "Workers", "overlaying": "y", "side": "right", "gridcolor": "#16213e", "rangemode": "tozero"},
+        )
+
         # Format event log (newest first)
         event_lines = []
         for e in reversed(events[-30:]):
@@ -300,9 +358,11 @@ def create_app() -> dash.Dash:
             str(queue["in_flight"]),
             str(queue["dlq"]),
             str(desired),
+            fig,
+            ts_data,
             table,
             event_text,
-            events[-50:],  # keep last 50 events
+            events[-50:],
             f"Last updated: {ts} (every {REFRESH_INTERVAL_MS // 1000}s)",
         )
 
