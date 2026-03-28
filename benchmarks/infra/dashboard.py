@@ -13,7 +13,8 @@ Usage:
 
 import json
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import boto3
@@ -41,7 +42,6 @@ def _load_config() -> dict:
 
 
 def _sanitize_branch(branch: str) -> str:
-    import re
 
     return re.sub(r"[^a-zA-Z0-9]", "-", branch).strip("-")[:64]
 
@@ -162,6 +162,151 @@ def _get_asg_desired(cfg: dict, outputs: dict) -> int:
         return 0
 
 
+def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> dict:
+    """Fetch SQS + ASG metrics from CloudWatch for the time-series chart.
+
+    Returns aligned time series from CloudWatch (not ephemeral in-memory state),
+    so a page refresh always shows the full history.
+    """
+    cw = boto3.client("cloudwatch", region_name=cfg["aws"]["ec2_region"])
+    queue_name = (outputs.get("QueueUrl") or "").rsplit("/", 1)[-1]
+    dlq_name = (outputs.get("DlqUrl") or "").rsplit("/", 1)[-1]
+    asg_name = outputs.get("AsgName", "")
+
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(hours=hours)
+    period = 60  # 1-minute granularity
+
+    result = {"timestamps": [], "visible": [], "inflight": [], "dlq": [], "workers": []}
+
+    if not queue_name:
+        return result
+
+    queries = [
+        {
+            "Id": "visible",
+            "MetricStat": {
+                "Metric": {"Namespace": "AWS/SQS", "MetricName": "ApproximateNumberOfMessagesVisible", "Dimensions": [{"Name": "QueueName", "Value": queue_name}]},
+                "Period": period, "Stat": "Maximum",
+            },
+        },
+        {
+            "Id": "inflight",
+            "MetricStat": {
+                "Metric": {"Namespace": "AWS/SQS", "MetricName": "ApproximateNumberOfMessagesNotVisible", "Dimensions": [{"Name": "QueueName", "Value": queue_name}]},
+                "Period": period, "Stat": "Maximum",
+            },
+        },
+    ]
+
+    if dlq_name:
+        queries.append({
+            "Id": "dlq",
+            "MetricStat": {
+                "Metric": {"Namespace": "AWS/SQS", "MetricName": "ApproximateNumberOfMessagesVisible", "Dimensions": [{"Name": "QueueName", "Value": dlq_name}]},
+                "Period": period, "Stat": "Maximum",
+            },
+        })
+
+    if asg_name:
+        queries.append({
+            "Id": "workers",
+            "MetricStat": {
+                "Metric": {"Namespace": "AWS/AutoScaling", "MetricName": "GroupInServiceInstances", "Dimensions": [{"Name": "AutoScalingGroupName", "Value": asg_name}]},
+                "Period": period, "Stat": "Maximum",
+            },
+        })
+
+    try:
+        resp = cw.get_metric_data(
+            MetricDataQueries=queries,
+            StartTime=start,
+            EndTime=now,
+        )
+    except ClientError:
+        return result
+
+    # Build aligned series — CloudWatch returns each metric separately
+    series = {}
+    for metric_result in resp.get("MetricDataResults", []):
+        mid = metric_result["Id"]
+        timestamps = metric_result.get("Timestamps", [])
+        values = metric_result.get("Values", [])
+        for ts_val, val in zip(timestamps, values):
+            ts_str = ts_val.strftime("%H:%M UTC")
+            series.setdefault(ts_str, {"visible": 0, "inflight": 0, "dlq": 0, "workers": 0})
+            series[ts_str][mid] = int(val)
+
+    # Sort by time and flatten
+    for ts_str in sorted(series.keys()):
+        result["timestamps"].append(ts_str)
+        result["visible"].append(series[ts_str]["visible"])
+        result["inflight"].append(series[ts_str]["inflight"])
+        result["dlq"].append(series[ts_str]["dlq"])
+        result["workers"].append(series[ts_str]["workers"])
+
+    return result
+
+
+def _get_asg_events(cfg: dict, outputs: dict, max_events: int = 20) -> list[dict]:
+    """Fetch ASG scaling activities: scale-up, scale-in, spot reclaim, unhealthy."""
+    asg_name = outputs.get("AsgName")
+    if not asg_name:
+        return []
+
+    asg_client = boto3.client("autoscaling", region_name=cfg["aws"]["ec2_region"])
+    try:
+        resp = asg_client.describe_scaling_activities(
+            AutoScalingGroupName=asg_name,
+            MaxRecords=max_events,
+        )
+    except ClientError:
+        return []
+
+    events = []
+    for act in resp.get("Activities", []):
+        cause = act.get("Cause", "")
+        ts = act["StartTime"].strftime("%H:%M:%S UTC")
+        description = act.get("Description", "")
+
+        # Classify the event
+        if "spot interruption" in cause.lower() or "spot instance" in description.lower():
+            event_type = "SPOT RECLAIM"
+        elif "unhealthy" in cause.lower():
+            event_type = "UNHEALTHY"
+        elif "shrinking" in cause.lower() or "changing the desired capacity from" in cause and "to 0" in cause:
+            event_type = "SCALE IN"
+        elif "launching" in description.lower() or "Launching" in description:
+            event_type = "SCALE OUT"
+        elif "terminating" in description.lower() or "Terminating" in description:
+            event_type = "TERMINATE"
+        else:
+            event_type = "ACTIVITY"
+
+        # Extract instance ID if present
+        instance_id = ""
+        if "instance" in cause.lower():
+            match = re.search(r"i-[0-9a-f]+", cause)
+            if match:
+                instance_id = match.group(0)[:12]
+
+        # Extract capacity change
+        capacity = ""
+        cap_match = re.search(r"from (\d+) to (\d+)", cause)
+        if cap_match:
+            capacity = f"{cap_match.group(1)}->{cap_match.group(2)}"
+
+        events.append({
+            "time": ts,
+            "type": event_type,
+            "instance": instance_id,
+            "capacity": capacity,
+            "status": act.get("StatusCode", ""),
+        })
+
+    return events
+
+
 # ── Dash App ──────────────────────────────────────────────────────
 
 
@@ -196,34 +341,17 @@ def create_app() -> dash.Dash:
                 ],
             ),
 
-            # ── Time Series Chart ─────────────────────────────
+            # ── Time Series Chart (backed by CloudWatch) ─────
             html.H3("Queue & Workers Over Time", style={"color": "#e94560", "marginBottom": "10px"}),
             dcc.Graph(id="timeseries-chart", style={"height": "350px"}),
-
-            # Hidden store for time-series data
-            dcc.Store(id="timeseries-store", data={"timestamps": [], "visible": [], "inflight": [], "dlq": [], "workers": []}),
 
             # ── Instance Table ────────────────────────────────
             html.H3("Workers", style={"color": "#e94560", "marginBottom": "10px"}),
             html.Div(id="instance-table"),
 
-            # ── Event Log ─────────────────────────────────────
-            html.H3("Event Log", style={"color": "#e94560", "marginTop": "30px", "marginBottom": "10px"}),
-            html.Div(
-                id="event-log",
-                style={
-                    "backgroundColor": "#0f3460",
-                    "padding": "15px",
-                    "borderRadius": "8px",
-                    "maxHeight": "300px",
-                    "overflowY": "auto",
-                    "fontSize": "13px",
-                    "whiteSpace": "pre-wrap",
-                },
-            ),
-
-            # Hidden store for event history
-            dcc.Store(id="event-store", data=[]),
+            # ── ASG Event Log (scaling activities) ────────────
+            html.H3("Scaling Events", style={"color": "#e94560", "marginTop": "30px", "marginBottom": "10px"}),
+            html.Div(id="event-table"),
         ],
     )
 
@@ -234,16 +362,13 @@ def create_app() -> dash.Dash:
             Output("sqs-dlq-value", "children"),
             Output("asg-desired-value", "children"),
             Output("timeseries-chart", "figure"),
-            Output("timeseries-store", "data"),
             Output("instance-table", "children"),
-            Output("event-log", "children"),
-            Output("event-store", "data"),
+            Output("event-table", "children"),
             Output("last-updated", "children"),
         ],
         [Input("refresh", "n_intervals")],
-        [dash.State("event-store", "data"), dash.State("timeseries-store", "data")],
     )
-    def update_dashboard(n_intervals, events, ts_data):
+    def update_dashboard(n_intervals):
         now = datetime.now(timezone.utc)
         ts = now.strftime("%H:%M:%S UTC")
 
@@ -254,12 +379,14 @@ def create_app() -> dash.Dash:
             desired = _get_asg_desired(cfg, outputs)
             instance_ids = [i["instance_id"] for i in instances]
             heartbeats = _get_heartbeats(cfg, instance_ids)
+            cw_data = _get_cloudwatch_timeseries(cfg, outputs, hours=1.0)
+            asg_events = _get_asg_events(cfg, outputs, max_events=20)
         except Exception as e:
             empty_fig = go.Figure()
             empty_fig.update_layout(template="plotly_dark", paper_bgcolor="#1a1a2e", plot_bgcolor="#0f3460")
-            return "?", "?", "?", "?", empty_fig, ts_data, html.P(f"Error: {e}"), "", events, f"Error at {ts}"
+            return "?", "?", "?", "?", empty_fig, html.P(f"Error: {e}"), "", f"Error at {ts}"
 
-        # Build instance table rows
+        # ── Instance table ────────────────────────────────
         rows = []
         for inst in instances:
             iid = inst["instance_id"]
@@ -267,14 +394,7 @@ def create_app() -> dash.Dash:
             phase = hb.get("phase", "n/a")
             age = hb.get("age_s", -1)
             hb_status = hb.get("status", "?")
-
-            # Track phase changes in event log
-            event_key = f"{iid}:{phase}"
-            if events and not any(e.get("key") == event_key for e in events[-20:]):
-                events.append({"key": event_key, "time": ts, "instance": iid[:12], "phase": phase})
-
             age_str = f"{age}s" if age >= 0 else "n/a"
-            status_color = "#4ade80" if hb_status == "OK" else "#ef4444" if hb_status == "STALE" else "#666"
 
             rows.append({
                 "Instance": iid,
@@ -301,39 +421,28 @@ def create_app() -> dash.Dash:
         else:
             table = html.P("No workers running", style={"color": "#666", "padding": "20px"})
 
-        # ── Time series accumulation ──────────────────────
-        ts_data["timestamps"].append(ts)
-        ts_data["visible"].append(queue["visible"])
-        ts_data["inflight"].append(queue["in_flight"])
-        ts_data["dlq"].append(queue["dlq"])
-        ts_data["workers"].append(desired)
-
-        # Keep last 240 data points (~1 hour at 15s intervals)
-        max_points = 240
-        for k in ts_data:
-            if len(ts_data[k]) > max_points:
-                ts_data[k] = ts_data[k][-max_points:]
-
+        # ── Time series chart (from CloudWatch, survives page refresh) ─
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=ts_data["timestamps"], y=ts_data["visible"],
-            name="Queue Visible", mode="lines+markers",
-            line={"color": "#e94560", "width": 2}, marker={"size": 4},
+            x=cw_data["timestamps"], y=cw_data["visible"],
+            name="Queue Visible", mode="lines",
+            line={"color": "#e94560", "width": 2},
+            fill="tozeroy", fillcolor="rgba(233,69,96,0.1)",
         ))
         fig.add_trace(go.Scatter(
-            x=ts_data["timestamps"], y=ts_data["inflight"],
-            name="In Flight", mode="lines+markers",
-            line={"color": "#533483", "width": 2}, marker={"size": 4},
+            x=cw_data["timestamps"], y=cw_data["inflight"],
+            name="In Flight", mode="lines",
+            line={"color": "#533483", "width": 2},
         ))
         fig.add_trace(go.Scatter(
-            x=ts_data["timestamps"], y=ts_data["dlq"],
-            name="Dead Letter", mode="lines+markers",
-            line={"color": "#7a1533", "width": 2, "dash": "dot"}, marker={"size": 4},
+            x=cw_data["timestamps"], y=cw_data["dlq"],
+            name="Dead Letter", mode="lines",
+            line={"color": "#ff6b6b", "width": 2, "dash": "dot"},
         ))
         fig.add_trace(go.Scatter(
-            x=ts_data["timestamps"], y=ts_data["workers"],
-            name="ASG Workers", mode="lines+markers",
-            line={"color": "#4ade80", "width": 2}, marker={"size": 4},
+            x=cw_data["timestamps"], y=cw_data["workers"],
+            name="ASG Workers", mode="lines",
+            line={"color": "#4ade80", "width": 3},
             yaxis="y2",
         ))
         fig.update_layout(
@@ -347,11 +456,29 @@ def create_app() -> dash.Dash:
             yaxis2={"title": "Workers", "overlaying": "y", "side": "right", "gridcolor": "#16213e", "rangemode": "tozero"},
         )
 
-        # Format event log (newest first)
-        event_lines = []
-        for e in reversed(events[-30:]):
-            event_lines.append(f"[{e['time']}] {e['instance']} -> {e['phase']}")
-        event_text = "\n".join(event_lines) if event_lines else "No events yet"
+        # ── Scaling events table (from ASG describe-scaling-activities) ─
+        if asg_events:
+            event_table = dash_table.DataTable(
+                data=asg_events,
+                columns=[
+                    {"name": "Time", "id": "time"},
+                    {"name": "Event", "id": "type"},
+                    {"name": "Instance", "id": "instance"},
+                    {"name": "Capacity", "id": "capacity"},
+                    {"name": "Status", "id": "status"},
+                ],
+                style_header={"backgroundColor": "#16213e", "color": "#eee", "fontWeight": "bold"},
+                style_cell={"backgroundColor": "#0f3460", "color": "#eee", "border": "1px solid #16213e", "fontSize": "13px", "padding": "6px"},
+                style_data_conditional=[
+                    {"if": {"filter_query": '{type} eq "SPOT RECLAIM"'}, "backgroundColor": "#7a1533", "color": "#ff6b6b"},
+                    {"if": {"filter_query": '{type} eq "SCALE OUT"'}, "backgroundColor": "#1a3a1a"},
+                    {"if": {"filter_query": '{type} eq "SCALE IN"'}, "backgroundColor": "#3a2a1a"},
+                    {"if": {"filter_query": '{type} eq "UNHEALTHY"'}, "backgroundColor": "#7a1533"},
+                ],
+                page_size=10,
+            )
+        else:
+            event_table = html.P("No scaling events", style={"color": "#666", "padding": "20px"})
 
         return (
             str(queue["visible"]),
@@ -359,10 +486,8 @@ def create_app() -> dash.Dash:
             str(queue["dlq"]),
             str(desired),
             fig,
-            ts_data,
             table,
-            event_text,
-            events[-50:],
+            event_table,
             f"Last updated: {ts} (every {REFRESH_INTERVAL_MS // 1000}s)",
         )
 
