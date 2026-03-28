@@ -57,6 +57,7 @@ if branch and ami_id:
     # Sanitize branch name for CloudFormation: [a-zA-Z0-9-] only
     safe_branch = re.sub(r"[^a-zA-Z0-9]", "-", branch).strip("-")[:64]
     stack_name = f"MuninnBench-{safe_branch}"
+    max_workers = int(app.node.try_get_context("max_workers") or "5")
 
     BenchStack(
         app,
@@ -65,6 +66,7 @@ if branch and ami_id:
         ami_id=ami_id,
         s3_bucket=s3_bucket,
         s3_region=s3_region,
+        max_workers=max_workers,
         env=env,
     )
 

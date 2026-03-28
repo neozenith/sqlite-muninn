@@ -181,16 +181,21 @@ log_phase "04_python_deps" "$PHASE_START"
 set_phase "05_benchmarks"
 PHASE_START=$SECONDS
 
-# Build the manifest query command
-MANIFEST_CMD="uv run --directory $WORK_DIR --no-sync -m benchmarks.harness"
-MANIFEST_CMD="$MANIFEST_CMD --s3-bucket $S3_BUCKET"
-MANIFEST_CMD="$MANIFEST_CMD manifest --commands --missing --limit $BENCH_LIMIT"
-if [ -n "$BENCH_CATEGORY" ]; then
-    MANIFEST_CMD="$MANIFEST_CMD --category $BENCH_CATEGORY"
-fi
+# If limit is 0, skip benchmarks entirely (prime-only mode)
+if [ "$BENCH_LIMIT" = "0" ]; then
+    echo "  Prime-only mode (limit=0). Skipping benchmarks."
+    BENCH_CMDS=""
+else
+    MANIFEST_CMD="uv run --directory $WORK_DIR --no-sync -m benchmarks.harness"
+    MANIFEST_CMD="$MANIFEST_CMD --s3-bucket $S3_BUCKET"
+    MANIFEST_CMD="$MANIFEST_CMD manifest --commands --missing --limit $BENCH_LIMIT"
+    if [ -n "$BENCH_CATEGORY" ]; then
+        MANIFEST_CMD="$MANIFEST_CMD --category $BENCH_CATEGORY"
+    fi
 
-echo "  Querying manifest: $MANIFEST_CMD"
-BENCH_CMDS=$(eval "$MANIFEST_CMD" 2>/dev/null || true)
+    echo "  Querying manifest: $MANIFEST_CMD"
+    BENCH_CMDS=$(eval "$MANIFEST_CMD" 2>/dev/null || true)
+fi
 
 if [ -z "$BENCH_CMDS" ]; then
     echo "  No missing benchmarks found. Nothing to do."
