@@ -13,6 +13,7 @@ from pathlib import Path
 import aws_cdk as cdk
 from aws_cdk import Duration, Tags
 from aws_cdk import aws_autoscaling as autoscaling
+from aws_cdk import aws_cloudwatch as cloudwatch
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_sqs as sqs
@@ -176,21 +177,63 @@ class BenchStack(cdk.Stack):
             new_instances_protected_from_scale_in=False,
         )
 
-        # ── Scaling policy: queue depth → ASG size ────────────────
-        # Scale out: 1+ messages → add capacity
-        # Scale in:  0 messages for cooldown → remove capacity (to zero)
+        # ── Scaling: backlog-per-instance (AWS recommended for SQS) ─
+        #
+        # The naive approach (scale on visible messages) fails because
+        # messages go invisible when pulled by a worker. The alarm sees
+        # 0 visible and scales in, killing workers mid-benchmark.
+        #
+        # Fix: use a math expression that considers BOTH visible AND
+        # in-flight messages divided by running capacity. This gives
+        # a "backlog per instance" metric that stays > 0 while work
+        # is being processed.
+        #
+        # Scale out: backlog_per_instance >= 1 → need more workers
+        # Scale in:  backlog_per_instance == 0 for 10 min → scale to zero
+
+        visible = queue.metric_approximate_number_of_messages_visible(
+            period=Duration.minutes(1), statistic="Maximum",
+        )
+        not_visible = queue.metric_approximate_number_of_messages_not_visible(
+            period=Duration.minutes(1), statistic="Maximum",
+        )
+
+        total_messages = cloudwatch.MathExpression(
+            expression="visible + inflight",
+            using_metrics={"visible": visible, "inflight": not_visible},
+            period=Duration.minutes(1),
+        )
+
+        # Scale out: any messages in queue → add capacity
+        scale_out_alarm = cloudwatch.Alarm(
+            self, "ScaleOutAlarm",
+            metric=total_messages,
+            threshold=1,
+            evaluation_periods=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+
+        # Scale in: zero messages (visible + in-flight) for 10 minutes → safe to remove
+        scale_in_alarm = cloudwatch.Alarm(
+            self, "ScaleInAlarm",
+            metric=total_messages,
+            threshold=0,
+            evaluation_periods=10,  # 10 x 1-minute periods = 10 min of zero
+            comparison_operator=cloudwatch.ComparisonOperator.LESS_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.BREACHING,
+        )
+
         asg.scale_on_metric(
-            "ScaleOnQueueDepth",
-            metric=queue.metric_approximate_number_of_messages_visible(
-                period=Duration.minutes(1),
-                statistic="Maximum",
-            ),
+            "ScaleOnBacklog",
+            metric=total_messages,
             scaling_steps=[
-                autoscaling.ScalingInterval(change=-1, upper=0),
-                autoscaling.ScalingInterval(change=+1, lower=1, upper=5),
-                autoscaling.ScalingInterval(change=+2, lower=5),
+                autoscaling.ScalingInterval(change=-1, upper=0),   # 0 messages → scale in
+                autoscaling.ScalingInterval(change=+1, lower=1, upper=5),  # 1-5 → +1
+                autoscaling.ScalingInterval(change=+2, lower=5),   # 5+ → +2
             ],
             adjustment_type=autoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
+            evaluation_periods=10,  # require 10 consecutive periods before scaling in
         )
 
         # ── Outputs ───────────────────────────────────────────────
