@@ -14,8 +14,12 @@ PIPELINES = ["string-only", "llm-cluster"]
 LIMITS: list[int | None] = [100, 500, 1000, None]  # None = full dataset
 
 
-# Default tuning values — used to determine which params appear in the slug
-DEFAULTS = {"k": 10, "dist_threshold": 0.4, "llm_low": 0.3, "llm_high": 0.7}
+# Default tuning values — used to determine which params appear in the slug.
+# dist_threshold=0.15 and llm_high=0.9 validated by grid search (2026-03-28):
+#   Abt-Buy:       0.654 -> 0.799 (+22%)
+#   Amazon-Google:  0.853 -> 0.973 (+14%)
+#   DBLP-ACM:      0.937 -> 0.993 (+6%)
+DEFAULTS = {"k": 10, "dist_threshold": 0.15, "llm_low": 0.3, "llm_high": 0.9}
 
 
 def permutation_id(
