@@ -471,7 +471,10 @@ def cmd_prime(args: argparse.Namespace) -> None:
     ami_id = ami_resp["ImageId"]
     log.info("AMI %s creating (this takes 5-15 minutes)...", ami_id)
 
-    ec2.get_waiter("image_available").wait(ImageIds=[ami_id])
+    ec2.get_waiter("image_available").wait(
+        ImageIds=[ami_id],
+        WaiterConfig={"Delay": 30, "MaxAttempts": 60},  # up to 30 minutes
+    )
     log.info("AMI %s ready.", ami_id)
 
     # Terminate the prime instance (AMI captured the volume)
