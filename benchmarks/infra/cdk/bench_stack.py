@@ -118,18 +118,25 @@ class BenchStack(cdk.Stack):
         )
         sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(22), "SSH")
 
-        # ── User data ────────────────────────────────────────────
+        # ── Worker script → S3 (not user-data) ──────────────────
+        # The AMI has a systemd service (muninn-worker.service) that runs on
+        # every boot and downloads s3://{bucket}/scripts/worker.sh. This
+        # bypasses cloud-init entirely — no first-boot vs subsequent-boot issues.
+        #
+        # CDK uploads the rendered worker script to S3 via a custom resource.
+        worker_script = USER_DATA_TEMPLATE.read_text(encoding="utf-8")
+        worker_script = worker_script.replace("__S3_BUCKET__", s3_bucket)
+        worker_script = worker_script.replace("__S3_REGION__", s3_region)
+        worker_script = worker_script.replace("__SQS_QUEUE_URL__", queue.queue_url)
+        worker_script = worker_script.replace("__REPO_URL__", "https://github.com/neozenith/sqlite-muninn.git")
+        worker_script = worker_script.replace("__BRANCH__", branch)
+
+        # Store for upload by runner.py deploy step
+        self._worker_script = worker_script
+        self._worker_s3_key = "scripts/worker.sh"
+
+        # No user-data needed — the systemd service handles boot execution
         user_data = ec2.UserData.for_linux()
-        user_data_script = USER_DATA_TEMPLATE.read_text(encoding="utf-8")
-
-        # Inject configuration
-        user_data_script = user_data_script.replace("__S3_BUCKET__", s3_bucket)
-        user_data_script = user_data_script.replace("__S3_REGION__", s3_region)
-        user_data_script = user_data_script.replace("__SQS_QUEUE_URL__", queue.queue_url)
-        user_data_script = user_data_script.replace("__REPO_URL__", "https://github.com/neozenith/sqlite-muninn.git")
-        user_data_script = user_data_script.replace("__BRANCH__", branch)
-
-        user_data.add_commands(user_data_script)
 
         # ── Launch template ───────────────────────────────────────
         lt = ec2.LaunchTemplate(

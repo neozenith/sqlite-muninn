@@ -1096,6 +1096,24 @@ def cmd_submit(args: argparse.Namespace) -> None:
             sys.exit(1)
         raise
 
+    # Upload the rendered worker script to S3 — the AMI's systemd service
+    # downloads this on boot (bypasses cloud-init entirely)
+    worker_template = PROJECT_ROOT / "benchmarks" / "infra" / "worker_user_data.sh"
+    worker_script = worker_template.read_text(encoding="utf-8")
+    worker_script = worker_script.replace("__S3_BUCKET__", aws_cfg["s3_bucket"])
+    worker_script = worker_script.replace("__S3_REGION__", aws_cfg["s3_region"])
+    worker_script = worker_script.replace("__SQS_QUEUE_URL__", queue_url)
+    worker_script = worker_script.replace("__REPO_URL__", cfg["repo"]["url"])
+    worker_script = worker_script.replace("__BRANCH__", branch)
+
+    s3 = boto3.client("s3", region_name=aws_cfg["s3_region"])
+    s3.put_object(
+        Bucket=aws_cfg["s3_bucket"],
+        Key="scripts/worker.sh",
+        Body=worker_script.encode("utf-8"),
+    )
+    log.info("Uploaded worker script to s3://%s/scripts/worker.sh", aws_cfg["s3_bucket"])
+
     # Query the harness manifest for missing benchmarks
     manifest_cmd = [
         "uv", "run", "--no-sync", "-m", "benchmarks.harness",

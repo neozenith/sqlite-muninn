@@ -235,11 +235,58 @@ echo ""
 echo "=== PHASE SUMMARY ==="
 cat "$PHASE_LOG"
 
-# ── Clean cloud-init state so next boot re-runs user-data ─────────
-# Without this, AMIs created from this instance would skip user-data
-# on launch (cloud-init considers it "already ran").
-cloud-init clean --logs 2>/dev/null || true
-rm -f /var/lib/cloud/instance/sem/config_scripts_user 2>/dev/null || true
+# ── Install systemd worker service (runs on every boot from AMI) ──
+# Cloud-init user-data only runs on first boot. This systemd service
+# bypasses cloud-init entirely — it downloads a worker script from S3
+# and executes it on every boot after networking is available.
+WORKER_BOOTSTRAP="/usr/local/bin/muninn-worker-bootstrap.sh"
+WORKER_SERVICE="/etc/systemd/system/muninn-worker.service"
+
+cat > "$WORKER_BOOTSTRAP" << 'BOOTSTRAP_EOF'
+#!/bin/bash
+set -euo pipefail
+export PATH="/usr/local/bin:/root/.local/bin:/home/ubuntu/.local/bin:/usr/lib/ccache:$PATH"
+export CCACHE_DIR="/home/ubuntu/.ccache"
+
+S3_BUCKET="__S3_BUCKET__"
+S3_REGION="__S3_REGION__"
+
+# Download the latest worker script from S3
+SCRIPT_PATH="/tmp/muninn-worker.sh"
+aws s3 cp "s3://${S3_BUCKET}/scripts/worker.sh" "$SCRIPT_PATH" --region "$S3_REGION" 2>/dev/null
+
+if [ -f "$SCRIPT_PATH" ]; then
+    exec bash "$SCRIPT_PATH"
+else
+    echo "No worker script found in S3. Idle boot (prime instance)."
+fi
+BOOTSTRAP_EOF
+chmod +x "$WORKER_BOOTSTRAP"
+
+# Substitute the bucket/region into the bootstrap script
+sed -i "s|__S3_BUCKET__|${S3_BUCKET}|g" "$WORKER_BOOTSTRAP"
+sed -i "s|__S3_REGION__|${S3_REGION}|g" "$WORKER_BOOTSTRAP"
+
+cat > "$WORKER_SERVICE" << 'SERVICE_EOF'
+[Unit]
+Description=Muninn Benchmark Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/muninn-worker-bootstrap.sh
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+systemctl daemon-reload
+systemctl enable muninn-worker.service
+echo "  Systemd worker service installed and enabled"
 
 # ── Shutdown ──────────────────────────────────────────────────────
 set_phase "shutdown"
