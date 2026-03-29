@@ -175,7 +175,15 @@ def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> 
 
     now = datetime.now(timezone.utc)
     start = now - timedelta(hours=hours)
-    period = 60  # 1-minute granularity
+
+    # CloudWatch limits to 1440 data points per query.
+    # Scale the period to keep within that limit.
+    if hours <= 3:
+        period = 60       # 1-minute granularity
+    elif hours <= 24:
+        period = 300      # 5-minute granularity
+    else:
+        period = 3600     # 1-hour granularity
 
     result = {"timestamps": [], "visible": [], "inflight": [], "dlq": [], "workers": []}
 
@@ -227,18 +235,19 @@ def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> 
         return result
 
     # Build aligned series — CloudWatch returns each metric separately
+    ts_fmt = "%H:%M" if hours <= 24 else "%m-%d %H:%M"
     series = {}
     for metric_result in resp.get("MetricDataResults", []):
         mid = metric_result["Id"]
         timestamps = metric_result.get("Timestamps", [])
         values = metric_result.get("Values", [])
         for ts_val, val in zip(timestamps, values):
-            ts_str = ts_val.strftime("%H:%M UTC")
-            series.setdefault(ts_str, {"visible": 0, "inflight": 0, "dlq": 0, "workers": 0})
+            ts_str = ts_val.strftime(ts_fmt)
+            series.setdefault(ts_str, {"visible": 0, "inflight": 0, "dlq": 0, "workers": 0, "_sort": ts_val})
             series[ts_str][mid] = int(val)
 
-    # Sort by time and flatten
-    for ts_str in sorted(series.keys()):
+    # Sort by actual timestamp and flatten
+    for ts_str in sorted(series.keys(), key=lambda k: series[k].get("_sort", k)):
         result["timestamps"].append(ts_str)
         result["visible"].append(series[ts_str]["visible"])
         result["inflight"].append(series[ts_str]["inflight"])
@@ -342,7 +351,28 @@ def create_app() -> dash.Dash:
             ),
 
             # ── Time Series Chart (backed by CloudWatch) ─────
-            html.H3("Queue & Workers Over Time", style={"color": "#e94560", "marginBottom": "10px"}),
+            html.Div(
+                style={"display": "flex", "alignItems": "center", "gap": "15px", "marginBottom": "10px"},
+                children=[
+                    html.H3("Queue & Workers Over Time", style={"color": "#e94560", "margin": "0"}),
+                    dcc.RadioItems(
+                        id="time-range",
+                        options=[
+                            {"label": "1h", "value": 1},
+                            {"label": "3h", "value": 3},
+                            {"label": "12h", "value": 12},
+                            {"label": "1d", "value": 24},
+                            {"label": "3d", "value": 72},
+                            {"label": "7d", "value": 168},
+                        ],
+                        value=1,
+                        inline=True,
+                        style={"color": "#aaa", "fontSize": "13px"},
+                        inputStyle={"marginRight": "4px"},
+                        labelStyle={"marginRight": "12px", "cursor": "pointer"},
+                    ),
+                ],
+            ),
             dcc.Graph(id="timeseries-chart", style={"height": "350px"}),
 
             # ── Instance Table ────────────────────────────────
@@ -366,9 +396,9 @@ def create_app() -> dash.Dash:
             Output("event-table", "children"),
             Output("last-updated", "children"),
         ],
-        [Input("refresh", "n_intervals")],
+        [Input("refresh", "n_intervals"), Input("time-range", "value")],
     )
-    def update_dashboard(n_intervals):
+    def update_dashboard(n_intervals, time_range_hours):
         now = datetime.now(timezone.utc)
         ts = now.strftime("%H:%M:%S UTC")
 
@@ -379,7 +409,7 @@ def create_app() -> dash.Dash:
             desired = _get_asg_desired(cfg, outputs)
             instance_ids = [i["instance_id"] for i in instances]
             heartbeats = _get_heartbeats(cfg, instance_ids)
-            cw_data = _get_cloudwatch_timeseries(cfg, outputs, hours=1.0)
+            cw_data = _get_cloudwatch_timeseries(cfg, outputs, hours=float(time_range_hours or 1))
             asg_events = _get_asg_events(cfg, outputs, max_events=20)
         except Exception as e:
             empty_fig = go.Figure()
