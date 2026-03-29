@@ -86,8 +86,13 @@ def run(
       3. LLM clustering of borderline components (if llm_low < llm_high)
       4. Leiden clustering on all edges
     """
+    # Stage 1: KNN blocking
+    t_block = time.perf_counter()
     id_map, name_map, candidate_pairs = block(conn, k, dist_threshold)
+    blocking_time = time.perf_counter() - t_block
 
+    # Stage 2: Scoring cascade
+    t_score = time.perf_counter()
     match_edges: list[tuple[str, str, float]] = []
     borderline_pairs: list[tuple[int, int]] = []
     n_auto_accepted = 0
@@ -118,7 +123,9 @@ def run(
         else:
             n_auto_rejected += 1
 
-    # Find connected components and split oversized ones
+    scoring_time = time.perf_counter() - t_score
+
+    # Stage 3: LLM clustering of borderline components
     components = _connected_components(borderline_pairs)
     components = _split_oversized(components, MAX_COMPONENT_SIZE)
 
@@ -168,8 +175,11 @@ def run(
         avg_comp_size,
     )
 
+    # Stage 4: Leiden clustering
+    t_leiden = time.perf_counter()
     all_entity_ids = list(id_map.values())
     clusters = leiden_cluster(conn, all_entity_ids, match_edges)
+    leiden_time = time.perf_counter() - t_leiden
 
     stats = {
         "params": {
@@ -188,7 +198,12 @@ def run(
         "avg_component_size": round(avg_comp_size, 2),
         "component_size_variance": round(comp_size_var, 2),
         "llm_calls": llm_calls,
-        "llm_time_s": round(llm_time, 3),
+        "timing": {
+            "blocking_s": round(blocking_time, 3),
+            "scoring_s": round(scoring_time, 3),
+            "llm_s": round(llm_time, 3),
+            "leiden_s": round(leiden_time, 3),
+        },
     }
     return clusters, stats
 
