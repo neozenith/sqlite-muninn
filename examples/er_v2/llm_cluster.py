@@ -22,6 +22,7 @@ from collections import defaultdict
 from .blocking import embed_and_block, leiden_cluster
 from .datasets import Entity
 from .jaro_winkler import jaro_winkler
+from .models import DEFAULT_EMBED_MODEL
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ def run(
     jw_weight: float = 0.4,
     llm_low: float = 0.3,
     llm_high: float = 0.7,
+    embed_model_name: str = DEFAULT_EMBED_MODEL,
 ) -> tuple[dict[str, int], dict]:
     """Run LLM-cluster ER pipeline. Returns (entity_id -> cluster_id, stats).
 
@@ -85,7 +87,7 @@ def run(
       5. One LLM call per component -> parse numbered groups -> match edges
       6. Leiden clustering on all edges
     """
-    id_map, name_map, candidate_pairs = embed_and_block(conn, entities, k, dist_threshold)
+    id_map, name_map, candidate_pairs = embed_and_block(conn, entities, k, dist_threshold, embed_model_name)
 
     match_edges: list[tuple[str, str, float]] = []
     borderline_pairs: list[tuple[int, int]] = []
@@ -170,6 +172,7 @@ def run(
     clusters = leiden_cluster(conn, entities, match_edges)
 
     stats = {
+        "embed_model": embed_model_name,
         "params": {
             "k": k,
             "dist_threshold": dist_threshold,

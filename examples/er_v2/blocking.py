@@ -2,13 +2,17 @@
 
 Embeds entity names via muninn_embed() into an HNSW index, then
 finds candidate pairs via KNN search with cosine distance filtering.
+
+Supports embedding model prefixes (e.g., Nomic's "clustering: " prefix)
+via the EmbedModelConfig.prefix field.
 """
 
 import logging
 import sqlite3
+from collections import defaultdict
 
 from .datasets import Entity
-from .models import EMBED_MODEL
+from .models import DEFAULT_EMBED_MODEL, EMBED_MODELS
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +22,7 @@ def embed_and_block(
     entities: list[Entity],
     k: int = 10,
     dist_threshold: float = 0.4,
+    embed_model_name: str = DEFAULT_EMBED_MODEL,
 ) -> tuple[dict[int, str], dict[int, str], dict[tuple[int, int], float]]:
     """Create entities table, embed into HNSW, run KNN blocking.
 
@@ -26,17 +31,28 @@ def embed_and_block(
         name_map: rowid -> entity name
         candidate_pairs: (min_rowid, max_rowid) -> cosine_distance
     """
+    embed_model = EMBED_MODELS[embed_model_name]
+    prefix = embed_model.prefix
+
     conn.execute("CREATE TABLE entities(entity_id TEXT, name TEXT, source TEXT)")
     for e in entities:
         conn.execute("INSERT INTO entities VALUES(?, ?, ?)", (e.id, e.name, e.source))
 
-    dim = conn.execute("SELECT muninn_model_dim(?)", (EMBED_MODEL.name,)).fetchone()[0]
+    dim = conn.execute("SELECT muninn_model_dim(?)", (embed_model.name,)).fetchone()[0]
     conn.execute(f"CREATE VIRTUAL TABLE entity_vecs USING hnsw_index(dimensions={dim}, metric=cosine)")
-    conn.execute(
-        "INSERT INTO entity_vecs(rowid, vector) SELECT rowid, muninn_embed(?, name) FROM entities",
-        (EMBED_MODEL.name,),
-    )
-    log.info("Embedded %d entities (dim=%d)", len(entities), dim)
+
+    if prefix:
+        # Prepend task prefix before embedding (e.g., "clustering: " for Nomic)
+        conn.execute(
+            "INSERT INTO entity_vecs(rowid, vector) SELECT rowid, muninn_embed(?, ? || name) FROM entities",
+            (embed_model.name, prefix),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO entity_vecs(rowid, vector) SELECT rowid, muninn_embed(?, name) FROM entities",
+            (embed_model.name,),
+        )
+    log.info("Embedded %d entities (dim=%d, model=%s, prefix=%r)", len(entities), dim, embed_model.name, prefix or "")
 
     id_map: dict[int, str] = {}
     name_map: dict[int, str] = {}
@@ -101,8 +117,6 @@ def leiden_cluster(
 
 
 def _cluster_sizes(clusters: dict[str, int]) -> dict[int, int]:
-    from collections import defaultdict
-
     sizes: dict[int, int] = defaultdict(int)
     for cid in clusters.values():
         sizes[cid] += 1

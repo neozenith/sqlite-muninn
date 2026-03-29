@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .datasets import DATASETS, load_dataset
 from .metrics import bcubed_f1, pairwise_f1
-from .models import CHAT_MODELS, create_db, register_chat_model
+from .models import CHAT_MODELS, DEFAULT_EMBED_MODEL, EMBED_MODELS, create_db, register_chat_model
 from .registry import DEFAULTS, LIMITS, PIPELINES, RESULTS_DIR, permutation_id, permutation_manifest, print_manifest
 
 log = logging.getLogger(__name__)
@@ -96,6 +96,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     pipeline = args.pipeline
     model_name = args.model or "-"
     limit = args.limit
+    embed_model_name = args.embed_model
 
     # Tuning params (defaults from registry.DEFAULTS)
     k = args.k
@@ -113,7 +114,15 @@ def cmd_run(args: argparse.Namespace) -> None:
         raise SystemExit(f"Unknown model: {model_name}. Available: {', '.join(CHAT_MODELS)}")
 
     perm_id = permutation_id(
-        ds_slug, pipeline, model_name, limit, k=k, dist_threshold=dist, llm_low=llm_low, llm_high=llm_high
+        ds_slug,
+        pipeline,
+        model_name,
+        limit,
+        embed_model=embed_model_name,
+        k=k,
+        dist_threshold=dist,
+        llm_low=llm_low,
+        llm_high=llm_high,
     )
     out_path = RESULTS_DIR / f"{perm_id}.json"
 
@@ -127,7 +136,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     entities, gold = load_dataset(cfg, limit)
 
     # Create DB
-    conn = create_db()
+    conn = create_db(embed_model_name=embed_model_name)
 
     # Run pipeline
     predicted: dict[str, int] = {}
@@ -137,14 +146,23 @@ def cmd_run(args: argparse.Namespace) -> None:
     if pipeline == "string-only":
         from .string_only import run as run_string_only
 
-        predicted, stats = run_string_only(conn, entities, k=k, dist_threshold=dist, match_threshold=llm_high)
+        predicted, stats = run_string_only(
+            conn, entities, k=k, dist_threshold=dist, match_threshold=llm_high, embed_model_name=embed_model_name
+        )
     else:  # llm-cluster
         from .llm_cluster import run as run_llm_cluster
 
         chat_model = CHAT_MODELS[model_name]
         register_chat_model(conn, chat_model)
         predicted, stats = run_llm_cluster(
-            conn, entities, model_name=model_name, k=k, dist_threshold=dist, llm_low=llm_low, llm_high=llm_high
+            conn,
+            entities,
+            model_name=model_name,
+            k=k,
+            dist_threshold=dist,
+            llm_low=llm_low,
+            llm_high=llm_high,
+            embed_model_name=embed_model_name,
         )
 
     elapsed = time.perf_counter() - t0
@@ -274,6 +292,13 @@ def _tuning_summary(r: dict) -> str:
 # ── CLI Parser ────────────────────────────────────────────────────
 
 
+def cmd_errors(args: argparse.Namespace) -> None:
+    """Analyse FP/FN failure modes for a dataset."""
+    from .analyse_errors import analyse
+
+    analyse(args.dataset, args.limit)
+
+
 def _help(p: argparse.ArgumentParser):
     def _print_help(_: argparse.Namespace) -> None:
         p.print_help()
@@ -305,6 +330,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pipeline", required=True, choices=PIPELINES, help="Pipeline implementation")
     p.add_argument("--model", choices=list(CHAT_MODELS.keys()), help="Chat model (required for llm-cluster)")
     p.add_argument("--limit", type=int, choices=[x for x in LIMITS if x], help="Max entities (omit for full)")
+    p.add_argument(
+        "--embed-model",
+        choices=list(EMBED_MODELS.keys()),
+        default=DEFAULT_EMBED_MODEL,
+        help=f"Embedding model (default: {DEFAULT_EMBED_MODEL})",
+    )
     p.add_argument("--k", type=int, default=DEFAULTS["k"], help=f"KNN neighbors (default: {DEFAULTS['k']})")
     p.add_argument(
         "--dist",
@@ -330,6 +361,12 @@ def build_parser() -> argparse.ArgumentParser:
     # analyse
     p = sub.add_parser("analyse", help="Print comparison table from accumulated results")
     p.set_defaults(func=cmd_analyse)
+
+    # errors
+    p = sub.add_parser("errors", help="Analyse FP/FN failure modes for a dataset")
+    p.add_argument("--dataset", required=True, choices=list(DATASETS.keys()), help="Dataset to analyse")
+    p.add_argument("--limit", type=int, default=None, help="Max entities (omit for full)")
+    p.set_defaults(func=cmd_errors)
 
     return parser
 

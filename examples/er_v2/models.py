@@ -18,6 +18,7 @@ class EmbedModelConfig:
     name: str
     filename: str
     url: str
+    prefix: str = ""  # Task prefix prepended to text before embedding (e.g., "clustering: " for Nomic)
 
 
 @dataclass
@@ -28,13 +29,23 @@ class ChatModelConfig:
     size_gb: float
 
 
-# ── Embedding Model ───────────────────────────────────────────────
+# ── Embedding Models ──────────────────────────────────────────────
 
-EMBED_MODEL = EmbedModelConfig(
-    name="MiniLM",
-    filename="all-MiniLM-L6-v2.Q8_0.gguf",
-    url="https://huggingface.co/leliuga/all-MiniLM-L6-v2-GGUF/resolve/main/all-MiniLM-L6-v2.Q8_0.gguf",
-)
+EMBED_MODELS: dict[str, EmbedModelConfig] = {
+    "MiniLM": EmbedModelConfig(
+        name="MiniLM",
+        filename="all-MiniLM-L6-v2.Q8_0.gguf",
+        url="https://huggingface.co/leliuga/all-MiniLM-L6-v2-GGUF/resolve/main/all-MiniLM-L6-v2.Q8_0.gguf",
+    ),
+    "NomicEmbed": EmbedModelConfig(
+        name="NomicEmbed",
+        filename="nomic-embed-text-v1.5.Q8_0.gguf",
+        url="https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf",
+        prefix="clustering: ",  # Symmetric clustering prefix per Nomic docs
+    ),
+}
+
+DEFAULT_EMBED_MODEL = "MiniLM"
 
 # ── Chat Models ───────────────────────────────────────────────────
 
@@ -100,18 +111,19 @@ def ensure_model(model: EmbedModelConfig | ChatModelConfig) -> Path:
     return path
 
 
-def create_db() -> sqlite3.Connection:
+def create_db(embed_model_name: str = DEFAULT_EMBED_MODEL) -> sqlite3.Connection:
     """Create in-memory SQLite with muninn loaded and embedding model registered."""
+    embed_model = EMBED_MODELS[embed_model_name]
     conn = sqlite3.connect(":memory:")
     conn.enable_load_extension(True)
     conn.load_extension(EXTENSION_PATH)
 
-    ensure_model(EMBED_MODEL)
+    ensure_model(embed_model)
     conn.execute(
         "INSERT INTO temp.muninn_models(name, model) SELECT ?, muninn_embed_model(?)",
-        (EMBED_MODEL.name, str(MODELS_DIR / EMBED_MODEL.filename)),
+        (embed_model.name, str(MODELS_DIR / embed_model.filename)),
     )
-    log.info("Loaded embedding model: %s", EMBED_MODEL.name)
+    log.info("Loaded embedding model: %s", embed_model.name)
     return conn
 
 

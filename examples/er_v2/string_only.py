@@ -14,6 +14,7 @@ import sqlite3
 from .blocking import embed_and_block, leiden_cluster
 from .datasets import Entity
 from .jaro_winkler import jaro_winkler
+from .models import DEFAULT_EMBED_MODEL
 
 log = logging.getLogger(__name__)
 
@@ -26,9 +27,10 @@ def run(
     dist_threshold: float = 0.4,
     match_threshold: float = 0.5,
     jw_weight: float = 0.4,
+    embed_model_name: str = DEFAULT_EMBED_MODEL,
 ) -> tuple[dict[str, int], dict]:
     """Run string-only ER pipeline. Returns (entity_id -> cluster_id, stats)."""
-    id_map, name_map, candidate_pairs = embed_and_block(conn, entities, k, dist_threshold)
+    id_map, name_map, candidate_pairs = embed_and_block(conn, entities, k, dist_threshold, embed_model_name)
 
     match_edges: list[tuple[str, str, float]] = []
     for (r1, r2), cosine_dist in candidate_pairs.items():
@@ -54,6 +56,7 @@ def run(
     clusters = leiden_cluster(conn, entities, match_edges)
 
     stats = {
+        "embed_model": embed_model_name,
         "params": {
             "k": k,
             "dist_threshold": dist_threshold,

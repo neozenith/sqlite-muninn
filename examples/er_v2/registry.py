@@ -6,7 +6,7 @@ Generates the full cross-product of benchmark configurations with build status.
 from pathlib import Path
 
 from .datasets import DATASETS
-from .models import CHAT_MODELS
+from .models import CHAT_MODELS, DEFAULT_EMBED_MODEL
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
@@ -28,6 +28,7 @@ def permutation_id(
     model: str,
     limit: int | None,
     *,
+    embed_model: str = DEFAULT_EMBED_MODEL,
     k: int = DEFAULTS["k"],
     dist_threshold: float = DEFAULTS["dist_threshold"],
     llm_low: float = DEFAULTS["llm_low"],
@@ -44,6 +45,8 @@ def permutation_id(
 
     # Append non-default tuning params as k=V segments
     tuning: list[str] = []
+    if embed_model != DEFAULT_EMBED_MODEL:
+        tuning.append(f"emb-{embed_model}")
     if k != DEFAULTS["k"]:
         tuning.append(f"k{k}")
     if dist_threshold != DEFAULTS["dist_threshold"]:
