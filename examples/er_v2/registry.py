@@ -1,101 +1,94 @@
-"""Permutation registry: datasets x pipelines x models x limits.
+"""Permutation registry: full cross-product of 4 parameters × 3 datasets.
 
-Generates the full cross-product of benchmark configurations with build status.
+Parameters (explored in this order, slowest-varying first):
+  1. dist_threshold:    0.05 – 0.40  step 0.05  (8 values)
+  2. jw_weight:         1.0  – 0.0   step 0.05  (21 values)
+  3. llm_high:          1.0  – 0.80  step 0.01  (21 values)
+  4. borderline_delta:  0.0  – 0.20  step 0.01  (21 values)
+
+Total: 8 × 21 × 21 × 21 × 3 datasets = 222,264 permutations.
+Sorted so dist varies slowest, delta varies fastest.
+Delta=0 runs (no LLM) come first within each (dist, jw, hi) group.
 """
 
 from pathlib import Path
 
-from .datasets import DATASETS
-from .models import CHAT_MODELS, DEFAULT_EMBED_MODEL
-
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
-PIPELINES = ["string-only", "llm-cluster"]
-LIMITS: list[int | None] = [100, 500, 1000, None]  # None = full dataset
+# Fixed configuration
+EMBED_MODEL = "NomicEmbed"
+CHAT_MODEL = "Qwen3.5-4B"
 
+# Sweep ranges
+DIST_RANGE = [round(0.05 + i * 0.05, 2) for i in range(8)]  # 0.05 – 0.40
+JW_RANGE = [round(1.0 - i * 0.05, 2) for i in range(21)]  # 1.0 – 0.0
+LLM_HIGH_RANGE = [round(1.0 - i * 0.05, 2) for i in range(5)]  # 1.0 – 0.80 step 0.05
+DELTA_RANGE = [0.0, 0.05]  # 0.0 = no LLM, 0.05 = narrow LLM window
 
-# Default tuning values — used to determine which params appear in the slug.
-# dist_threshold=0.15 and llm_high=0.9 validated by grid search (2026-03-28):
-#   Abt-Buy:       0.654 -> 0.799 (+22%)
-#   Amazon-Google:  0.853 -> 0.973 (+14%)
-#   DBLP-ACM:      0.937 -> 0.993 (+6%)
-DEFAULTS = {"k": 10, "dist_threshold": 0.15, "llm_low": 0.3, "llm_high": 0.9}
+DATASETS_LIST = ["amazon-google", "dblp-acm"]  # Abt-Buy deferred (needs name+description embeddings)
 
 
 def permutation_id(
     dataset: str,
-    pipeline: str,
-    model: str,
-    limit: int | None,
     *,
-    embed_model: str = DEFAULT_EMBED_MODEL,
-    k: int = DEFAULTS["k"],
-    dist_threshold: float = DEFAULTS["dist_threshold"],
-    llm_low: float = DEFAULTS["llm_low"],
-    llm_high: float = DEFAULTS["llm_high"],
+    dist_threshold: float,
+    jw_weight: float,
+    llm_high: float,
+    borderline_delta: float,
 ) -> str:
-    """Build a unique permutation slug.
-
-    Only non-default tuning params are included in the slug, so the default
-    manifest permutations keep their existing IDs. Manual runs with custom
-    params get longer, distinguishable filenames.
-    """
-    limit_str = str(limit) if limit else "full"
-    slug = f"{dataset}__{pipeline}__{model}__{limit_str}"
-
-    # Append non-default tuning params as k=V segments
-    tuning: list[str] = []
-    if embed_model != DEFAULT_EMBED_MODEL:
-        tuning.append(f"emb-{embed_model}")
-    if k != DEFAULTS["k"]:
-        tuning.append(f"k{k}")
-    if dist_threshold != DEFAULTS["dist_threshold"]:
-        tuning.append(f"dist{dist_threshold:.2f}")
-    if llm_low != DEFAULTS["llm_low"]:
-        tuning.append(f"lo{llm_low:.2f}")
-    if llm_high != DEFAULTS["llm_high"]:
-        tuning.append(f"hi{llm_high:.2f}")
-
-    if tuning:
-        slug += "__" + "_".join(tuning)
-    return slug
+    """Build a unique permutation slug encoding all 4 parameters."""
+    llm_low = round(llm_high - borderline_delta, 4)
+    return f"{dataset}__dist{dist_threshold:.2f}_jw{jw_weight:.2f}_hi{llm_high:.2f}_lo{llm_low:.2f}"
 
 
 def permutation_manifest(output_dir: Path | None = None) -> list[dict]:
-    """Build manifest of all permutations with build status.
+    """Build the full cross-product manifest.
 
-    Returns list of dicts with: permutation_id, dataset, pipeline, model, limit,
-    done, output_path, sort_key, label.
+    Sorted: dist (slowest) → jw → llm_high → delta (fastest) → dataset.
+    This means delta=0 (no LLM) runs come first within each parameter combo.
     """
     out = output_dir or RESULTS_DIR
     entries: list[dict] = []
 
-    for ds_slug, ds_cfg in DATASETS.items():
-        for pipeline in PIPELINES:
-            models = list(CHAT_MODELS.keys()) if pipeline == "llm-cluster" else ["-"]
-            for model in models:
-                for limit in LIMITS:
-                    perm_id = permutation_id(ds_slug, pipeline, model, limit)
-                    out_path = out / f"{perm_id}.json"
-                    done = out_path.exists()
-
-                    # Sort key: limit first (cheapest), then dataset, pipeline, model
-                    sort_limit = limit if limit else 99999
-                    entries.append(
-                        {
-                            "permutation_id": perm_id,
-                            "dataset": ds_slug,
-                            "pipeline": pipeline,
-                            "model": model,
-                            "limit": limit,
-                            "done": done,
-                            "output_path": out_path,
-                            "sort_key": (sort_limit, ds_slug, pipeline, model),
-                            "label": f"{ds_cfg.display_name} / {pipeline} / {model} / {limit or 'full'}",
-                        }
-                    )
+    for dist in DIST_RANGE:
+        for jw in JW_RANGE:
+            for hi in LLM_HIGH_RANGE:
+                for delta in DELTA_RANGE:
+                    for ds_slug in DATASETS_LIST:
+                        _add_entry(entries, out, ds_slug, dist=dist, jw=jw, hi=hi, delta=delta)
 
     return entries
+
+
+def _add_entry(
+    entries: list[dict],
+    out: Path,
+    ds_slug: str,
+    *,
+    dist: float,
+    jw: float,
+    hi: float,
+    delta: float,
+) -> None:
+    perm_id = permutation_id(ds_slug, dist_threshold=dist, jw_weight=jw, llm_high=hi, borderline_delta=delta)
+    out_path = out / f"{perm_id}.json"
+    llm_low = round(hi - delta, 4)
+    entries.append(
+        {
+            "permutation_id": perm_id,
+            "dataset": ds_slug,
+            "dist_threshold": dist,
+            "jw_weight": jw,
+            "llm_high": hi,
+            "borderline_delta": delta,
+            "llm_low": llm_low,
+            "done": out_path.exists(),
+            "output_path": out_path,
+            # Sort: dist asc, jw desc (1.0 first), hi desc (1.0 first), delta asc (0.0 first)
+            "sort_key": (dist, -jw, -hi, delta, ds_slug),
+            "label": f"{ds_slug} dist={dist} jw={jw} hi={hi} Δ={delta}",
+        }
+    )
 
 
 def print_manifest(
@@ -125,14 +118,13 @@ def print_manifest(
     if commands:
         force_suffix = " --force" if force else ""
         for e in entries:
-            limit_part = f" --limit {e['limit']}" if e["limit"] else ""
-            model_part = f" --model {e['model']}" if e["model"] != "-" else ""
             print(
                 f"uv run -m examples.er_v2 run"
                 f" --dataset {e['dataset']}"
-                f" --pipeline {e['pipeline']}"
-                f"{model_part}"
-                f"{limit_part}"
+                f" --dist {e['dist_threshold']}"
+                f" --jw-weight {e['jw_weight']}"
+                f" --llm-high {e['llm_high']}"
+                f" --borderline-delta {e['borderline_delta']}"
                 f"{force_suffix}"
             )
         return
@@ -142,5 +134,5 @@ def print_manifest(
     print(f"\n  === Manifest ({total_done}/{total}) ===\n")
     for e in entries:
         marker = "DONE" if e["done"] else "MISS"
-        print(f"  [{marker}] {e['permutation_id']:<55s} {e['label']}")
+        print(f"  [{marker}] {e['permutation_id']:<65s} {e['label']}")
     print()

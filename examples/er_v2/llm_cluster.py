@@ -19,10 +19,8 @@ import sqlite3
 import time
 from collections import defaultdict
 
-from .blocking import embed_and_block, leiden_cluster
-from .datasets import Entity
+from .blocking import block, leiden_cluster
 from .jaro_winkler import jaro_winkler
-from .models import DEFAULT_EMBED_MODEL
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +65,6 @@ MAX_COMPONENT_SIZE = 20  # Cap to prevent output truncation
 
 def run(
     conn: sqlite3.Connection,
-    entities: list[Entity],
     model_name: str,
     *,
     k: int = 10,
@@ -75,19 +72,21 @@ def run(
     jw_weight: float = 0.4,
     llm_low: float = 0.3,
     llm_high: float = 0.7,
-    embed_model_name: str = DEFAULT_EMBED_MODEL,
 ) -> tuple[dict[str, int], dict]:
-    """Run LLM-cluster ER pipeline. Returns (entity_id -> cluster_id, stats).
+    """Run matching + clustering on a prebuilt embedded DB.
+
+    Returns (entity_id -> cluster_id, stats).
+
+    The conn must be a prebuilt DB from blocking.open_prep_db() containing
+    entities and entity_vecs tables. Embedding is NOT done here.
 
     Stages:
-      1. Embed + HNSW block (shared)
-      2. Auto-accept confident pairs, collect borderline pairs
-      3. Find connected components in borderline graph
-      4. Split oversized components (> MAX_COMPONENT_SIZE)
-      5. One LLM call per component -> parse numbered groups -> match edges
-      6. Leiden clustering on all edges
+      1. KNN blocking (reads prebuilt HNSW index)
+      2. Scoring cascade (JW + cosine, auto-accept/reject/borderline)
+      3. LLM clustering of borderline components (if llm_low < llm_high)
+      4. Leiden clustering on all edges
     """
-    id_map, name_map, candidate_pairs = embed_and_block(conn, entities, k, dist_threshold, embed_model_name)
+    id_map, name_map, candidate_pairs = block(conn, k, dist_threshold)
 
     match_edges: list[tuple[str, str, float]] = []
     borderline_pairs: list[tuple[int, int]] = []
@@ -111,10 +110,10 @@ def run(
         jw = jaro_winkler(n1.lower(), n2.lower())
         score = jw_weight * jw + (1.0 - jw_weight) * cosine_sim
 
-        if score > llm_high:
+        if score >= llm_high:
             match_edges.append((id_map[r1], id_map[r2], score))
             n_auto_accepted += 1
-        elif score >= llm_low:
+        elif score >= llm_low and llm_low < llm_high:
             borderline_pairs.append((r1, r2))
         else:
             n_auto_rejected += 1
@@ -169,10 +168,10 @@ def run(
         avg_comp_size,
     )
 
-    clusters = leiden_cluster(conn, entities, match_edges)
+    all_entity_ids = list(id_map.values())
+    clusters = leiden_cluster(conn, all_entity_ids, match_edges)
 
     stats = {
-        "embed_model": embed_model_name,
         "params": {
             "k": k,
             "dist_threshold": dist_threshold,

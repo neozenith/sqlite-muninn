@@ -467,6 +467,113 @@ Grid search over 270 string-only permutations (3 datasets × 3 k × 6 dist × 5 
 
 **Impact on G2:** The LLM tier's value proposition changes. With dist=0.15, the candidate set is small (~230 pairs at 500 entities vs ~1,340 with old defaults). The borderline zone (llm_low to llm_high) will contain far fewer pairs, meaning the LLM tier fires rarely but must earn its place by improving the already-high baseline.
 
+#### ADR: LLM Marginal Value — ROI-Based Stopping (validated 2026-03-28)
+
+Fine-grained diminishing returns analysis (0.01 step increments of `llm_low` from `llm_high` downward, Qwen3.5-4B, full datasets) quantifies the LLM tier's marginal value with tuned thresholds:
+
+**MiniLM embeddings (dist=0.15, llm_high=0.90):**
+
+| Dataset | Baseline B³ F1 | Peak LLM B³ F1 | Δ | LLM Calls | Time | Verdict |
+|---------|---------------|----------------|---|-----------|------|---------|
+| Abt-Buy | 0.662 | 0.694 (lo=0.82) | +0.032 | 255 | 503s | Marginal gain, high cost |
+| Amazon-Google | 0.807 | — | -0.006 at first step | 121 | 216s | **LLM actively harmful** |
+| DBLP-ACM | 0.955 | 0.956 (lo=0.84) | +0.001 | 62 | 128s | Negligible |
+
+**Nomic embeddings (dist=0.03, llm_high=0.95):**
+
+| Dataset | Baseline B³ F1 | Peak LLM B³ F1 | Δ | LLM Calls | Time | Verdict |
+|---------|---------------|----------------|---|-----------|------|---------|
+| Abt-Buy | 0.658 | 0.685 (lo=0.89) | +0.027 | 197 | 374s | Similar to MiniLM |
+| Amazon-Google | 0.824 | — | -0.002 at first step | 88 | 194s | **LLM actively harmful** |
+
+**Key insight:** On Abt-Buy, ~80% of the LLM gain comes from the first 2 steps (lo=0.94→0.93 with Nomic: +0.019 F1 from 164 calls). Below lo=0.90, the curve goes completely flat — no new borderline pairs enter the zone. On Amazon-Google, the Qwen3.5-4B model consistently makes worse ER decisions than the string cascade, adding false positives on every LLM step tested.
+
+**Stopping criterion:** The search used "3 consecutive F1 drops" which was fragile — Amazon-Google oscillated around zero without triggering clean drops. The correct stopping criterion is **ROI-based**:
+
+```
+ROI = ΔF1 / Δ(LLM_calls)
+Stop when ROI < 0.0001 per call AND absolute ΔF1 < 0.002 per step
+```
+
+This directly encodes "the LLM must earn its cost." Example from Abt-Buy Nomic:
+- lo=0.93: ΔF1=0.011 / 49 calls = 0.00022/call → **continue** (good ROI)
+- lo=0.91: ΔF1=0.001 / 10 calls = 0.0001/call → **stop** (marginal ROI, tiny absolute gain)
+
+**Production recommendation:** String-only with tuned thresholds is the default. LLM tier is opt-in and dataset-dependent — only beneficial on Abt-Buy-like corpora with noisy product names, and even then the gain (+0.03 F1) may not justify ~5 minutes of inference.
+
+#### ADR: Embedding Model — MiniLM vs Nomic Embed (validated 2026-03-28)
+
+Nomic Embed v1.5 (768d, 140MB, `"clustering: "` prefix) compared against MiniLM (384d, 25MB, no prefix) across 3 datasets with per-model dist threshold tuning:
+
+**At each model's optimal thresholds (full datasets):**
+
+| Dataset | MiniLM (dist=0.15, mt=0.90) | Nomic (dist=0.03, mt=0.95) | Δ | Winner |
+|---------|---------------------------|--------------------------|---|--------|
+| Abt-Buy | 0.662 (P=0.74, R=0.60) | 0.668 (P=0.72, R=0.62) | +0.006 | Nomic (marginal) |
+| Amazon-Google | 0.807 (P=0.82, R=0.79) | **0.824** (P=0.88, R=0.78) | **+0.018** | **Nomic** |
+| DBLP-ACM | **0.955** (P=0.97, R=0.94) | 0.954 (P=0.96, R=0.95) | -0.001 | Tie |
+
+**Critical finding: each embedding model needs its own `dist_threshold`.** At the same dist=0.15, Nomic generates 4-6x more candidate pairs (12,452 vs 2,661 on Abt-Buy) because the `"clustering: "` prefix makes the embedding space denser. Nomic's optimal dist is 0.03 — an order of magnitude tighter than MiniLM's 0.15.
+
+**Recall advantage:** Nomic consistently finds more true matches (+2-4% recall). The `"clustering: "` prefix optimises the embedding space for grouping similar items, placing reformulated product names closer together. This addresses the #1 FN failure mode (67% of Abt-Buy FNs missed by MiniLM's blocker).
+
+**Production recommendation:** Use Nomic for Amazon-Google-like corpora (short, abbreviated product titles). MiniLM is simpler and nearly as effective for academic titles (DBLP-ACM) and long product names (Abt-Buy). The 6x model size difference (140MB vs 25MB) favours MiniLM for resource-constrained deployments.
+
+#### ADR: FP/FN Failure Mode Analysis (2026-03-28)
+
+Error analysis on all 3 datasets (string-only, MiniLM, dist=0.15, mt=0.90, limit=500) reveals three systematic failure modes:
+
+**Pattern 1 — Near-identical product variants (FP, all datasets):**
+Products sharing brand + category + most of the model number but differing in a digit/suffix score >0.90 on both cosine and JW. Examples: `panasonic kxts108w` ≠ `kxts208w`, `sony vctr100` ≠ `vctr640`. **No string matcher can distinguish these — requires product knowledge or structured model-number parsing.**
+
+**Pattern 2 — Same product, different naming conventions (FN, Abt-Buy + Amazon-Google):**
+True matches where the blocker never generates the candidate pair because embeddings are too far apart. Examples: `sony turntable pslx350h` ≈ `sony ps-lx350h belt-drive turntable`, `quickbooks pos pro multistore 6.0` ≈ `qb pos 6.0 pro multi store sw`. **98 of 146 Abt-Buy FNs (67%) never entered the candidate set.** This is the embedding model's recall limit.
+
+**Pattern 3 — Generic/shared titles (FP, DBLP-ACM):**
+Papers with identical generic titles that are different papers: `editor's notes` ≈ `editor's notes` (different journal issues), `report on the 8th intl workshop...` ≈ `report on the 5th intl workshop...`. **The title alone is insufficient — needs venue/year/author disambiguation (covered by G3 type-aware matching).**
+
+**Quantified per dataset:**
+
+| Dataset | FP | FN | FN in candidates | FN missed by blocker | Blocking recall |
+|---------|----|----|-----------------|---------------------|----------------|
+| Abt-Buy | 90 | 146 | 48 (33%) | **98 (67%)** | 33% |
+| Amazon-Google | 32 | 4 | 0 (0%) | **4 (100%)** | 0% |
+| DBLP-ACM | 9 | 1 | 1 (100%) | 0 (0%) | 100% |
+
+**Implication for G1-G4:**
+- **G1:** Threshold tuning addresses Pattern 1 FPs (raise mt) and Pattern 2 FNs partially (lower dist to widen blocker). Fully addressing Pattern 2 requires a better embedding model (→ Nomic) or concatenating name+description for richer embeddings.
+- **G3:** Type-aware matching would eliminate Pattern 3 FPs (generic titles with different entity types).
+- **G4:** Betweenness cleanup addresses transitive FPs (5 FPs on Abt-Buy had `cos=? jw=?` — merged via Leiden transitivity, not direct score).
+
+#### ADR: Methodology Reset — Full-Dataset Only, Unified Pipeline, Brute-Force Exploration (2026-03-30)
+
+**Problem:** Early grid searches optimised on `--limit 500` subsamples. Full-dataset results were materially worse (Abt-Buy: 0.799 at limit=500 → 0.668 at full). Subsample optimisation produced overly optimistic parameters that didn't transfer to full scale. Additionally, the string-only and llm-cluster pipelines were tested separately, obscuring the interaction between threshold tuning and LLM augmentation.
+
+**Decision:** All future trials run on **full benchmark datasets only**. The string-only pipeline is retired as a separate path — the llm-cluster pipeline subsumes it (setting `llm_low=llm_high` disables LLM processing, making it functionally identical to string-only). This gives a single unified pipeline with 4 tunable parameters that can be explored as a coherent parameter space.
+
+**Exploration strategy — layered parameter sweep:**
+
+Each parameter is explored from its "disabled" extreme, progressively enabling one dimension at a time:
+
+| Layer | Parameter | Range | Step | "Disabled" Value | What it controls |
+|-------|-----------|-------|------|-----------------|-----------------|
+| 1 | `dist_threshold` | 0.05 – 0.40 | 0.05 | N/A (always needed) | HNSW blocking radius — how many candidate pairs enter the pipeline |
+| 2 | `jw_weight` | 1.0 – 0.0 | 0.05 | 1.0 (pure lexicographic) | Balance of Jaro-Winkler (string) vs cosine (semantic) in combined score |
+| 3 | `llm_high` | 1.0 – 0.80 | 0.01 | 1.0 (nothing auto-accepted) | Match threshold — pairs above this score are accepted without LLM |
+| 4 | `borderline_delta` | 0.0 – 0.20 | 0.01 | 0.0 (no borderline zone) | LLM window width — `llm_low = llm_high - borderline_delta` |
+
+**Rationale for exploration order:**
+1. **dist_threshold first:** Controls candidate generation — everything downstream depends on which pairs enter the pipeline. No other parameter can recover pairs the blocker misses.
+2. **jw_weight second:** Determines the scoring function applied to candidates. At jw_weight=1.0, scoring is pure string similarity (no embedding signal in the score — embeddings only used for blocking). At 0.0, scoring is pure cosine similarity. The optimal balance is an empirical question.
+3. **llm_high third:** The acceptance threshold. At 1.0, nothing is auto-accepted (all pairs either go to LLM or are rejected). Lowering it progressively auto-accepts high-confidence pairs. Expected to show a log-normal response: rapid F1 gain as obvious matches get accepted, then long-tail degradation as weaker matches pollute clusters.
+4. **borderline_delta last:** Controls how wide the LLM window is below llm_high. At delta=0.0, no LLM processing. At delta=0.20, pairs in a 20-point band below llm_high get LLM evaluation. This measures the marginal ROI of LLM intervention at each operating point.
+
+**Key change from previous approach:** We no longer separately tune "string-only" and "llm-cluster" pipelines. The unified pipeline with `llm_low=llm_high` (delta=0) IS the string-only baseline at every threshold combination. Adding delta>0 measures the LLM's marginal value on top of that specific baseline.
+
+**Embedding model:** NomicEmbed only (with `"clustering: "` prefix). MiniLM is retired from the exploration. Nomic showed equal or better recall on all datasets, and the `dist_threshold` sweep accounts for its different distance scale.
+
+**Expected output:** A 4D parameter surface (visualised as 2D slices) showing B-Cubed F1 as a function of each parameter while holding others constant. This maps the entire tradespace and identifies the Pareto frontier of quality vs LLM cost.
+
 ### G3: Type-Aware Matching
 
 **Current:** All entity types are matched uniformly. "London" (GPE) and "London" (PERSON) could be merged.
