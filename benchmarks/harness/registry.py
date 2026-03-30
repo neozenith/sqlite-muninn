@@ -5,6 +5,7 @@ Used by the manifest and benchmark subcommands to list, filter, and execute perm
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -241,20 +242,55 @@ def _embed_permutations():
 # ── Public API ─────────────────────────────────────────────────────
 
 
+# Categories that are excluded from the registry by default.
+# These benchmarks have unresolved dependency issues and should be
+# re-enabled once their prep pipeline is validated end-to-end.
+# Override with BENCH_EXCLUDE_CATEGORIES env var (comma-separated),
+# or set to empty string to include all.
+_DEFAULT_EXCLUDE_CATEGORIES = {"kg-extract", "kg-re", "kg-resolve", "kg-graphrag"}
+
+
+def _get_excluded_categories() -> set[str]:
+    """Get the set of excluded categories from env or default."""
+    env_val = os.environ.get("BENCH_EXCLUDE_CATEGORIES")
+    if env_val is not None:
+        if env_val.strip() == "":
+            return set()  # empty string = include all
+        return {c.strip() for c in env_val.split(",") if c.strip()}
+    return _DEFAULT_EXCLUDE_CATEGORIES
+
+
 def all_permutations() -> list[Treatment]:
-    """Return every registered benchmark permutation."""
+    """Return every registered benchmark permutation.
+
+    Categories listed in _DEFAULT_EXCLUDE_CATEGORIES are skipped unless
+    overridden via the BENCH_EXCLUDE_CATEGORIES env var.
+    """
+    excluded = _get_excluded_categories()
+
+    generators = {
+        "vss": _vss_permutations,
+        "embed": _embed_permutations,
+        "graph-traversal": _graph_traversal_permutations,
+        "graph-centrality": _graph_centrality_permutations,
+        "graph-community": _graph_community_permutations,
+        "graph-vt": _graph_vt_permutations,
+        "kg-extract": _kg_extraction_permutations,
+        "kg-re": _kg_re_permutations,
+        "kg-resolve": _kg_resolution_permutations,
+        "kg-graphrag": _kg_graphrag_permutations,
+        "node2vec": _node2vec_permutations,
+    }
+
     perms = []
-    perms.extend(_vss_permutations())
-    perms.extend(_embed_permutations())
-    perms.extend(_graph_traversal_permutations())
-    perms.extend(_graph_centrality_permutations())
-    perms.extend(_graph_community_permutations())
-    perms.extend(_graph_vt_permutations())
-    perms.extend(_kg_extraction_permutations())
-    perms.extend(_kg_re_permutations())
-    perms.extend(_kg_resolution_permutations())
-    perms.extend(_kg_graphrag_permutations())
-    perms.extend(_node2vec_permutations())
+    for cat, gen in generators.items():
+        if cat in excluded:
+            continue
+        perms.extend(gen())
+
+    if excluded:
+        log.debug("Excluded categories: %s", ", ".join(sorted(excluded)))
+
     return perms
 
 
