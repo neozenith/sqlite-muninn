@@ -23,7 +23,7 @@ CHAT_MODEL = "Qwen3.5-4B"
 DIST_RANGE = [round(0.05 + i * 0.05, 2) for i in range(8)]  # 0.05 – 0.40
 JW_RANGE = [round(1.0 - i * 0.05, 2) for i in range(21)]  # 1.0 – 0.0
 LLM_HIGH_RANGE = [round(1.0 - i * 0.05, 2) for i in range(5)]  # 1.0 – 0.80 step 0.05
-DELTA_RANGE = [0.0, 0.05]  # 0.0 = no LLM, 0.05 = narrow LLM window
+DELTA_RANGE = [0.0, 0.01]  # 0.0 = no LLM, 0.05 = narrow LLM window
 
 DATASETS_LIST = ["amazon-google", "dblp-acm"]  # Abt-Buy deferred (needs name+description embeddings)
 

@@ -138,6 +138,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     # Run pipeline (blocking + matching + clustering — no embedding)
     from .llm_cluster import run as run_pipeline
 
+    type_guard = args.type_guard
+    betweenness = args.betweenness_threshold
+
     t0 = time.perf_counter()
     predicted, stats = run_pipeline(
         conn,
@@ -146,6 +149,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         jw_weight=jw_weight,
         llm_low=llm_low,
         llm_high=llm_high,
+        type_guard=type_guard,
+        betweenness_threshold=betweenness,
     )
     elapsed = time.perf_counter() - t0
 
@@ -154,25 +159,27 @@ def cmd_run(args: argparse.Namespace) -> None:
     pw = pairwise_f1(predicted, gold)
 
     # Report
-    llm_calls = stats.get("llm_calls", 0)
-    print(f"\n  ── {perm_id} ──")
     n_entities = len(predicted)
+    llm_calls = stats.get("llm_calls", 0)
+    bridges = stats.get("bridges_removed", 0)
     print(f"\n  ── {perm_id} ──")
     print(f"  Dataset:    {cfg.display_name} ({n_entities} entities)")
     print(f"  Params:     dist={dist} jw={jw_weight} hi={llm_high} lo={llm_low} Δ={borderline_delta}")
+    if type_guard:
+        print(f"  Type guard: ON ({stats.get('type_filtered', 0)} pairs filtered)")
+    if betweenness is not None:
+        print(f"  Betweenness: threshold={betweenness} ({bridges} bridges removed)")
     print(f"  B-Cubed:    F1={bc['f1']:.4f}  P={bc['precision']:.4f}  R={bc['recall']:.4f}")
     print(f"  Pairwise:   F1={pw['f1']:.4f}  P={pw['precision']:.4f}  R={pw['recall']:.4f}")
-    print(f"  Pairs:      {stats.get('total_pairs', 0)} total", end="")
-    if stats.get("borderline_pairs", 0) > 0:
-        print(
-            f", {stats['auto_accepted']} accept"
-            f", {stats['borderline_pairs']} borderline"
-            f", {stats['auto_rejected']} reject"
-        )
-    else:
-        print(f", {stats.get('auto_accepted', 0)} accept, {stats.get('auto_rejected', 0)} reject")
+    print(
+        f"  Pairs:      {stats.get('total_pairs', 0)} total"
+        f", {stats.get('type_filtered', 0)} type-filtered"
+        f", {stats.get('auto_accepted', 0)} accept"
+        f", {stats.get('borderline_pairs', 0)} borderline"
+        f", {stats.get('auto_rejected', 0)} reject"
+    )
     print(f"  LLM calls:  {llm_calls}")
-    print(f"  Wall clock: {elapsed:.2f}s (matching+clustering only, embedding precomputed)")
+    print(f"  Wall clock: {elapsed:.2f}s (embedding precomputed)")
 
     # Save
     _save_result(perm_id, ds_slug, n_entities, bc, pw, elapsed, stats)
@@ -268,6 +275,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--jw-weight", type=float, required=True, help="JW vs cosine weight (1.0=pure JW, 0.0=pure cosine)")
     p.add_argument("--llm-high", type=float, required=True, help="Auto-accept threshold (1.0=nothing accepted)")
     p.add_argument("--borderline-delta", type=float, required=True, help="LLM window width (0.0=no LLM)")
+    p.add_argument("--type-guard", action="store_true", default=True, help="Enable type/source guard (default: on)")
+    p.add_argument("--no-type-guard", action="store_false", dest="type_guard", help="Disable type/source guard")
+    p.add_argument(
+        "--betweenness-threshold", type=float, default=None, help="Bridge removal threshold (default: disabled)"
+    )
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_run)
 

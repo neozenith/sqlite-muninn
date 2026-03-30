@@ -97,19 +97,22 @@ def block(
     conn: sqlite3.Connection,
     k: int = 10,
     dist_threshold: float = 0.15,
-) -> tuple[dict[int, str], dict[int, str], dict[tuple[int, int], float]]:
+) -> tuple[dict[int, str], dict[int, str], dict[int, str], dict[tuple[int, int], float]]:
     """Run KNN blocking on a prebuilt embedded DB.
 
     Returns:
         id_map: rowid -> entity_id
         name_map: rowid -> entity name
+        source_map: rowid -> source ("a" or "b", or entity_type for KG data)
         candidate_pairs: (min_rowid, max_rowid) -> cosine_distance
     """
     id_map: dict[int, str] = {}
     name_map: dict[int, str] = {}
-    for row in conn.execute("SELECT rowid, entity_id, name FROM entities"):
+    source_map: dict[int, str] = {}
+    for row in conn.execute("SELECT rowid, entity_id, name, source FROM entities"):
         id_map[row[0]] = row[1]
         name_map[row[0]] = row[2]
+        source_map[row[0]] = row[3]
 
     candidate_pairs: dict[tuple[int, int], float] = {}
     for rowid in id_map:
@@ -127,7 +130,7 @@ def block(
     log.info(
         "Blocking: %d pairs (k=%d, dist<=%.2f) from %d entities", len(candidate_pairs), k, dist_threshold, len(id_map)
     )
-    return id_map, name_map, candidate_pairs
+    return id_map, name_map, source_map, candidate_pairs
 
 
 def leiden_cluster(

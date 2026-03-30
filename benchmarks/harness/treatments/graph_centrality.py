@@ -70,7 +70,7 @@ class GraphCentralityTreatment(Treatment):
         op = self._operation
         tvf_map = {
             "degree": "graph_degree",
-            "betweenness": "graph_betweenness",
+            "betweenness": "graph_node_betweenness",
             "closeness": "graph_closeness",
         }
         tvf = tvf_map[op]

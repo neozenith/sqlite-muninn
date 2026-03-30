@@ -150,7 +150,7 @@ flowchart LR
     subgraph Stage3["Stage 3: Clustering + Cleanup"]
         EDGES["Match edges (weighted)"]:::loadSecondary
         LEIDEN["graph_leiden TVF"]:::loadPrimary
-        BETWEEN["graph_betweenness TVF<br/>false-positive edge removal"]:::danger
+        BETWEEN["graph_edge_betweenness TVF<br/>false-positive edge removal"]:::danger
         CANON["Canonical selection<br/>(configurable strategy)"]:::loadPrimary
     end
 
@@ -210,7 +210,7 @@ Source: [LLM-CER (arXiv:2506.02509, SIGMOD 2026)](https://arxiv.org/abs/2506.025
 
 **3. Graph cleanup via edge betweenness**
 
-GraLMatch (EDBT 2025) addresses the false positive transitivity problem — a single false match edge can merge large groups of unrelated entities. Their solution: compute edge betweenness centrality on the match graph and remove high-betweenness bridge edges before clustering. The `graph_betweenness` TVF already exists in muninn.
+GraLMatch (EDBT 2025) addresses the false positive transitivity problem — a single false match edge can merge large groups of unrelated entities. Their solution: compute edge betweenness centrality on the match graph and remove high-betweenness bridge edges before clustering. The `graph_edge_betweenness` TVF already exists in muninn.
 
 Source: [GraLMatch (arXiv:2406.15015)](https://arxiv.org/abs/2406.15015)
 
@@ -268,7 +268,7 @@ flowchart LR
         D1["Parameterized thresholds"]:::desiredNode
         D2["Tiered: string + LLM<br/>borderline pairs"]:::desiredNode
         D3["Entity type guard<br/>in matching cascade"]:::desiredNode
-        D4["graph_betweenness<br/>false positive removal"]:::desiredNode
+        D4["graph_edge_betweenness<br/>false positive removal"]:::desiredNode
         D5["DeepMatcher + Leipzig<br/>benchmarks with F1"]:::desiredNode
         D6["muninn_chat() with<br/>ER GBNF grammar"]:::desiredNode
     end
@@ -467,6 +467,96 @@ Grid search over 270 string-only permutations (3 datasets × 3 k × 6 dist × 5 
 
 **Impact on G2:** The LLM tier's value proposition changes. With dist=0.15, the candidate set is small (~230 pairs at 500 entities vs ~1,340 with old defaults). The borderline zone (llm_low to llm_high) will contain far fewer pairs, meaning the LLM tier fires rarely but must earn its place by improving the already-high baseline.
 
+#### ADR: Parameter Constraint — dist must be consistent with thresholds (2026-03-31)
+
+**Problem:** The parameters `dist_threshold`, `match_threshold` (llm_high), `borderline_delta`, and `jw_weight` interact in non-obvious ways. Misconfiguration can create dead zones where candidates are pulled in by blocking only to be unconditionally rejected by the cascade.
+
+**The constraint:** `dist` is a cosine distance filter applied AFTER the `k` nearest neighbours search. It controls the top-of-funnel. The combined score for a pair is `jw_weight * JW + (1 - jw_weight) * cosine_sim` where `cosine_sim = 1 - dist`. For a pair to reach any stage of the pipeline (auto-accept, borderline LLM, or auto-reject), its combined score must be at least `llm_low = llm_high - borderline_delta`.
+
+Thought experiment: if `k = ∞` and `jw_weight = 0.0`, then the pipeline reduces to a pure cosine similarity filter. A pair with cosine distance `d` has combined score `1 - d`. It enters the pipeline only if `1 - d >= llm_high - borderline_delta`, i.e., `d <= 1 - (llm_high - borderline_delta)`.
+
+Therefore the strict constraint is:
+
+```
+dist_threshold >= 1 - (match_threshold - borderline_delta)
+```
+
+If `dist` is narrower than this, candidates are admitted but immediately hard-dropped because their best possible score (cosine_sim = 1 - dist, JW contribution = 0 at worst) already fails the threshold. Conversely, if `dist` is much wider, many candidates enter with no chance of being borderline — they're auto-accepted or auto-rejected, wasting blocking compute.
+
+**Practical implication:** With `jw_weight > 0`, the JW contribution can push some pairs above the threshold even when cosine_sim alone wouldn't. But the JW contribution is bounded by `jw_weight * 1.0`. So the relaxed constraint is: `dist_threshold <= 1 - (match_threshold - borderline_delta - jw_weight)`.
+
+#### ADR: Default jw_weight — 0.3 (revised 2026-03-31)
+
+| Parameter | Previous | **Revised** | Rationale |
+|-----------|----------|-------------|-----------|
+| `jw_weight` | 0.4 | **0.3** | Semantic similarity (cosine from embedding) already implicitly captures lexicographic similarity — similar strings produce similar embeddings. JW at 0.4 over-weights string matching relative to the semantic signal. 0.3 gives JW a tie-breaking role without dominating. |
+
+The embedding model (Nomic with `"clustering: "` prefix) encodes both semantic and lexicographic information in the vector. JW adds value only for near-miss cases where the embedding fails to capture string-level similarity (abbreviations, model number formatting). At `jw_weight=0.3`, JW can shift a score by at most ±0.3, which is enough for tie-breaking without overriding the semantic signal.
+
+#### ADR: Pipeline Filtering Stages — Top-of-Funnel Order (2026-03-31)
+
+The pipeline applies a sequence of narrowing filters. The order matters because each stage is more expensive than the previous:
+
+```
+Stage 0: KNN (k nearest neighbours)           — O(N log N) via HNSW
+Stage 1: Cosine distance filter (dist)         — O(k*N), drops far embeddings
+Stage 2: Entity type guard (G3)                — O(candidates), zero-cost filter
+Stage 3: JW + cosine scoring cascade           — O(candidates), string comparison
+Stage 4: Auto-accept / borderline / auto-reject — O(candidates), threshold check
+Stage 5: LLM cluster (borderline only)         — O(components), expensive inference
+Stage 6: Leiden clustering                     — O(edges), community detection
+Stage 7: Betweenness cleanup (G4)              — O(edges²), bridge removal + re-cluster
+```
+
+**G3 type guard at Stage 2:** After KNN + dist filtering produces candidate pairs, check if both entities have known types. If both types are known and different, skip the pair. This eliminates cross-type false positives (e.g., "London" the city vs "London" the person) before the scoring cascade runs. Zero cost, precision-only.
+
+**Open question (deferred):** In unsupervised NER/RE, entity types are LLM-assigned and may use inconsistent labels (e.g., "company" vs "organization" vs "corp"). The type guard would need a type collapse/normalisation step before it can filter reliably. This is a follow-up task — the guard should accept a `type_equivalence_map: dict[str, str]` parameter that maps variant labels to canonical types. For now, the guard is most useful with supervised NER where labels are controlled.
+
+#### ADR: Unsupervised NER Type Collapse — Open (deferred, 2026-03-31)
+
+**Problem:** When entity types come from unsupervised NER extraction (e.g., `muninn_extract_entities()` without labels), the LLM may assign inconsistent type labels: "company", "organization", "corporation", "business" for the same semantic type. The G3 type guard would incorrectly filter pairs where both entities are organisations but labelled differently.
+
+**Deferred decision:** This requires a type normalisation step — either:
+1. A curated `type_equivalence_map` (manual, brittle but precise)
+2. Embedding-based type clustering (embed the type labels themselves, cluster similar ones)
+3. An LLM call to normalise types (e.g., "classify these type labels into canonical categories")
+
+This is NOT addressed in the current G3 implementation. The type guard should be opt-in and default to disabled when entity types come from unsupervised extraction. Revisit when unsupervised NER quality is characterised in the KG pipeline.
+
+#### ADR: G4 Betweenness Cleanup — Design Notes (2026-03-31)
+
+**How it works in examples/er_v2:**
+
+After Leiden assigns initial clusters, some clusters are incorrectly merged via false-positive bridge edges. A single bad edge (e.g., "Sony VCR-100" ↔ "Sony VCR-640" scoring 0.92 on string similarity despite being different products) can merge two otherwise-correct clusters of 50+ entities.
+
+Edge betweenness centrality identifies these bridges: an edge that is the sole connection between two dense sub-clusters will have very high betweenness (all shortest paths between the two clusters pass through it). Removing it cleanly separates the clusters.
+
+**Implementation in `llm_cluster.py`:**
+
+```python
+# After: clusters = leiden_cluster(conn, all_entity_ids, match_edges)
+# Add:
+betweenness = conn.execute(
+    "SELECT src, dst, centrality FROM graph_edge_betweenness"
+    " WHERE edge_table = '_match_edges'"
+    "   AND src_col = 'src' AND dst_col = 'dst'"
+    "   AND weight_col = 'weight'"
+).fetchall()
+# Remove bridges above threshold
+pruned = [(s, d, w) for s, d, w in match_edges
+          if betweenness_map.get((s, d), 0) <= betweenness_threshold]
+# Re-cluster
+clusters = leiden_cluster(conn, all_entity_ids, pruned)
+```
+
+**Expected impact on `examples/er_v2/`:**
+- **Precision improvement:** Targets the transitive FPs that Leiden creates (5 of 90 Abt-Buy FPs had no direct match score — they were merged via chain)
+- **Recall unchanged:** Removing bridge edges doesn't lose true matches (true match edges have low betweenness because they connect within a dense cluster, not between clusters)
+- **New parameter:** `betweenness_threshold` — another dimension to sweep in the benchmark harness
+- **Cost:** O(edges²) for betweenness computation, but the match graph is small (~hundreds to thousands of edges) so this is sub-second
+
+**Interaction with borderline_delta:** G4 is complementary to the LLM tier. The LLM tries to prevent bad edges from entering the graph. Betweenness cleanup catches the ones that slip through. They can run independently or together.
+
 #### ADR: LLM Marginal Value — ROI-Based Stopping (validated 2026-03-28)
 
 Fine-grained diminishing returns analysis (0.01 step increments of `llm_low` from `llm_high` downward, Qwen3.5-4B, full datasets) quantifies the LLM tier's marginal value with tuned thresholds:
@@ -607,10 +697,10 @@ if t1 and t2 and t1 != t2:
 
 **Current:** Leiden clustering runs directly on all match edges. A single false positive edge can transitively merge large clusters.
 
-**Gap:** After Leiden clustering, compute edge betweenness centrality on the match graph using the existing `graph_betweenness` TVF. Remove edges with betweenness above a threshold (bridge edges between incorrectly merged clusters). Re-cluster. GraLMatch (EDBT 2025) reports significant precision improvements with this technique.
+**Gap:** After Leiden clustering, compute edge betweenness centrality on the match graph using the existing `graph_edge_betweenness` TVF. Remove edges with betweenness above a threshold (bridge edges between incorrectly merged clusters). Re-cluster. GraLMatch (EDBT 2025) reports significant precision improvements with this technique.
 
 **Output(s):**
-- Modified `benchmarks/demo_builder/phases/entity_resolution.py` (Python) — post-Leiden cleanup step after line ~164: query `graph_betweenness` on `_match_edges`, remove high-betweenness bridge edges, re-run `graph_leiden`
+- Modified `benchmarks/demo_builder/phases/entity_resolution.py` (Python) — post-Leiden cleanup step after line ~164: query `graph_edge_betweenness` on `_match_edges`, remove high-betweenness bridge edges, re-run `graph_leiden`
 - Modified `benchmarks/harness/treatments/kg_resolve.py` (Python) — same cleanup in `_run_er_pipeline()`, optional `betweenness_threshold` parameter
 
 **References:**
@@ -630,7 +720,7 @@ Post-Leiden betweenness cleanup pattern:
 ```python
 # Compute edge betweenness on match graph
 betweenness = conn.execute(
-    "SELECT src, dst, centrality FROM graph_betweenness"
+    "SELECT src, dst, centrality FROM graph_edge_betweenness"
     " WHERE edge_table = '_match_edges'"
     "   AND src_col = 'src' AND dst_col = 'dst'"
     "   AND weight_col = 'weight'"

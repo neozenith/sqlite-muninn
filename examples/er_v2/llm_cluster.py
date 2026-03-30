@@ -1,16 +1,16 @@
-"""LLM-cluster ER pipeline: HNSW blocking + tiered matching + LLM batch clustering + Leiden.
+"""Unified ER pipeline: blocking + type guard + scoring + LLM + Leiden + betweenness.
 
-Uses three matching tiers:
-  1. Confident matches (score > llm_high)      -> auto-accept
-  2. Clear non-matches (score < llm_low)        -> auto-reject
-  3. Borderline pairs (llm_low <= score <= llm_high) -> routed to LLM
+Pipeline stages:
+  1. KNN blocking (reads prebuilt HNSW index)
+  2. Type guard (skip cross-type pairs — G3)
+  3. Scoring cascade (JW + cosine, auto-accept/reject/borderline)
+  4. LLM clustering of borderline components (if llm_low < llm_high)
+  5. Leiden clustering on all match edges
+  6. Betweenness cleanup — remove bridge edges + re-cluster (G4)
 
-Borderline pairs are grouped into connected components and sent as batch
-clustering calls to muninn_chat() with GBNF_ER_CLUSTER_NUM grammar.
-Each LLM call processes one component, returning numbered groups.
-
-Note: setting llm_low >= llm_high disables the LLM tier entirely,
-making this pipeline functionally identical to string-only.
+Setting llm_low >= llm_high disables the LLM tier (Stage 4).
+Setting betweenness_threshold to None disables bridge cleanup (Stage 6).
+Setting type_guard=False disables type filtering (Stage 2).
 """
 
 import json
@@ -24,9 +24,7 @@ from .jaro_winkler import jaro_winkler
 
 log = logging.getLogger(__name__)
 
-# ── GBNF Grammar: Numbered Cluster Format ─────────────────────────
-# LLM returns group indices instead of reproducing entity names verbatim.
-# e.g., {"groups": [[1, 3], [2], [4, 5]]}
+# ── GBNF Grammar ──────────────────────────────────────────────────
 
 GBNF_ER_CLUSTER_NUM = (
     'root       ::= "{" ws "\\"groups\\"" ws ":" ws "[" ws group-list ws "]" ws "}" \n'
@@ -60,7 +58,7 @@ USER_PROMPT = (
     "Respond with JSON only."
 )
 
-MAX_COMPONENT_SIZE = 20  # Cap to prevent output truncation
+MAX_COMPONENT_SIZE = 20
 
 
 def run(
@@ -69,29 +67,54 @@ def run(
     *,
     k: int = 10,
     dist_threshold: float = 0.4,
-    jw_weight: float = 0.4,
+    jw_weight: float = 0.3,
     llm_low: float = 0.3,
     llm_high: float = 0.7,
+    type_guard: bool = True,
+    betweenness_threshold: float | None = None,
 ) -> tuple[dict[str, int], dict]:
-    """Run matching + clustering on a prebuilt embedded DB.
+    """Run the full ER pipeline on a prebuilt embedded DB.
 
     Returns (entity_id -> cluster_id, stats).
 
-    The conn must be a prebuilt DB from blocking.open_prep_db() containing
-    entities and entity_vecs tables. Embedding is NOT done here.
-
-    Stages:
-      1. KNN blocking (reads prebuilt HNSW index)
-      2. Scoring cascade (JW + cosine, auto-accept/reject/borderline)
-      3. LLM clustering of borderline components (if llm_low < llm_high)
-      4. Leiden clustering on all edges
+    Args:
+        type_guard: If True, skip candidate pairs where both entities have
+            known types and the types differ. For DeepMatcher datasets, the
+            "source" field (a/b) acts as type — cross-source pairs are the
+            only ones that CAN be true matches, so same-source pairs are skipped.
+        betweenness_threshold: If set, after Leiden clustering compute edge
+            betweenness and remove bridge edges above this threshold, then
+            re-cluster. None = disabled.
     """
     # Stage 1: KNN blocking
     t_block = time.perf_counter()
-    id_map, name_map, candidate_pairs = block(conn, k, dist_threshold)
+    id_map, name_map, source_map, candidate_pairs = block(conn, k, dist_threshold)
     blocking_time = time.perf_counter() - t_block
 
-    # Stage 2: Scoring cascade
+    # Stage 2: Type guard (G3)
+    t_type = time.perf_counter()
+    n_type_filtered = 0
+    if type_guard:
+        filtered_pairs: dict[tuple[int, int], float] = {}
+        for (r1, r2), dist in candidate_pairs.items():
+            s1 = source_map.get(r1)
+            s2 = source_map.get(r2)
+            # DeepMatcher convention: "source" = which table the record came from.
+            # Records from the SAME source table are already deduplicated —
+            # they can never be a true match. Only CROSS-source pairs can match.
+            # e.g., Abt product a_42 can match Buy product b_117,
+            #       but a_42 can never match a_99 (both from Abt).
+            #
+            # For KG NER data, swap this: same entity_type CAN match,
+            # different types should be skipped (person ≠ location).
+            if s1 and s2 and s1 == s2:
+                n_type_filtered += 1
+                continue
+            filtered_pairs[(r1, r2)] = dist
+        candidate_pairs = filtered_pairs
+    type_guard_time = time.perf_counter() - t_type
+
+    # Stage 3: Scoring cascade
     t_score = time.perf_counter()
     match_edges: list[tuple[str, str, float]] = []
     borderline_pairs: list[tuple[int, int]] = []
@@ -125,11 +148,10 @@ def run(
 
     scoring_time = time.perf_counter() - t_score
 
-    # Stage 3: LLM clustering of borderline components
+    # Stage 4: LLM clustering of borderline components
     components = _connected_components(borderline_pairs)
     components = _split_oversized(components, MAX_COMPONENT_SIZE)
 
-    # Component size statistics
     comp_sizes = [len(c) for c in components if len(c) >= 2]
     avg_comp_size = sum(comp_sizes) / len(comp_sizes) if comp_sizes else 0.0
     comp_size_var = sum((s - avg_comp_size) ** 2 for s in comp_sizes) / len(comp_sizes) if len(comp_sizes) > 1 else 0.0
@@ -163,23 +185,30 @@ def run(
                     match_edges.append((group[i], group[j], 0.85))
 
     log.info(
-        "LLM-cluster: %d edges, %d auto-accept, %d borderline, %d auto-reject, "
-        "%d LLM calls (%.2fs), %d components (avg %.1f)",
+        "Pipeline: %d edges (%d accept, %d borderline, %d reject, %d type-filtered), "
+        "%d LLM calls (%.2fs), %d components",
         len(match_edges),
         n_auto_accepted,
         len(borderline_pairs),
         n_auto_rejected,
+        n_type_filtered,
         llm_calls,
         llm_time,
         len(comp_sizes),
-        avg_comp_size,
     )
 
-    # Stage 4: Leiden clustering
+    # Stage 5: Leiden clustering
     t_leiden = time.perf_counter()
     all_entity_ids = list(id_map.values())
     clusters = leiden_cluster(conn, all_entity_ids, match_edges)
     leiden_time = time.perf_counter() - t_leiden
+
+    # Stage 6: Betweenness cleanup (G4)
+    t_between = time.perf_counter()
+    n_bridges_removed = 0
+    if betweenness_threshold is not None and match_edges:
+        clusters, n_bridges_removed = _betweenness_cleanup(conn, all_entity_ids, match_edges, betweenness_threshold)
+    betweenness_time = time.perf_counter() - t_between
 
     stats = {
         "params": {
@@ -189,8 +218,12 @@ def run(
             "llm_low": llm_low,
             "llm_high": llm_high,
             "max_component_size": MAX_COMPONENT_SIZE,
+            "type_guard": type_guard,
+            "betweenness_threshold": betweenness_threshold,
         },
-        "total_pairs": len(candidate_pairs),
+        "total_pairs": len(candidate_pairs) + n_type_filtered,
+        "type_filtered": n_type_filtered,
+        "scored_pairs": len(candidate_pairs),
         "auto_accepted": n_auto_accepted,
         "borderline_pairs": len(borderline_pairs),
         "auto_rejected": n_auto_rejected,
@@ -198,14 +231,71 @@ def run(
         "avg_component_size": round(avg_comp_size, 2),
         "component_size_variance": round(comp_size_var, 2),
         "llm_calls": llm_calls,
+        "bridges_removed": n_bridges_removed,
         "timing": {
             "blocking_s": round(blocking_time, 3),
+            "type_guard_s": round(type_guard_time, 3),
             "scoring_s": round(scoring_time, 3),
             "llm_s": round(llm_time, 3),
             "leiden_s": round(leiden_time, 3),
+            "betweenness_s": round(betweenness_time, 3),
         },
     }
     return clusters, stats
+
+
+# ── Betweenness Cleanup (G4) ─────────────────────────────────────
+
+
+def _betweenness_cleanup(
+    conn: sqlite3.Connection,
+    all_entity_ids: list[str],
+    match_edges: list[tuple[str, str, float]],
+    threshold: float,
+) -> tuple[dict[str, int], int]:
+    """Remove high-betweenness bridge edges and re-cluster.
+
+    Uses graph_edge_betweenness TVF for surgical edge removal — only
+    the specific bridge edge is removed, not all edges touching the
+    bridge node. This preserves valid edges of nodes that happen to
+    be on bridge paths.
+
+    Returns (new_clusters, n_edges_removed).
+    """
+    # The _match_edges table was populated by leiden_cluster.
+    betweenness_rows = conn.execute(
+        "SELECT src, dst, centrality FROM graph_edge_betweenness"
+        " WHERE edge_table = '_match_edges'"
+        "   AND src_col = 'src'"
+        "   AND dst_col = 'dst'"
+        "   AND direction = 'both'"
+    ).fetchall()
+
+    # Build lookup of high-betweenness edges (normalise to min/max order)
+    bridge_edges: set[tuple[str, str]] = set()
+    for src, dst, bc in betweenness_rows:
+        if bc > threshold:
+            bridge_edges.add((min(src, dst), max(src, dst)))
+
+    if not bridge_edges:
+        log.info("Betweenness cleanup: no bridge edges above threshold %.4f", threshold)
+        return leiden_cluster(conn, all_entity_ids, match_edges), 0
+
+    # Remove bridge edges
+    pruned_edges = [
+        (s, d, w) for s, d, w in match_edges if (min(s, d), max(s, d)) not in bridge_edges
+    ]
+
+    log.info(
+        "Betweenness cleanup: %d bridge edges removed (threshold=%.4f), %d→%d edges",
+        len(bridge_edges),
+        threshold,
+        len(match_edges),
+        len(pruned_edges),
+    )
+
+    clusters = leiden_cluster(conn, all_entity_ids, pruned_edges)
+    return clusters, len(bridge_edges)
 
 
 # ── Helpers ───────────────────────────────────────────────────────

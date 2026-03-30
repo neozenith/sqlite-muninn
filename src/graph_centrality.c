@@ -2,9 +2,10 @@
  * graph_centrality.c — Centrality measure table-valued functions
  *
  * TVFs:
- *   graph_degree      — in/out/total degree centrality (O(V+E))
- *   graph_betweenness — Brandes (2001) betweenness centrality
- *   graph_closeness   — closeness centrality with Wasserman-Faust normalization
+ *   graph_degree             — in/out/total degree centrality (O(V+E))
+ *   graph_node_betweenness   — Brandes (2001) node betweenness centrality
+ *   graph_edge_betweenness   — Brandes (2001) edge betweenness centrality
+ *   graph_closeness          — closeness centrality with Wasserman-Faust normalization
  *
  * All TVFs use the shared graph_load module for graph loading with
  * support for weighted edges and temporal filtering.
@@ -65,6 +66,49 @@ static void cr_add(CentralityResults *r, const char *node, double centrality, do
     row->in_degree = in_deg;
     row->out_degree = out_deg;
     row->degree = deg;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * Edge betweenness result structure
+ * ═══════════════════════════════════════════════════════════════ */
+
+typedef struct {
+    char *src;
+    char *dst;
+    double centrality;
+} EdgeBetweennessRow;
+
+typedef struct {
+    EdgeBetweennessRow *rows;
+    int count;
+    int capacity;
+} EdgeBetweennessResults;
+
+static void ebr_init(EdgeBetweennessResults *r) {
+    r->count = 0;
+    r->capacity = 64;
+    r->rows = (EdgeBetweennessRow *)calloc((size_t)r->capacity, sizeof(EdgeBetweennessRow));
+}
+
+static void ebr_destroy(EdgeBetweennessResults *r) {
+    for (int i = 0; i < r->count; i++) {
+        free(r->rows[i].src);
+        free(r->rows[i].dst);
+    }
+    free(r->rows);
+    r->rows = NULL;
+    r->count = 0;
+}
+
+static void ebr_add(EdgeBetweennessResults *r, const char *src, const char *dst, double centrality) {
+    if (r->count >= r->capacity) {
+        r->capacity *= 2;
+        r->rows = (EdgeBetweennessRow *)realloc(r->rows, (size_t)r->capacity * sizeof(EdgeBetweennessRow));
+    }
+    EdgeBetweennessRow *row = &r->rows[r->count++];
+    row->src = strdup(src);
+    row->dst = strdup(dst);
+    row->centrality = centrality;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -332,6 +376,132 @@ static void sssp_dijkstra(const GraphData *g, int source, double *dist, double *
     }
     free(settled);
     dpq_destroy(&pq);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * Shared Brandes computation for node and edge betweenness.
+ *
+ * Runs the full Brandes algorithm and populates:
+ *   CB[N]     — node betweenness centrality (always computed)
+ *   EB[N*N]   — edge betweenness centrality (if non-NULL)
+ *                EB[v*N + w] = betweenness of edge v→w
+ *
+ * Handles approximation, undirected correction, and normalization.
+ * Returns SQLITE_OK or SQLITE_NOMEM.
+ * ═══════════════════════════════════════════════════════════════ */
+
+static int brandes_compute(
+    const GraphData *g,
+    const char *direction,
+    int auto_approx,
+    int normalized,
+    double *CB,       /* out: node betweenness, size N, caller must calloc */
+    double *EB        /* out: edge betweenness, size N*N, caller must calloc. NULL = skip. */
+) {
+    int N = g->node_count;
+
+    double *dist = (double *)malloc((size_t)N * sizeof(double));
+    double *sigma = (double *)malloc((size_t)N * sizeof(double));
+    double *delta = (double *)malloc((size_t)N * sizeof(double));
+    int *stack = (int *)malloc((size_t)N * sizeof(int));
+    IntList *pred = (IntList *)calloc((size_t)N, sizeof(IntList));
+    if (!dist || !sigma || !delta || !stack || !pred) {
+        free(dist); free(sigma); free(delta); free(stack); free(pred);
+        return SQLITE_NOMEM;
+    }
+    for (int i = 0; i < N; i++)
+        intlist_init(&pred[i]);
+
+    /* Source set (exact vs approx) */
+    int n_sources = N;
+    int *sources = (int *)malloc((size_t)N * sizeof(int));
+    double scale = 1.0;
+
+    if (auto_approx > 0 && N > auto_approx) {
+        n_sources = (int)ceil(sqrt((double)N));
+        if (n_sources < 1) n_sources = 1;
+        int step = N / n_sources;
+        if (step < 1) step = 1;
+        n_sources = 0;
+        for (int i = 0; i < N && n_sources < (int)ceil(sqrt((double)N)); i += step)
+            sources[n_sources++] = i;
+        scale = (double)N / (double)n_sources;
+    } else {
+        for (int i = 0; i < N; i++)
+            sources[i] = i;
+    }
+
+    /* Brandes main loop */
+    int weighted = g->has_weights;
+    for (int si = 0; si < n_sources; si++) {
+        int s = sources[si];
+        int stack_size = 0;
+
+        if (weighted)
+            sssp_dijkstra(g, s, dist, sigma, pred, stack, &stack_size, direction);
+        else
+            sssp_bfs(g, s, dist, sigma, pred, stack, &stack_size, direction);
+
+        /* Backward accumulation */
+        for (int i = 0; i < N; i++)
+            delta[i] = 0.0;
+        while (stack_size > 0) {
+            int w = stack[--stack_size];
+            for (int pi = 0; pi < pred[w].count; pi++) {
+                int v = pred[w].items[pi];
+                if (sigma[w] > 0) {
+                    double flow = (sigma[v] / sigma[w]) * (1.0 + delta[w]);
+                    delta[v] += flow;
+                    if (EB) EB[v * N + w] += flow;
+                }
+            }
+            if (w != s)
+                CB[w] += delta[w];
+        }
+    }
+
+    /* Scale for approximation */
+    if (scale != 1.0) {
+        for (int i = 0; i < N; i++) CB[i] *= scale;
+        if (EB) {
+            int NN = N * N;
+            for (int i = 0; i < NN; i++) EB[i] *= scale;
+        }
+    }
+
+    /* Undirected correction: halve (each path counted twice) */
+    int undirected = direction && strcmp(direction, "both") == 0;
+    if (undirected) {
+        for (int i = 0; i < N; i++) CB[i] /= 2.0;
+        if (EB) {
+            int NN = N * N;
+            for (int i = 0; i < NN; i++) EB[i] /= 2.0;
+        }
+    }
+
+    /* Normalize */
+    if (normalized && N > 2) {
+        double norm_factor = undirected
+            ? (double)(N - 1) * (double)(N - 2) / 2.0
+            : (double)(N - 1) * (double)(N - 2);
+        for (int i = 0; i < N; i++) CB[i] /= norm_factor;
+        if (EB) {
+            int NN = N * N;
+            for (int i = 0; i < NN; i++) EB[i] /= norm_factor;
+        }
+    }
+
+    /* Cleanup working arrays */
+    for (int i = 0; i < N; i++)
+        intlist_destroy(&pred[i]);
+    free(pred);
+    free(dist);
+    free(sigma);
+    free(delta);
+    free(stack);
+    free(sources);
+
+    return SQLITE_OK;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -713,7 +883,7 @@ static int bet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
         rc = graph_data_load(vtab->db, &config, &g, &errmsg);
     }
     if (rc != SQLITE_OK) {
-        vtab->base.zErrMsg = errmsg ? errmsg : sqlite3_mprintf("graph_betweenness: failed to load graph");
+        vtab->base.zErrMsg = errmsg ? errmsg : sqlite3_mprintf("graph_node_betweenness: failed to load graph");
         graph_data_destroy(&g);
         return SQLITE_ERROR;
     }
@@ -726,91 +896,14 @@ static int bet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
         return SQLITE_OK;
     }
 
-    /* Allocate Brandes working arrays */
     double *CB = (double *)calloc((size_t)N, sizeof(double));
-    double *dist = (double *)malloc((size_t)N * sizeof(double));
-    double *sigma = (double *)malloc((size_t)N * sizeof(double));
-    double *delta = (double *)malloc((size_t)N * sizeof(double));
-    int *stack = (int *)malloc((size_t)N * sizeof(int));
-    IntList *pred = (IntList *)calloc((size_t)N, sizeof(IntList));
-    for (int i = 0; i < N; i++)
-        intlist_init(&pred[i]);
+    if (!CB) { graph_data_destroy(&g); return SQLITE_NOMEM; }
 
-    /* Determine source set (exact vs approx) */
-    int n_sources = N;
-    int *sources = (int *)malloc((size_t)N * sizeof(int));
-    double scale = 1.0;
-
-    if (auto_approx > 0 && N > auto_approx) {
-        /* Approximate: sample ceil(sqrt(N)) evenly spaced sources */
-        n_sources = (int)ceil(sqrt((double)N));
-        if (n_sources < 1)
-            n_sources = 1;
-        int step = N / n_sources;
-        if (step < 1)
-            step = 1;
-        n_sources = 0;
-        for (int i = 0; i < N && n_sources < (int)ceil(sqrt((double)N)); i += step) {
-            sources[n_sources++] = i;
-        }
-        scale = (double)N / (double)n_sources;
-    } else {
-        for (int i = 0; i < N; i++)
-            sources[i] = i;
-    }
-
-    /* Brandes main loop */
-    int weighted = g.has_weights;
-    for (int si = 0; si < n_sources; si++) {
-        int s = sources[si];
-        int stack_size = 0;
-
-        if (weighted) {
-            sssp_dijkstra(&g, s, dist, sigma, pred, stack, &stack_size, config.direction);
-        } else {
-            sssp_bfs(&g, s, dist, sigma, pred, stack, &stack_size, config.direction);
-        }
-
-        /* Backward accumulation */
-        for (int i = 0; i < N; i++)
-            delta[i] = 0.0;
-        while (stack_size > 0) {
-            int w = stack[--stack_size];
-            for (int pi = 0; pi < pred[w].count; pi++) {
-                int v = pred[w].items[pi];
-                if (sigma[w] > 0)
-                    delta[v] += (sigma[v] / sigma[w]) * (1.0 + delta[w]);
-            }
-            if (w != s)
-                CB[w] += delta[w];
-        }
-    }
-
-    /* Scale for approximation */
-    if (scale != 1.0) {
-        for (int i = 0; i < N; i++)
-            CB[i] *= scale;
-    }
-
-    /* For undirected graphs (bidirectional edges), each shortest path
-     * s->t is discovered from both endpoints, doubling the accumulation.
-     * Halve to correct. */
-    int undirected = config.direction && strcmp(config.direction, "both") == 0;
-    if (undirected) {
-        for (int i = 0; i < N; i++)
-            CB[i] /= 2.0;
-    }
-
-    /* Normalize */
-    if (normalized && N > 2) {
-        double norm_factor;
-        if (undirected) {
-            norm_factor = (double)(N - 1) * (double)(N - 2) / 2.0;
-        } else {
-            norm_factor = (double)(N - 1) * (double)(N - 2);
-        }
-        for (int i = 0; i < N; i++)
-            CB[i] /= norm_factor;
+    rc = brandes_compute(&g, config.direction, auto_approx, normalized, CB, NULL);
+    if (rc != SQLITE_OK) {
+        free(CB);
+        graph_data_destroy(&g);
+        return rc;
     }
 
     /* Build results */
@@ -819,16 +912,7 @@ static int bet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
         cr_add(&cur->results, g.ids[i], CB[i], 0, 0, 0);
     }
 
-    /* Cleanup */
-    for (int i = 0; i < N; i++)
-        intlist_destroy(&pred[i]);
-    free(pred);
     free(CB);
-    free(dist);
-    free(sigma);
-    free(delta);
-    free(stack);
-    free(sources);
     graph_data_destroy(&g);
 
     cur->current = 0;
@@ -869,7 +953,7 @@ static int bet_rowid(sqlite3_vtab_cursor *p, sqlite3_int64 *pRowid) {
     return SQLITE_OK;
 }
 
-static sqlite3_module graph_betweenness_module = {
+static sqlite3_module graph_node_betweenness_module = {
     .iVersion = 0,
     .xCreate = NULL,
     .xConnect = bet_connect,
@@ -883,6 +967,264 @@ static sqlite3_module graph_betweenness_module = {
     .xEof = bet_eof,
     .xColumn = bet_column,
     .xRowid = bet_rowid,
+};
+
+/* ═══════════════════════════════════════════════════════════════
+ * EDGE BETWEENNESS CENTRALITY
+ *
+ * Same Brandes algorithm as node betweenness, but accumulates
+ * per-edge contributions instead of per-node.
+ *
+ * In the backward accumulation, the flow through edge (v, w)
+ * where v is a predecessor of w is:
+ *    (sigma[v] / sigma[w]) * (1 + delta[w])
+ *
+ * Returns (src TEXT, dst TEXT, centrality REAL).
+ * ═══════════════════════════════════════════════════════════════ */
+
+enum {
+    EBET_COL_SRC = 0,
+    EBET_COL_DST,
+    EBET_COL_CENTRALITY,
+    EBET_COL_EDGE_TABLE,     /* hidden */
+    EBET_COL_SRC_COL,        /* hidden */
+    EBET_COL_DST_COL,        /* hidden */
+    EBET_COL_WEIGHT_COL,     /* hidden */
+    EBET_COL_NORMALIZED,     /* hidden */
+    EBET_COL_DIRECTION,      /* hidden */
+    EBET_COL_AUTO_APPROX,    /* hidden */
+    EBET_COL_TIMESTAMP_COL,  /* hidden */
+    EBET_COL_TIME_START,     /* hidden */
+    EBET_COL_TIME_END,       /* hidden */
+};
+
+typedef struct {
+    sqlite3_vtab_cursor base;
+    EdgeBetweennessResults results;
+    int current;
+    int eof;
+} EdgeBetweennessCursor;
+
+static int ebet_connect(sqlite3 *db, void *pAux, int argc, const char *const *argv,
+                        sqlite3_vtab **ppVtab, char **pzErr) {
+    (void)pAux;
+    (void)argc;
+    (void)argv;
+    (void)pzErr;
+    int rc = sqlite3_declare_vtab(db, "CREATE TABLE x("
+                                      "  src TEXT, dst TEXT, centrality REAL,"
+                                      "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
+                                      "  weight_col TEXT HIDDEN, normalized INTEGER HIDDEN,"
+                                      "  direction TEXT HIDDEN, auto_approx_threshold INTEGER HIDDEN,"
+                                      "  timestamp_col TEXT HIDDEN, time_start HIDDEN, time_end HIDDEN"
+                                      ")");
+    if (rc != SQLITE_OK)
+        return rc;
+
+    CentralityVtab *vtab = (CentralityVtab *)sqlite3_malloc(sizeof(CentralityVtab));
+    if (!vtab)
+        return SQLITE_NOMEM;
+    memset(vtab, 0, sizeof(CentralityVtab));
+    vtab->db = db;
+    *ppVtab = &vtab->base;
+    return SQLITE_OK;
+}
+
+static int ebet_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
+    (void)pVTab;
+    return graph_best_index_common(pIdxInfo, EBET_COL_EDGE_TABLE, EBET_COL_TIME_END, 0x7, 2000.0);
+}
+
+static int ebet_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
+    (void)pVTab;
+    EdgeBetweennessCursor *cur = (EdgeBetweennessCursor *)calloc(1, sizeof(EdgeBetweennessCursor));
+    if (!cur)
+        return SQLITE_NOMEM;
+    cur->eof = 1;
+    *ppCursor = &cur->base;
+    return SQLITE_OK;
+}
+
+static int ebet_close(sqlite3_vtab_cursor *pCursor) {
+    EdgeBetweennessCursor *cur = (EdgeBetweennessCursor *)pCursor;
+    ebr_destroy(&cur->results);
+    free(cur);
+    return SQLITE_OK;
+}
+
+static int ebet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
+                       int argc, sqlite3_value **argv) {
+    (void)idxStr;
+    EdgeBetweennessCursor *cur = (EdgeBetweennessCursor *)pCursor;
+    CentralityVtab *vtab = (CentralityVtab *)pCursor->pVtab;
+
+    ebr_destroy(&cur->results);
+    memset(&cur->results, 0, sizeof(EdgeBetweennessResults));
+
+    if (argc < 3) {
+        cur->eof = 1;
+        return SQLITE_OK;
+    }
+
+    GraphLoadConfig config;
+    memset(&config, 0, sizeof(config));
+
+    int normalized = 0;
+    int auto_approx = 0;
+    int pos = 0;
+
+    for (int bit = 0; bit < 12; bit++) {
+        if (!(idxNum & (1 << bit)))
+            continue;
+        int col = bit + EBET_COL_EDGE_TABLE;
+        switch (col) {
+        case EBET_COL_EDGE_TABLE:
+            config.edge_table = graph_safe_text(argv[pos]);
+            break;
+        case EBET_COL_SRC_COL:
+            config.src_col = graph_safe_text(argv[pos]);
+            break;
+        case EBET_COL_DST_COL:
+            config.dst_col = graph_safe_text(argv[pos]);
+            break;
+        case EBET_COL_WEIGHT_COL:
+            config.weight_col = graph_safe_text(argv[pos]);
+            break;
+        case EBET_COL_NORMALIZED:
+            normalized = sqlite3_value_int(argv[pos]);
+            break;
+        case EBET_COL_DIRECTION:
+            config.direction = graph_safe_text(argv[pos]);
+            break;
+        case EBET_COL_AUTO_APPROX:
+            auto_approx = sqlite3_value_int(argv[pos]);
+            break;
+        case EBET_COL_TIMESTAMP_COL:
+            config.timestamp_col = graph_safe_text(argv[pos]);
+            break;
+        case EBET_COL_TIME_START:
+            config.time_start = argv[pos];
+            break;
+        case EBET_COL_TIME_END:
+            config.time_end = argv[pos];
+            break;
+        }
+        pos++;
+    }
+
+    if (!config.direction)
+        config.direction = "forward";
+
+    GraphData g;
+    graph_data_init(&g);
+    char *errmsg = NULL;
+    int rc;
+    if (config.edge_table && is_graph_adjacency(vtab->db, config.edge_table)) {
+        rc = graph_data_load_from_adjacency(vtab->db, config.edge_table, &g, &errmsg);
+    } else {
+        rc = graph_data_load(vtab->db, &config, &g, &errmsg);
+    }
+    if (rc != SQLITE_OK) {
+        vtab->base.zErrMsg = errmsg ? errmsg : sqlite3_mprintf("graph_edge_betweenness: failed to load graph");
+        graph_data_destroy(&g);
+        return SQLITE_ERROR;
+    }
+
+    int N = g.node_count;
+    if (N == 0) {
+        graph_data_destroy(&g);
+        ebr_init(&cur->results);
+        cur->eof = 1;
+        return SQLITE_OK;
+    }
+
+    double *CB = (double *)calloc((size_t)N, sizeof(double));
+    double *EB = (double *)calloc((size_t)N * (size_t)N, sizeof(double));
+    if (!CB || !EB) {
+        free(CB); free(EB);
+        graph_data_destroy(&g);
+        return SQLITE_NOMEM;
+    }
+
+    rc = brandes_compute(&g, config.direction, auto_approx, normalized, CB, EB);
+    if (rc != SQLITE_OK) {
+        free(CB); free(EB);
+        graph_data_destroy(&g);
+        return rc;
+    }
+
+    /* Build results — only include edges that exist in the graph */
+    ebr_init(&cur->results);
+    for (int i = 0; i < N; i++) {
+        GraphAdjList *adj = &g.out[i];
+        for (int j = 0; j < adj->count; j++) {
+            int t = adj->edges[j].target;
+            double eb = EB[i * N + t];
+            if (eb > 0.0) {
+                ebr_add(&cur->results, g.ids[i], g.ids[t], eb);
+            }
+        }
+    }
+
+    free(CB);
+    free(EB);
+    graph_data_destroy(&g);
+
+    cur->current = 0;
+    cur->eof = (cur->results.count == 0);
+    return SQLITE_OK;
+}
+
+static int ebet_next(sqlite3_vtab_cursor *p) {
+    EdgeBetweennessCursor *cur = (EdgeBetweennessCursor *)p;
+    cur->current++;
+    cur->eof = (cur->current >= cur->results.count);
+    return SQLITE_OK;
+}
+
+static int ebet_eof(sqlite3_vtab_cursor *p) {
+    return ((EdgeBetweennessCursor *)p)->eof;
+}
+
+static int ebet_column(sqlite3_vtab_cursor *p, sqlite3_context *ctx, int col) {
+    EdgeBetweennessCursor *cur = (EdgeBetweennessCursor *)p;
+    EdgeBetweennessRow *row = &cur->results.rows[cur->current];
+    switch (col) {
+    case EBET_COL_SRC:
+        sqlite3_result_text(ctx, row->src, -1, SQLITE_TRANSIENT);
+        break;
+    case EBET_COL_DST:
+        sqlite3_result_text(ctx, row->dst, -1, SQLITE_TRANSIENT);
+        break;
+    case EBET_COL_CENTRALITY:
+        sqlite3_result_double(ctx, row->centrality);
+        break;
+    default:
+        sqlite3_result_null(ctx);
+        break;
+    }
+    return SQLITE_OK;
+}
+
+static int ebet_rowid(sqlite3_vtab_cursor *p, sqlite3_int64 *pRowid) {
+    *pRowid = ((EdgeBetweennessCursor *)p)->current;
+    return SQLITE_OK;
+}
+
+static sqlite3_module graph_edge_betweenness_module = {
+    .iVersion = 0,
+    .xCreate = NULL,
+    .xConnect = ebet_connect,
+    .xBestIndex = ebet_best_index,
+    .xDisconnect = cent_disconnect,
+    .xDestroy = cent_disconnect,
+    .xOpen = ebet_open,
+    .xClose = ebet_close,
+    .xFilter = ebet_filter,
+    .xNext = ebet_next,
+    .xEof = ebet_eof,
+    .xColumn = ebet_column,
+    .xRowid = ebet_rowid,
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1161,7 +1503,11 @@ int centrality_register_tvfs(sqlite3 *db) {
     if (rc != SQLITE_OK)
         return rc;
 
-    rc = sqlite3_create_module(db, "graph_betweenness", &graph_betweenness_module, NULL);
+    rc = sqlite3_create_module(db, "graph_node_betweenness", &graph_node_betweenness_module, NULL);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    rc = sqlite3_create_module(db, "graph_edge_betweenness", &graph_edge_betweenness_module, NULL);
     if (rc != SQLITE_OK)
         return rc;
 
