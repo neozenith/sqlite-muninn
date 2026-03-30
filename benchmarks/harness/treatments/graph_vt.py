@@ -256,6 +256,7 @@ class GraphVtTreatment(Treatment):
         tvf_map = {
             "degree": "graph_degree",
             "betweenness": "graph_node_betweenness",
+            "edge_betweenness": "graph_edge_betweenness",
             "closeness": "graph_closeness",
             "leiden": "graph_leiden",
         }

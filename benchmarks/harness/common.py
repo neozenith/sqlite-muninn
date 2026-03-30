@@ -247,7 +247,7 @@ GRAPH_MODELS: list[dict[str, Any]] = [
 ]
 
 GRAPH_TRAVERSAL_OPERATIONS: list[str] = ["bfs", "dfs", "shortest_path", "components", "pagerank"]
-GRAPH_CENTRALITY_OPERATIONS: list[str] = ["degree", "betweenness", "closeness"]
+GRAPH_CENTRALITY_OPERATIONS: list[str] = ["degree", "betweenness", "edge_betweenness", "closeness"]
 
 # (graph_model, n_nodes, avg_degree) tuples — largest tier
 GRAPH_CONFIGS_TRAVERSAL: list[tuple[str, int, int]] = [

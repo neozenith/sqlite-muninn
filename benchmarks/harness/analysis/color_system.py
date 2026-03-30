@@ -43,6 +43,7 @@ ENGINE_HUES: dict[str, int] = {
     # Centrality operations (when used as group keys)
     "degree": 270,  # purple
     "betweenness": 330,  # pink
+    "edge_betweenness": 350,  # magenta
     "closeness": 175,  # teal
     # Embed benchmarks (embed_fn × search_backend)
     "muninn_embed_muninn-hnsw": 270,  # purple
@@ -78,7 +79,8 @@ DISPLAY_LABELS: dict[str, str] = {
     "barabasi_albert": "Barabasi-Albert",
     # Centrality operations
     "degree": "Degree",
-    "betweenness": "Betweenness",
+    "betweenness": "Node Betweenness",
+    "edge_betweenness": "Edge Betweenness",
     "closeness": "Closeness",
     # Embed benchmarks
     "muninn_embed_muninn-hnsw": "muninn-embed + muninn-hnsw",
