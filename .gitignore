@@ -67,7 +67,7 @@ vendor/llama.cpp/build-wasm/
 
 # Project-local
 .claude/
-CLAUDE.md
+
 tmp/
 docs/logo/
 .playwright-cli/
