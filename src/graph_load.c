@@ -126,7 +126,7 @@ int graph_data_find_or_add(GraphData *g, const char *id) {
  * Adjacency list helper
  * ═══════════════════════════════════════════════════════════════ */
 
-static void adj_add(GraphAdjList *adj, int target, double weight) {
+void adj_add(GraphAdjList *adj, int target, double weight) {
     if (adj->count >= adj->capacity) {
         int nc = adj->capacity == 0 ? 8 : adj->capacity * 2;
         adj->edges = (GraphEdge *)realloc(adj->edges, (size_t)nc * sizeof(GraphEdge));

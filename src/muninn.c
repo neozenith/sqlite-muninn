@@ -4,7 +4,7 @@
  * Registers all modules and functions with SQLite:
  * - hnsw_index virtual table (HNSW vector index)
  * - graph_bfs, graph_dfs, graph_shortest_path, graph_components, graph_pagerank TVFs
- * - graph_degree, graph_betweenness, graph_closeness centrality TVFs
+ * - graph_degree, graph_node_betweenness, graph_edge_betweenness, graph_closeness centrality TVFs
  * - graph_leiden community detection TVF
  * - graph_adjacency virtual table (persistent CSR adjacency cache)
  * - graph_select TVF (dbt-style node selection)
@@ -26,6 +26,7 @@ SQLITE_EXTENSION_INIT1
 #include "graph_adjacency.h"
 #include "graph_select_tvf.h"
 #include "node2vec.h"
+#include "er.h"
 #ifndef MUNINN_NO_LLAMA
 #include "llama_common.h"
 #include "llama_embed.h"
@@ -100,6 +101,12 @@ int sqlite3_muninn_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines
         return rc;
     }
 #endif
+
+    rc = er_register_functions(db);
+    if (rc != SQLITE_OK) {
+        *pzErrMsg = sqlite3_mprintf("muninn: failed to register ER functions");
+        return rc;
+    }
 
     return SQLITE_OK;
 }

@@ -63,6 +63,7 @@ extern void test_graph_csr(void);
 extern void test_graph_selector(void);
 extern void test_llama_embed(void);
 extern void test_llama_chat(void);
+extern void test_string_sim(void);
 
 int main(void) {
     /* Capture the real sqlite3_api pointer so extension code works */
@@ -102,6 +103,9 @@ int main(void) {
 
     printf("\n[llama_chat]\n");
     test_llama_chat();
+
+    printf("\n[string_sim]\n");
+    test_string_sim();
 
     printf("\n=== Results: %d passed, %d failed ===\n", total_passed, total_failed);
 

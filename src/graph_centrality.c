@@ -390,7 +390,7 @@ static void sssp_dijkstra(const GraphData *g, int source, double *dist, double *
  * Returns SQLITE_OK or SQLITE_NOMEM.
  * ═══════════════════════════════════════════════════════════════ */
 
-static int brandes_compute(
+int brandes_compute(
     const GraphData *g,
     const char *direction,
     int auto_approx,
