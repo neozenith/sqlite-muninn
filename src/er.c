@@ -62,6 +62,41 @@ static char *str_lower(const char *s) {
     } \
 } while (0)
 
+/* ── Helper: write JSON-escaped string into buffer ────────────────── */
+
+static size_t json_escape(char *out, size_t out_size, const char *s) {
+    size_t pos = 0;
+    out[pos++] = '"';
+    for (; *s && pos < out_size - 2; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"') {
+            if (pos + 2 >= out_size) break;
+            out[pos++] = '\\'; out[pos++] = '"';
+        } else if (c == '\\') {
+            if (pos + 2 >= out_size) break;
+            out[pos++] = '\\'; out[pos++] = '\\';
+        } else if (c == '\n') {
+            if (pos + 2 >= out_size) break;
+            out[pos++] = '\\'; out[pos++] = 'n';
+        } else if (c == '\r') {
+            if (pos + 2 >= out_size) break;
+            out[pos++] = '\\'; out[pos++] = 'r';
+        } else if (c == '\t') {
+            if (pos + 2 >= out_size) break;
+            out[pos++] = '\\'; out[pos++] = 't';
+        } else if (c < 0x20) {
+            /* Other control characters: \uXXXX */
+            if (pos + 6 >= out_size) break;
+            pos += (size_t)snprintf(out + pos, out_size - pos, "\\u%04x", c);
+        } else {
+            out[pos++] = (char)c;
+        }
+    }
+    out[pos++] = '"';
+    out[pos] = '\0';
+    return pos;
+}
+
 /* ── Main function ───────────────────────────────────────────────── */
 
 static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
@@ -495,21 +530,25 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
 
     /* ── Build JSON result ───────────────────────────────────────── */
     {
-        /* Estimate size: each entry ~30 chars ("entity_id": 123,) */
-        size_t buf_size = (size_t)n_entities * 40 + 32;
+        /* Estimate size: each entry needs escaped key + int value.
+         * Worst case: every char escaped to \uXXXX = 6x expansion. */
+        size_t buf_size = (size_t)n_entities * 120 + 32;
         char *json = (char *)malloc(buf_size);
+        char esc_buf[2048]; /* scratch for escaping one entity_id */
         size_t pos = 0;
 
         pos += (size_t)snprintf(json + pos, buf_size - pos, "{\"clusters\":{");
         for (int i = 0; i < n_entities; i++) {
             if (i > 0) json[pos++] = ',';
-            pos += (size_t)snprintf(json + pos, buf_size - pos, "\"%s\":%d",
-                                    entities[i].entity_id, cluster_map[i]);
+            size_t key_len = json_escape(esc_buf, sizeof(esc_buf), entities[i].entity_id);
             /* Grow if needed */
-            if (pos > buf_size - 64) {
-                buf_size *= 2;
+            if (pos + key_len + 16 > buf_size) {
+                buf_size = (pos + key_len + 16) * 2;
                 json = (char *)realloc(json, buf_size);
             }
+            memcpy(json + pos, esc_buf, key_len);
+            pos += key_len;
+            pos += (size_t)snprintf(json + pos, buf_size - pos, ":%d", cluster_map[i]);
         }
         pos += (size_t)snprintf(json + pos, buf_size - pos, "}}");
 
