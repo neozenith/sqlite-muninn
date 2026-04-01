@@ -1,4 +1,9 @@
-"""Phase: Community Naming — LLM-generated labels for entity clusters and Leiden communities."""
+"""Phase: Community Naming — LLM-generated labels via muninn_label_groups TVF.
+
+Uses the C TVF that internally handles grouping, prompt construction,
+LLM inference (with skip_think), and label cleaning. The Python phase
+just creates views/temp tables with the right schema and calls the TVF.
+"""
 
 from __future__ import annotations
 
@@ -15,29 +20,18 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Communities below this threshold are too small to warrant an LLM label.
 MIN_COMMUNITY_SIZE = 3
-
-# Above this threshold, only the top members (by mention frequency) are included
-# in the prompt; the rest are summarised as "and N others".
 MAX_MEMBERS_IN_PROMPT = 10
 
-# Model registration SQL — loads the GGUF into muninn's chat model registry.
 _REGISTER_MODEL_SQL = "INSERT INTO temp.muninn_chat_models(name, model) SELECT ?, muninn_chat_model(?)"
 
 
 class PhaseCommunityNaming(Phase):
     """Generate human-readable labels for entity clusters and Leiden communities.
 
-    Two output tables:
-
-    1. entity_cluster_labels — names for entity_clusters groups (synonym naming).
-       e.g. "Adam Smith" / "Smith" / "A. Smith" → "Adam Smith (Economist)"
-
-    2. community_labels — names for Leiden graph communities at each resolution.
-       e.g. community 3 at resolution 1.0 → "Economic Trade Theory"
-
-    Uses muninn_summarize() SQL function via the loaded GGUF chat model.
+    Uses muninn_label_groups TVF — all prompt construction and LLM calling
+    happens in C. This phase just creates the membership views and inserts
+    the TVF results into output tables.
     """
 
     @property
@@ -45,7 +39,6 @@ class PhaseCommunityNaming(Phase):
         return "community_naming"
 
     def is_stale(self, conn: sqlite3.Connection) -> bool:
-        """Return True if either labels table is missing or empty."""
         try:
             ecl: int = conn.execute("SELECT count(*) FROM entity_cluster_labels").fetchone()[0]
             cl: int = conn.execute("SELECT count(*) FROM community_labels").fetchone()[0]
@@ -60,74 +53,64 @@ class PhaseCommunityNaming(Phase):
 
     def run(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         model_name = MUNINN_CHAT_MODEL_NAME
+        now = datetime.now(UTC).isoformat()
 
-        self._label_entity_clusters(conn, model_name)
-        self._label_leiden_communities(conn, model_name)
+        self._label_entity_clusters(conn, model_name, now)
+        self._label_leiden_communities(conn, model_name, now)
 
-    def _label_entity_clusters(self, conn: sqlite3.Connection, model_name: str) -> None:
-        """Name entity_clusters groups using muninn_summarize()."""
+    def _label_entity_clusters(self, conn: sqlite3.Connection, model_name: str, now: str) -> None:
+        """Name entity clusters via muninn_label_groups TVF."""
         conn.execute("DROP TABLE IF EXISTS entity_cluster_labels")
         conn.execute("""
             CREATE TABLE entity_cluster_labels (
-                canonical   TEXT PRIMARY KEY,
-                label       TEXT NOT NULL,
+                canonical    TEXT PRIMARY KEY,
+                label        TEXT NOT NULL,
                 member_count INTEGER NOT NULL,
-                model       TEXT NOT NULL,
+                model        TEXT NOT NULL,
                 generated_at TEXT NOT NULL
             )
         """)
 
-        # Gather entity clusters: group by canonical name
+        # Create a membership view: (canonical, member_name)
+        # The TVF needs a flat table with group_col and member_col.
+        conn.execute("DROP VIEW IF EXISTS _ecl_membership")
         try:
-            rows = conn.execute("""
-                SELECT ec.canonical, n.entity_type, n.mention_count, ec.name
+            conn.execute("""
+                CREATE TEMP VIEW _ecl_membership AS
+                SELECT ec.canonical AS group_id,
+                       ec.name || ' (' || COALESCE(n.entity_type, 'unknown') || ')' AS member_name
                 FROM entity_clusters ec
-                JOIN nodes n ON n.name = ec.canonical
-                ORDER BY ec.canonical, ec.name
-            """).fetchall()
+                LEFT JOIN nodes n ON n.name = ec.canonical
+            """)
         except sqlite3.OperationalError:
             log.info("  No entity_clusters table — skipping entity cluster naming")
             return
 
-        # Group members by canonical
-        clusters: dict[str, list[tuple[str, str, int]]] = {}
-        for canonical, entity_type, mention_count, member_name in rows:
-            clusters.setdefault(canonical, []).append((member_name, entity_type, mention_count))
+        total = conn.execute("SELECT count(DISTINCT group_id) FROM _ecl_membership").fetchone()[0]
+        log.info("  Labelling entity clusters via muninn_label_groups (%d groups)...", total)
 
-        # Only label clusters with multiple members (singletons are self-descriptive)
-        eligible = {k: v for k, v in clusters.items() if len(v) >= MIN_COMMUNITY_SIZE}
-
-        log.info(
-            "  Entity clusters: %d total, %d with >= %d members eligible for naming",
-            len(clusters),
-            len(eligible),
-            MIN_COMMUNITY_SIZE,
+        conn.execute(
+            """
+            INSERT INTO entity_cluster_labels(canonical, label, member_count, model, generated_at)
+            SELECT group_id, label, member_count, ?, ?
+            FROM muninn_label_groups
+            WHERE model = ?
+              AND membership_table = '_ecl_membership'
+              AND group_col = 'group_id'
+              AND member_col = 'member_name'
+              AND min_group_size = ?
+              AND max_members_in_prompt = ?
+              AND system_prompt = 'Output ONLY a concise label (3-8 words). No explanation.'
+            """,
+            (model_name, now, model_name, MIN_COMMUNITY_SIZE, MAX_MEMBERS_IN_PROMPT),
         )
 
-        generated = 0
-        for canonical, members in sorted(eligible.items()):
-            prompt = _build_cluster_prompt(canonical, members)
-            label = conn.execute("SELECT muninn_summarize(?, ?)", (model_name, prompt)).fetchone()[0]
+        count = conn.execute("SELECT count(*) FROM entity_cluster_labels").fetchone()[0]
+        log.info("  Entity cluster naming complete: %d labels", count)
+        conn.execute("DROP VIEW IF EXISTS _ecl_membership")
 
-            # Strip surrounding quotes if the model wrapped the label
-            label = label.strip()
-            if len(label) >= 2 and label[0] == label[-1] and label[0] in ('"', "'"):
-                label = label[1:-1]
-
-            conn.execute(
-                "INSERT INTO entity_cluster_labels (canonical, label, member_count, model, generated_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (canonical, label, len(members), model_name, datetime.now(UTC).isoformat()),
-            )
-            generated += 1
-
-            if generated % 10 == 0:
-                log.info("  Named %d / %d entity clusters", generated, len(eligible))
-
-        log.info("  Entity cluster naming complete: %d labels", generated)
-
-    def _label_leiden_communities(self, conn: sqlite3.Connection, model_name: str) -> None:
-        """Name Leiden communities at each resolution using muninn_summarize()."""
+    def _label_leiden_communities(self, conn: sqlite3.Connection, model_name: str, now: str) -> None:
+        """Name Leiden communities at each resolution via muninn_label_groups TVF."""
         conn.execute("DROP TABLE IF EXISTS community_labels")
         conn.execute("""
             CREATE TABLE community_labels (
@@ -141,7 +124,6 @@ class PhaseCommunityNaming(Phase):
             )
         """)
 
-        # Check if leiden_communities exists
         try:
             resolutions = conn.execute(
                 "SELECT DISTINCT resolution FROM leiden_communities ORDER BY resolution"
@@ -154,130 +136,54 @@ class PhaseCommunityNaming(Phase):
             log.info("  No Leiden communities found — skipping community labelling")
             return
 
-        # Pre-fetch relations for intra-community edge context
-        try:
-            all_edges = conn.execute("SELECT src, dst, rel_type FROM relations").fetchall()
-        except sqlite3.OperationalError:
-            all_edges = []
-
         total_generated = 0
         for (resolution,) in resolutions:
-            # Fetch community assignments at this resolution
-            rows = conn.execute(
-                "SELECT node, community_id FROM leiden_communities WHERE resolution = ?",
+            # Create a temp membership table for this resolution
+            # The TVF needs a real table (not a parameterised view)
+            conn.execute("DROP TABLE IF EXISTS temp._comm_membership")
+            conn.execute(
+                """
+                CREATE TEMP TABLE _comm_membership AS
+                SELECT CAST(community_id AS TEXT) AS group_id, node AS member_name
+                FROM leiden_communities
+                WHERE resolution = ?
+            """,
                 (resolution,),
-            ).fetchall()
-
-            # Group by community
-            communities: dict[int, list[str]] = {}
-            for node, comm_id in rows:
-                communities.setdefault(comm_id, []).append(node)
-
-            # Build node → community map for edge filtering
-            node_to_comm = dict(rows)
-
-            # Index intra-community edges
-            comm_edges: dict[int, list[tuple[str, str, str]]] = {}
-            for src, dst, rel_type in all_edges:
-                src_comm = node_to_comm.get(src)
-                dst_comm = node_to_comm.get(dst)
-                if src_comm is not None and src_comm == dst_comm:
-                    comm_edges.setdefault(src_comm, []).append((src, dst, rel_type))
-
-            # Filter to communities meeting the size threshold
-            eligible = {cid: members for cid, members in communities.items() if len(members) >= MIN_COMMUNITY_SIZE}
-
-            log.info(
-                "  Resolution %.2f: %d communities, %d with >= %d members",
-                resolution,
-                len(communities),
-                len(eligible),
-                MIN_COMMUNITY_SIZE,
             )
 
-            generated = 0
-            for comm_id, members in sorted(eligible.items()):
-                edges = comm_edges.get(comm_id, [])
-                prompt = _build_community_prompt(members, edges)
-                label = conn.execute("SELECT muninn_summarize(?, ?)", (model_name, prompt)).fetchone()[0]
+            n_communities = conn.execute("SELECT count(DISTINCT group_id) FROM _comm_membership").fetchone()[0]
+            log.info("  Resolution %.2f: %d communities", resolution, n_communities)
 
-                label = label.strip()
-                if len(label) >= 2 and label[0] == label[-1] and label[0] in ('"', "'"):
-                    label = label[1:-1]
+            conn.execute(
+                """
+                INSERT INTO community_labels(resolution, community_id, label, member_count, model, generated_at)
+                SELECT ?, CAST(group_id AS INTEGER), label, member_count, ?, ?
+                FROM muninn_label_groups
+                WHERE model = ?
+                  AND membership_table = '_comm_membership'
+                  AND group_col = 'group_id'
+                  AND member_col = 'member_name'
+                  AND min_group_size = ?
+                  AND max_members_in_prompt = ?
+                  AND system_prompt = 'Output ONLY a concise topic label (3-8 words). No explanation.'
+                """,
+                (resolution, model_name, now, model_name, MIN_COMMUNITY_SIZE, MAX_MEMBERS_IN_PROMPT),
+            )
 
-                conn.execute(
-                    "INSERT INTO community_labels "
-                    "(resolution, community_id, label, member_count, model, generated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (resolution, comm_id, label, len(members), model_name, datetime.now(UTC).isoformat()),
-                )
-                generated += 1
-
-                if generated % 10 == 0:
-                    log.info("    Named %d / %d communities", generated, len(eligible))
-
+            generated = conn.execute(
+                "SELECT count(*) FROM community_labels WHERE resolution = ?", (resolution,)
+            ).fetchone()[0]
             total_generated += generated
+            log.info("    Labelled %d communities at resolution %.2f", generated, resolution)
+
+            conn.execute("DROP TABLE IF EXISTS temp._comm_membership")
 
         log.info("  Community labelling complete: %d labels across %d resolutions", total_generated, len(resolutions))
 
     def teardown(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
-        # Unload the chat model to free memory
         try:
-            conn.execute(
-                "DELETE FROM temp.muninn_chat_models WHERE name = ?",
-                (MUNINN_CHAT_MODEL_NAME,),
-            )
+            conn.execute("DELETE FROM temp.muninn_chat_models WHERE name = ?", (MUNINN_CHAT_MODEL_NAME,))
         except sqlite3.OperationalError:
             pass
-
-
-def _build_cluster_prompt(canonical: str, members: list[tuple[str, str, int]]) -> str:
-    """Build a prompt describing an entity cluster for naming."""
-    sorted_members = sorted(members, key=lambda m: m[2], reverse=True)
-
-    if len(sorted_members) <= MAX_MEMBERS_IN_PROMPT:
-        member_lines = [f"- {name} ({etype})" for name, etype, _ in sorted_members]
-    else:
-        top = sorted_members[:MAX_MEMBERS_IN_PROMPT]
-        remainder = len(sorted_members) - MAX_MEMBERS_IN_PROMPT
-        member_lines = [f"- {name} ({etype})" for name, etype, _ in top]
-        member_lines.append(f"- ...and {remainder} others")
-
-    parts = [
-        f"Entity cluster with canonical name '{canonical}' ({len(members)} aliases):",
-        *member_lines,
-        "",
-        "Generate a concise label (3-8 words) describing what this entity is.",
-    ]
-    return "\n".join(parts)
-
-
-def _build_community_prompt(
-    members: list[str],
-    edges: list[tuple[str, str, str]],
-) -> str:
-    """Build a prompt describing a Leiden community for naming."""
-    sorted_members = sorted(members)
-
-    if len(sorted_members) <= MAX_MEMBERS_IN_PROMPT:
-        member_lines = [f"- {name}" for name in sorted_members]
-    else:
-        top = sorted_members[:MAX_MEMBERS_IN_PROMPT]
-        remainder = len(sorted_members) - MAX_MEMBERS_IN_PROMPT
-        member_lines = [f"- {name}" for name in top]
-        member_lines.append(f"- ...and {remainder} others")
-
-    parts = [f"Knowledge graph community ({len(members)} entities):"]
-    parts.extend(member_lines)
-
-    if edges:
-        parts.append("")
-        parts.append("Relations between members:")
-        for src, dst, rel_type in edges[:20]:
-            parts.append(f"- {src} {rel_type} {dst}")
-        if len(edges) > 20:
-            parts.append(f"- ...and {len(edges) - 20} more relations")
-
-    parts.append("")
-    parts.append("Generate a concise label (3-8 words) describing the topic of this community.")
-    return "\n".join(parts)
+        conn.execute("DROP VIEW IF EXISTS _ecl_membership")
+        conn.execute("DROP TABLE IF EXISTS temp._comm_membership")

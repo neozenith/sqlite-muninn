@@ -107,7 +107,7 @@ static int load_chat_model(const char *path, int n_ctx, LoadedChatModel *out, ch
  * batch, then runs autoregressive sampling until EOG or max_tokens.
  * ────────────────────────────────────────────────────────────── */
 
-static int chat_generate(MuninnModelEntry *me, const char *prompt, const char *grammar_gbnf, int max_tokens,
+int chat_generate(MuninnModelEntry *me, const char *prompt, const char *grammar_gbnf, int max_tokens,
                          char **out_text, int *out_len, char *errbuf, int errbuf_sz) {
     const struct llama_vocab *vocab = llama_model_get_vocab(me->model);
 
@@ -421,7 +421,7 @@ static int chat_generate_batch(MuninnModelEntry *me, const char **prompts, int n
  * For convenience functions, builds system+user message pairs.
  * ────────────────────────────────────────────────────────────── */
 
-static char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const char *user_msg,
+char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const char *user_msg,
                                   int inject_skip_think, int *out_len) {
     struct llama_chat_message msgs[2];
     int n_msg = 0;
@@ -620,7 +620,8 @@ static void fn_chat_model(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
 }
 
 /* ──────────────────────────────────────────────────────────────────
- * SQL Function: muninn_chat(model, prompt [, grammar [, max_tokens [, system_prompt]]]) -> TEXT
+ * SQL Function: muninn_chat(model, prompt [, grammar [, max_tokens [, system_prompt [, skip_think]]]]) -> TEXT
+ *   skip_think: INTEGER 0 or 1 — inject closed think block for Qwen3.5 models
  * ────────────────────────────────────────────────────────────── */
 
 static void fn_chat(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
@@ -655,10 +656,14 @@ static void fn_chat(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     if (argc >= 5 && sqlite3_value_type(argv[4]) == SQLITE_TEXT) {
         system_msg = (const char *)sqlite3_value_text(argv[4]);
     }
+    int skip_think = 0;
+    if (argc >= 6 && sqlite3_value_type(argv[5]) == SQLITE_INTEGER) {
+        skip_think = sqlite3_value_int(argv[5]) ? 1 : 0;
+    }
 
     /* Format with optional system message using model chat template */
     int fmt_len = 0;
-    char *formatted = format_chat_messages(me, system_msg, prompt, 0, &fmt_len);
+    char *formatted = format_chat_messages(me, system_msg, prompt, skip_think, &fmt_len);
     if (!formatted) {
         sqlite3_result_error(ctx, "muninn_chat: failed to format chat template", -1);
         return;
@@ -1202,10 +1207,10 @@ static void fn_summarize(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
         return;
     }
 
-    /* Default: let the model generate until EOG (end-of-generation) token.
-     * n_ctx is the hard ceiling. Thinking models use part of the budget for
-     * internal reasoning; strip_think_block() removes it from the result. */
-    int max_tokens = me->n_ctx;
+    /* Default max_tokens: 256 for summaries. Summaries are short (1-2 sentences).
+     * With thinking models, inject_skip_think=1 avoids wasting tokens on
+     * reasoning that is unnecessary for a simple labeling task. */
+    int max_tokens = 256;
     if (argc >= 3 && sqlite3_value_type(argv[2]) == SQLITE_INTEGER) {
         max_tokens = sqlite3_value_int(argv[2]);
     }
@@ -1218,7 +1223,8 @@ static void fn_summarize(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     }
     snprintf(user_prompt, user_len, "Produce a one-sentence summary of this text:\n\n%s", text);
 
-    char *formatted = format_chat_messages(me, NULL, user_prompt, 0, NULL);
+    /* inject_skip_think=1: summaries don't need chain-of-thought reasoning */
+    char *formatted = format_chat_messages(me, NULL, user_prompt, 1, NULL);
     free(user_prompt);
     if (!formatted) {
         sqlite3_result_error(ctx, "muninn_summarize: template formatting failed", -1);

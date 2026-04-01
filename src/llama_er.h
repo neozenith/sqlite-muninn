@@ -1,5 +1,5 @@
 /*
- * er.h — Entity Resolution scalar function
+ * llama_er.h — Entity Resolution scalar function
  *
  * Registers muninn_extract_er() with SQLite.
  *
@@ -22,11 +22,11 @@
  *
  * The match_threshold is implicit: 1 - dist_threshold + borderline_delta.
  */
-#ifndef ER_H
-#define ER_H
+#ifndef LLAMA_ER_H
+#define LLAMA_ER_H
 
 #include "sqlite3ext.h"
 
-int er_register_functions(sqlite3 *db);
+int llama_er_register_functions(sqlite3 *db);
 
-#endif /* ER_H */
+#endif /* LLAMA_ER_H */

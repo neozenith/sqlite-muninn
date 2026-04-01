@@ -3360,6 +3360,7 @@ name = "sqlite-muninn"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "einops" },
     { name = "gguf" },
     { name = "gliner" },
     { name = "gliner2" },
@@ -3431,6 +3432,7 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.42.76" },
+    { name = "einops", specifier = ">=0.8.2" },
     { name = "gguf", specifier = ">=0.18.0" },
     { name = "gliner", specifier = ">=0.2.25" },
     { name = "gliner2", specifier = ">=1.2.4" },

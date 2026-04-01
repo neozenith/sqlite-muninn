@@ -1,5 +1,5 @@
 /*
- * er.c — Entity Resolution function: muninn_extract_er()
+ * llama_er.c — Entity Resolution function: muninn_extract_er()
  *
  * Orchestrates the full ER pipeline using SQL calls to existing subsystems:
  *   1. KNN blocking via HNSW virtual table
@@ -12,7 +12,7 @@
  * The match_threshold is derived: 1 - dist_threshold + borderline_delta.
  */
 
-#include "er.h"
+#include "llama_er.h"
 #include "string_sim.h"
 
 #include <ctype.h>
@@ -576,7 +576,7 @@ cleanup:
 
 /* ── Registration ────────────────────────────────────────────────── */
 
-int er_register_functions(sqlite3 *db) {
+int llama_er_register_functions(sqlite3 *db) {
     return sqlite3_create_function(
         db, "muninn_extract_er", -1, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
         NULL, fn_extract_er, NULL, NULL);

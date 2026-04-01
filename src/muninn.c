@@ -14,6 +14,8 @@
  * - muninn_models eponymous virtual table (embed model lifecycle)
  * - muninn_chat, muninn_chat_model, muninn_extract_entities, muninn_extract_relations, muninn_summarize
  * - muninn_chat_models eponymous virtual table (chat model lifecycle)
+ * - muninn_label_groups TVF (LLM-powered group labelling)
+ * - muninn_extract_er() scalar function (entity resolution pipeline)
  */
 #include "sqlite3ext.h"
 SQLITE_EXTENSION_INIT1
@@ -26,11 +28,12 @@ SQLITE_EXTENSION_INIT1
 #include "graph_adjacency.h"
 #include "graph_select_tvf.h"
 #include "node2vec.h"
-#include "er.h"
 #ifndef MUNINN_NO_LLAMA
 #include "llama_common.h"
 #include "llama_embed.h"
 #include "llama_chat.h"
+#include "llama_label_groups.h"
+#include "llama_er.h"
 #endif
 
 #ifdef _WIN32
@@ -100,13 +103,19 @@ int sqlite3_muninn_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines
         *pzErrMsg = sqlite3_mprintf("muninn: failed to register chat functions");
         return rc;
     }
-#endif
 
-    rc = er_register_functions(db);
+    rc = llama_label_groups_register_module(db);
     if (rc != SQLITE_OK) {
-        *pzErrMsg = sqlite3_mprintf("muninn: failed to register ER functions");
+        *pzErrMsg = sqlite3_mprintf("muninn: failed to register llama_label_groups module");
         return rc;
     }
+
+    rc = llama_er_register_functions(db);
+    if (rc != SQLITE_OK) {
+        *pzErrMsg = sqlite3_mprintf("muninn: failed to register llama_er functions");
+        return rc;
+    }
+#endif
 
     return SQLITE_OK;
 }
