@@ -1061,6 +1061,236 @@ def cmd_submit(args: argparse.Namespace) -> None:
     log.info("Submitted %d benchmark(s). ASG will scale up automatically.", len(bench_ids))
 
 
+def cmd_diagnose(args: argparse.Namespace) -> None:
+    """Analyse CloudWatch logs for worker failure patterns (last N minutes).
+
+    Uses CloudWatch Logs Insights for server-side aggregation across all
+    worker streams. Classifies errors into known failure types with fix hints,
+    and surfaces any unknown exception patterns that need investigation.
+    """
+    cfg = load_config()
+    aws_cfg = _aws(cfg)
+    ec2_region = aws_cfg["ec2_region"]
+    s3_region = aws_cfg["s3_region"]
+    s3_bucket = aws_cfg["s3_bucket"]
+    minutes: int = args.minutes
+    seconds = minutes * 60
+    log_group = "/muninn/benchmarks"
+
+    # Known failure patterns: (regex, short_label, remediation_hint)
+    # Order matters — first match wins.
+    known_patterns: list[tuple[str, str, str]] = [
+        (r"No space left on device",        "DISK_FULL",        "db cleanup missing; add rm -rf results/{id}/ after each run"),
+        (r"wrong number of arguments",      "WRONG_ARGS",       "node2vec arg mismatch; fixed in 51dba03"),
+        (r"text too long.*exceeds context", "TEXT_TOO_LONG",    "embed token overflow; fixed in 10c0171"),
+        (r"No module named 'sqlite_lembed'","MISSING_LEMBED",   "sqlite-lembed not in benchmark dep group; fixed in 4615d9b"),
+        (r"OutOfMemory|MemoryError|Cannot allocate memory",
+                                            "OOM",              "instance needs more RAM"),
+        (r"CIRCUIT BREAKER",                "CIRCUIT_BREAKER",  "3 consecutive failures — investigate root cause"),
+        (r"EndpointResolutionError|ConnectTimeout|Connection refused",
+                                            "NETWORK",          "transient AWS connectivity"),
+        (r"ModuleNotFoundError|ImportError","IMPORT_ERROR",     "missing Python dep — check benchmark dep group"),
+        (r"TimeoutExpired",                 "TIMEOUT",          "benchmark exceeded time limit"),
+        (r"OperationalError",               "SQLITE_ERROR",     "SQLite error — check full traceback"),
+        (r"Traceback \(most recent call last\)",
+                                            "UNHANDLED_EXC",    "unclassified exception — see log lines below"),
+    ]
+    noise_patterns = [r"Run failed:", r"Cleaning up failed", r"FAILED: \w"]
+
+    logs_client = boto3.client("logs", region_name=ec2_region)
+    sqs_client = boto3.client("sqs", region_name=ec2_region)
+    s3_client = boto3.client("s3", region_name=s3_region)
+    asg_client = boto3.client("autoscaling", region_name=ec2_region)
+
+    # Resolve queue URLs from CloudFormation
+    branch = cfg["repo"]["branch"]
+    safe_branch = _sanitize_branch(branch)
+    stack_name = f"MuninnBench-{safe_branch}"
+    queue_url = dlq_url = asg_name = None
+    try:
+        cf = boto3.client("cloudformation", region_name=ec2_region)
+        stack = cf.describe_stacks(StackName=stack_name)
+        outputs = {o["OutputKey"]: o["OutputValue"] for o in stack["Stacks"][0].get("Outputs", [])}
+        queue_url = outputs.get("QueueUrl")
+        dlq_url = outputs.get("DlqUrl")
+        asg_name = outputs.get("AsgName")
+    except ClientError:
+        pass
+
+    def _run_insights(query: str) -> list[list[dict]]:
+        now = int(time.time())
+        resp = logs_client.start_query(
+            logGroupName=log_group,
+            startTime=now - seconds,
+            endTime=now,
+            queryString=query,
+            limit=1000,
+        )
+        qid = resp["queryId"]
+        for _ in range(30):
+            time.sleep(1)
+            result = logs_client.get_query_results(queryId=qid)
+            if result["status"] in ("Complete", "Failed", "Cancelled", "Timeout"):
+                return result.get("results", [])
+        return []
+
+    def _field(row: list[dict], name: str) -> str:
+        for f in row:
+            if f["field"] == name:
+                return f["value"]
+        return ""
+
+    log.info("Querying CloudWatch Logs Insights (last %d min)…", minutes)
+
+    # ── Query 1: FAILED: job lines ────────────────────────────────────────────
+    job_rows = _run_insights("""
+        filter @message like /FAILED: /
+        | parse @message "FAILED: * (exit code" as bench_id
+        | stats count(*) as n by bench_id
+        | sort n desc
+        | limit 200
+    """)
+    job_failures = {
+        _field(r, "bench_id").strip(): int(_field(r, "n") or 0)
+        for r in job_rows
+        if _field(r, "bench_id").strip()
+    }
+
+    # ── Query 2: Error lines for pattern classification ───────────────────────
+    err_rows = _run_insights("""
+        filter @message like /Error/ or @message like /Exception/ or @message like /CIRCUIT BREAKER/
+        | fields @logStream as instance, @message as msg
+        | limit 500
+    """)
+
+    known: dict[str, dict] = {}
+    unknown_counts: dict[str, int] = {}
+    circuit_breaks: list[str] = []
+
+    for row in err_rows:
+        msg = _field(row, "msg")
+        instance = _field(row, "instance").lstrip("i-0")[-12:]
+
+        if any(re.search(p, msg) for p in noise_patterns):
+            continue
+        if "CIRCUIT BREAKER" in msg:
+            circuit_breaks.append(instance)
+            continue
+
+        matched = False
+        for pattern, label, hint in known_patterns:
+            if re.search(pattern, msg, re.IGNORECASE):
+                if label not in known:
+                    known[label] = {"count": 0, "instances": set(), "hint": hint}
+                known[label]["count"] += 1
+                known[label]["instances"].add(instance)
+                matched = True
+                break
+        if not matched:
+            excerpt = msg.strip()[:120]
+            unknown_counts[excerpt] = unknown_counts.get(excerpt, 0) + 1
+
+    unknown = sorted(unknown_counts.items(), key=lambda x: -x[1])
+
+    # ── Queue depth ───────────────────────────────────────────────────────────
+    q: dict = {"visible": "?", "inflight": "?", "dlq": "?"}
+    if queue_url:
+        try:
+            r = sqs_client.get_queue_attributes(
+                QueueUrl=queue_url,
+                AttributeNames=["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+            )
+            q["visible"] = int(r["Attributes"]["ApproximateNumberOfMessages"])
+            q["inflight"] = int(r["Attributes"]["ApproximateNumberOfMessagesNotVisible"])
+        except ClientError:
+            pass
+    if dlq_url:
+        try:
+            r = sqs_client.get_queue_attributes(QueueUrl=dlq_url, AttributeNames=["ApproximateNumberOfMessages"])
+            q["dlq"] = int(r["Attributes"]["ApproximateNumberOfMessages"])
+        except ClientError:
+            pass
+
+    # ── Heartbeats ────────────────────────────────────────────────────────────
+    hung_threshold = cfg.get("heartbeat", {}).get("hung_threshold", 300)
+    active_workers: list[dict] = []
+    hung_workers: list[dict] = []
+    try:
+        resp = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix="heartbeat/")
+        for obj in resp.get("Contents", []):
+            body = s3_client.get_object(Bucket=s3_bucket, Key=obj["Key"])["Body"].read()
+            data = json.loads(body)
+            ts = data["timestamp"].replace("Z", "+00:00")
+            age = int((datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds())
+            entry = {
+                "instance": data.get("instance", "?")[-12:],
+                "phase": (data.get("phase") or "?")[:60],
+                "age_s": age,
+            }
+            (hung_workers if age >= hung_threshold else active_workers).append(entry)
+        active_workers.sort(key=lambda x: x["age_s"])
+        hung_workers.sort(key=lambda x: x["age_s"])
+    except ClientError:
+        pass
+
+    # ── ASG desired ───────────────────────────────────────────────────────────
+    asg_desired = "?"
+    if asg_name:
+        try:
+            r = asg_client.describe_auto_scaling_groups(AutoScalingGroupNames=[asg_name])
+            asg_desired = r["AutoScalingGroups"][0]["DesiredCapacity"]
+        except ClientError:
+            pass
+
+    # ── Render report ─────────────────────────────────────────────────────────
+    W = 72
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"\n{'─'*W}")
+    print(f"  Worker Diagnostics  {ts}  (last {minutes} min)")
+    print(f"{'─'*W}")
+
+    dlq_flag = f"  ⚠  DLQ={q['dlq']}" if isinstance(q["dlq"], int) and q["dlq"] > 0 else ""
+    print(f"  Queue:   visible={q['visible']}  inflight={q['inflight']}  dlq={q['dlq']}{dlq_flag}")
+    print(f"  ASG:     desired={asg_desired}  active={len(active_workers)}  hung={len(hung_workers)}")
+    for w in active_workers[:8]:
+        print(f"    {w['instance']}  {w['phase']:<56}  {w['age_s']}s")
+    if hung_workers:
+        print(f"  ⚠  Hung: {', '.join(w['instance'] for w in hung_workers)}")
+
+    if circuit_breaks:
+        print(f"\n  ⚠  CIRCUIT BREAKER fired: {', '.join(set(circuit_breaks))}")
+
+    if known:
+        print(f"\n  Known failure types:")
+        for label, info in sorted(known.items(), key=lambda x: -x[1]["count"]):
+            instances = ", ".join(sorted(info["instances"]))
+            print(f"    {label:<24}  ×{info['count']:<4}  [{instances}]")
+            print(f"      → {info['hint']}")
+    else:
+        print(f"\n  No known failure patterns in last {minutes} min  ✓")
+
+    if job_failures:
+        print(f"\n  Failed jobs ({len(job_failures)} distinct):")
+        for bid, n in sorted(job_failures.items(), key=lambda x: -x[1])[:20]:
+            suffix = f"  ×{n}" if n > 1 else ""
+            print(f"    {bid}{suffix}")
+        if len(job_failures) > 20:
+            print(f"    … and {len(job_failures)-20} more")
+    else:
+        print(f"\n  No job failures in last {minutes} min  ✓")
+
+    if unknown:
+        print(f"\n  ⚠  UNKNOWN error patterns ({len(unknown)} distinct) — needs investigation:")
+        for excerpt, count in unknown[:10]:
+            print(f"    ×{count:<3} {excerpt}")
+        if len(unknown) > 10:
+            print(f"    … and {len(unknown)-10} more")
+    else:
+        print(f"\n  No unknown error patterns  ✓")
+
+    print(f"{'─'*W}\n")
+
+
 def cmd_teardown(args: argparse.Namespace) -> None:
     """Terminate instance and optionally clean up all AWS resources."""
     cfg = load_config()
@@ -1188,6 +1418,10 @@ def build_parser() -> argparse.ArgumentParser:
     submit_p.set_defaults(func=cmd_submit)
 
     subs.add_parser("status", help="Quick status check").set_defaults(func=cmd_status)
+
+    diagnose_p = subs.add_parser("diagnose", help="Analyse CloudWatch logs for worker failure patterns")
+    diagnose_p.add_argument("--minutes", type=int, default=30, help="Log lookback window in minutes (default: 30)")
+    diagnose_p.set_defaults(func=cmd_diagnose)
 
     teardown_p = subs.add_parser("teardown", help="Terminate instance and clean up")
     teardown_p.add_argument("--all", action="store_true", help="Also delete IAM, key pair, security group")
