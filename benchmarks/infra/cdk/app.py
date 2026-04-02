@@ -32,7 +32,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import aws_cdk as cdk
-
 from bench_stack import BenchStack
 from cleanup_stack import CleanupStack
 

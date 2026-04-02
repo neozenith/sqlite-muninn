@@ -27,7 +27,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
@@ -166,7 +166,7 @@ def _heartbeat_age(hb: dict | None) -> float:
     if hb is None:
         return float("inf")
     ts = datetime.fromisoformat(hb["timestamp"].replace("Z", "+00:00"))
-    return (datetime.now(timezone.utc) - ts).total_seconds()
+    return (datetime.now(UTC) - ts).total_seconds()
 
 
 # ── Commands ──────────────────────────────────────────────────────
@@ -192,14 +192,18 @@ def cmd_setup(args: argparse.Namespace) -> None:
     try:
         iam.create_role(
             RoleName=role_name,
-            AssumeRolePolicyDocument=json.dumps({
-                "Version": "2012-10-17",
-                "Statement": [{
-                    "Effect": "Allow",
-                    "Principal": {"Service": "ec2.amazonaws.com"},
-                    "Action": "sts:AssumeRole",
-                }],
-            }),
+            AssumeRolePolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"Service": "ec2.amazonaws.com"},
+                            "Action": "sts:AssumeRole",
+                        }
+                    ],
+                }
+            ),
             Tags=[{"Key": TAG_KEY, "Value": TAG_VALUE}],
         )
     except ClientError as e:
@@ -209,14 +213,18 @@ def cmd_setup(args: argparse.Namespace) -> None:
             raise
 
     # Policies
-    s3_policy = json.dumps({
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Effect": "Allow",
-            "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"],
-            "Resource": [f"arn:aws:s3:::{s3_bucket}", f"arn:aws:s3:::{s3_bucket}/*"],
-        }],
-    })
+    s3_policy = json.dumps(
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"],
+                    "Resource": [f"arn:aws:s3:::{s3_bucket}", f"arn:aws:s3:::{s3_bucket}/*"],
+                }
+            ],
+        }
+    )
     iam.put_role_policy(RoleName=role_name, PolicyName="s3-access", PolicyDocument=s3_policy)
 
     try:
@@ -265,14 +273,20 @@ def cmd_setup(args: argparse.Namespace) -> None:
         resp = ec2.create_security_group(
             GroupName=sg_name,
             Description="Muninn benchmark runner - SSH access",
-            TagSpecifications=[{
-                "ResourceType": "security-group",
-                "Tags": [{"Key": TAG_KEY, "Value": TAG_VALUE}],
-            }],
+            TagSpecifications=[
+                {
+                    "ResourceType": "security-group",
+                    "Tags": [{"Key": TAG_KEY, "Value": TAG_VALUE}],
+                }
+            ],
         )
         sg_id = resp["GroupId"]
         ec2.authorize_security_group_ingress(
-            GroupId=sg_id, IpProtocol="tcp", FromPort=22, ToPort=22, CidrIp="0.0.0.0/0",
+            GroupId=sg_id,
+            IpProtocol="tcp",
+            FromPort=22,
+            ToPort=22,
+            CidrIp="0.0.0.0/0",
         )
         log.info("  Security group created: %s", sg_id)
     except ClientError as e:
@@ -351,40 +365,46 @@ def cmd_prime(args: argparse.Namespace) -> None:
         SecurityGroupIds=[aws_cfg["security_group_id"]],
         IamInstanceProfile={"Name": aws_cfg["instance_profile_name"]},
         InstanceInitiatedShutdownBehavior="stop",
-        BlockDeviceMappings=[{
-            "DeviceName": "/dev/sda1",
-            "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
-        }],
+        BlockDeviceMappings=[
+            {
+                "DeviceName": "/dev/sda1",
+                "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
+            }
+        ],
         UserData=user_data,
-        TagSpecifications=[{
-            "ResourceType": "instance",
-            "Tags": [
-                {"Key": "Name", "Value": f"muninn-prime-{safe_branch}"},
-                {"Key": TAG_KEY, "Value": TAG_VALUE},
-                {"Key": "branch", "Value": branch},
-            ],
-        }],
+        TagSpecifications=[
+            {
+                "ResourceType": "instance",
+                "Tags": [
+                    {"Key": "Name", "Value": f"muninn-prime-{safe_branch}"},
+                    {"Key": TAG_KEY, "Value": TAG_VALUE},
+                    {"Key": "branch", "Value": branch},
+                ],
+            }
+        ],
         MinCount=1,
         MaxCount=1,
     )
 
     instance_id = resp["Instances"][0]["InstanceId"]
-    launch_time = datetime.now(timezone.utc)
+    launch_time = datetime.now(UTC)
 
     ec2.get_waiter("instance_running").wait(InstanceIds=[instance_id])
     desc = ec2.describe_instances(InstanceIds=[instance_id])
     public_ip = desc["Reservations"][0]["Instances"][0].get("PublicIpAddress", "none")
 
     key_path = KEY_DIR / f"{aws_cfg['key_name']}.pem"
-    _save_state({
-        "instance_id": instance_id,
-        "instance_type": aws_cfg["instance_type"],
-        "mode": "prime",
-        "region": aws_cfg["ec2_region"],
-        "public_ip": public_ip,
-        "launched_at": launch_time.isoformat(),
-        "key_file": str(key_path),
-    })
+    _save_state(
+        {
+            "instance_id": instance_id,
+            "instance_type": aws_cfg["instance_type"],
+            "mode": "prime",
+            "region": aws_cfg["ec2_region"],
+            "public_ip": public_ip,
+            "launched_at": launch_time.isoformat(),
+            "key_file": str(key_path),
+        }
+    )
 
     log.info("Instance %s running at %s", instance_id, public_ip)
     log.info("SSH: ssh -i %s ubuntu@%s", key_path, public_ip)
@@ -402,7 +422,7 @@ def cmd_prime(args: argparse.Namespace) -> None:
     log.info("Monitoring cold start (waiting for instance to stop after bootstrap)...")
 
     while True:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ts_str = now.strftime("%H:%M:%S")
 
         try:
@@ -458,14 +478,16 @@ def cmd_prime(args: argparse.Namespace) -> None:
         Name=ami_name,
         Description=f"Primed benchmark runner for branch {branch} at {commit_hash}",
         NoReboot=True,
-        TagSpecifications=[{
-            "ResourceType": "image",
-            "Tags": [
-                {"Key": TAG_KEY, "Value": TAG_VALUE},
-                {"Key": "branch", "Value": branch},
-                {"Key": "commit", "Value": commit_hash},
-            ],
-        }],
+        TagSpecifications=[
+            {
+                "ResourceType": "image",
+                "Tags": [
+                    {"Key": TAG_KEY, "Value": TAG_VALUE},
+                    {"Key": "branch", "Value": branch},
+                    {"Key": "commit", "Value": commit_hash},
+                ],
+            }
+        ],
     )
 
     ami_id = ami_resp["ImageId"]
@@ -487,7 +509,7 @@ def cmd_prime(args: argparse.Namespace) -> None:
     with CONFIG_PATH.open("w", encoding="utf-8") as f:
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
 
-    elapsed = (datetime.now(timezone.utc) - launch_time).total_seconds()
+    elapsed = (datetime.now(UTC) - launch_time).total_seconds()
     log.info("")
     log.info("Prime complete in %.0fs.", elapsed)
     log.info("AMI: %s", ami_id)
@@ -497,8 +519,6 @@ def cmd_prime(args: argparse.Namespace) -> None:
     log.info("Next steps:")
     log.info("  uv run benchmarks/infra/runner.py run       # single instance from AMI")
     log.info("  uv run benchmarks/infra/runner.py submit    # enqueue to SQS for parallel workers")
-
-
 
     """Launch an instance, run benchmarks, monitor heartbeat, collect results."""
     cfg = load_config()
@@ -527,18 +547,22 @@ def cmd_prime(args: argparse.Namespace) -> None:
         "SecurityGroupIds": [aws_cfg["security_group_id"]],
         "IamInstanceProfile": {"Name": aws_cfg["instance_profile_name"]},
         "InstanceInitiatedShutdownBehavior": shutdown_behavior,
-        "BlockDeviceMappings": [{
-            "DeviceName": "/dev/sda1",
-            "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
-        }],
+        "BlockDeviceMappings": [
+            {
+                "DeviceName": "/dev/sda1",
+                "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
+            }
+        ],
         "UserData": user_data,
-        "TagSpecifications": [{
-            "ResourceType": "instance",
-            "Tags": [
-                {"Key": "Name", "Value": "muninn-benchmark"},
-                {"Key": TAG_KEY, "Value": TAG_VALUE},
-            ],
-        }],
+        "TagSpecifications": [
+            {
+                "ResourceType": "instance",
+                "Tags": [
+                    {"Key": "Name", "Value": "muninn-benchmark"},
+                    {"Key": TAG_KEY, "Value": TAG_VALUE},
+                ],
+            }
+        ],
         "MinCount": 1,
         "MaxCount": 1,
     }
@@ -566,7 +590,7 @@ def cmd_prime(args: argparse.Namespace) -> None:
 
     instance = resp["Instances"][0]
     instance_id = instance["InstanceId"]
-    launch_time = datetime.now(timezone.utc)
+    launch_time = datetime.now(UTC)
 
     log.info("Instance %s launching (%s)...", instance_id, mode)
 
@@ -619,7 +643,7 @@ def cmd_prime(args: argparse.Namespace) -> None:
     log.info("Monitoring heartbeat every %ds (stale >%ds, hung >%ds)", poll_interval, stale_threshold, hung_threshold)
 
     while True:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ts_str = now.strftime("%H:%M:%S")
 
         # Check instance state
@@ -661,7 +685,9 @@ def cmd_prime(args: argparse.Namespace) -> None:
 
             if age > stale_threshold:
                 consecutive_stale += 1
-                log.warning("[%s] STALE heartbeat (%.0fs old, %d consecutive) phase=%s", ts_str, age, consecutive_stale, phase)
+                log.warning(
+                    "[%s] STALE heartbeat (%.0fs old, %d consecutive) phase=%s", ts_str, age, consecutive_stale, phase
+                )
             else:
                 if consecutive_stale > 0:
                     log.info("[%s] Heartbeat recovered after %d stale polls", ts_str, consecutive_stale)
@@ -675,7 +701,9 @@ def cmd_prime(args: argparse.Namespace) -> None:
         if consecutive_stale * poll_interval >= hung_threshold:
             log.error(
                 "[%s] HUNG: no heartbeat for %ds. Terminating %s.",
-                ts_str, consecutive_stale * poll_interval, instance_id,
+                ts_str,
+                consecutive_stale * poll_interval,
+                instance_id,
             )
             ec2.terminate_instances(InstanceIds=[instance_id])
             timing["outcome"] = "hung_terminated"
@@ -728,18 +756,22 @@ def cmd_run(args: argparse.Namespace) -> None:
         "SecurityGroupIds": [aws_cfg["security_group_id"]],
         "IamInstanceProfile": {"Name": aws_cfg["instance_profile_name"]},
         "InstanceInitiatedShutdownBehavior": shutdown_behavior,
-        "BlockDeviceMappings": [{
-            "DeviceName": "/dev/sda1",
-            "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
-        }],
+        "BlockDeviceMappings": [
+            {
+                "DeviceName": "/dev/sda1",
+                "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
+            }
+        ],
         "UserData": user_data,
-        "TagSpecifications": [{
-            "ResourceType": "instance",
-            "Tags": [
-                {"Key": "Name", "Value": "muninn-benchmark"},
-                {"Key": TAG_KEY, "Value": TAG_VALUE},
-            ],
-        }],
+        "TagSpecifications": [
+            {
+                "ResourceType": "instance",
+                "Tags": [
+                    {"Key": "Name", "Value": "muninn-benchmark"},
+                    {"Key": TAG_KEY, "Value": TAG_VALUE},
+                ],
+            }
+        ],
         "MinCount": 1,
         "MaxCount": 1,
     }
@@ -767,7 +799,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     instance = resp["Instances"][0]
     instance_id = instance["InstanceId"]
-    launch_time = datetime.now(timezone.utc)
+    launch_time = datetime.now(UTC)
 
     log.info("Instance %s launching (%s)...", instance_id, mode)
 
@@ -818,7 +850,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     log.info("Monitoring heartbeat every %ds (stale >%ds, hung >%ds)", poll_interval, stale_threshold, hung_threshold)
 
     while True:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ts_str = now.strftime("%H:%M:%S")
 
         try:
@@ -856,7 +888,9 @@ def cmd_run(args: argparse.Namespace) -> None:
 
             if age > stale_threshold:
                 consecutive_stale += 1
-                log.warning("[%s] STALE heartbeat (%.0fs old, %d consecutive) phase=%s", ts_str, age, consecutive_stale, phase)
+                log.warning(
+                    "[%s] STALE heartbeat (%.0fs old, %d consecutive) phase=%s", ts_str, age, consecutive_stale, phase
+                )
             else:
                 if consecutive_stale > 0:
                     log.info("[%s] Heartbeat recovered after %d stale polls", ts_str, consecutive_stale)
@@ -869,7 +903,9 @@ def cmd_run(args: argparse.Namespace) -> None:
         if consecutive_stale * poll_interval >= hung_threshold:
             log.error(
                 "[%s] HUNG: no heartbeat for %ds. Terminating %s.",
-                ts_str, consecutive_stale * poll_interval, instance_id,
+                ts_str,
+                consecutive_stale * poll_interval,
+                instance_id,
             )
             ec2.terminate_instances(InstanceIds=[instance_id])
             timing["outcome"] = "hung_terminated"
@@ -931,8 +967,6 @@ def cmd_status(args: argparse.Namespace) -> None:
     key_file = state.get("key_file", "?")
     print(f"SSH:       ssh -i {key_file} ubuntu@{public_ip}")
 
-
-
     """Enqueue missing benchmark IDs to the branch's SQS queue.
 
     Queries the local harness manifest for missing benchmarks and sends each
@@ -965,7 +999,9 @@ def cmd_status(args: argparse.Namespace) -> None:
             log.error(
                 "  npx aws-cdk@latest deploy %s --app 'uv run --group cdk benchmarks/infra/cdk/app.py' "
                 "-c branch=%s -c ami_id=%s -c account=%s",
-                stack_name, branch, aws_cfg["ami_id"],
+                stack_name,
+                branch,
+                aws_cfg["ami_id"],
                 os.environ.get("CDK_DEFAULT_ACCOUNT", "<account>"),
             )
             sys.exit(1)
@@ -973,8 +1009,14 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     # Query the harness manifest for missing benchmarks
     manifest_cmd = [
-        "uv", "run", "--no-sync", "-m", "benchmarks.harness",
-        "manifest", "--commands", "--missing",
+        "uv",
+        "run",
+        "--no-sync",
+        "-m",
+        "benchmarks.harness",
+        "manifest",
+        "--commands",
+        "--missing",
     ]
     if category:
         manifest_cmd.extend(["--category", category])
@@ -1011,10 +1053,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     # SQS SendMessageBatch handles up to 10 per call
     for i in range(0, len(bench_ids), 10):
         batch = bench_ids[i : i + 10]
-        entries = [
-            {"Id": str(j), "MessageBody": bid}
-            for j, bid in enumerate(batch)
-        ]
+        entries = [{"Id": str(j), "MessageBody": bid} for j, bid in enumerate(batch)]
         resp = sqs.send_message_batch(QueueUrl=queue_url, Entries=entries)
         failed = resp.get("Failed", [])
         if failed:
@@ -1027,8 +1066,6 @@ def cmd_status(args: argparse.Namespace) -> None:
     log.info("Submitted %d benchmark(s) to SQS.", len(bench_ids))
     log.info("Queue: %s", queue_url)
     log.info("The ASG will scale up workers automatically.")
-
-
 
     """Quick status check — instance state + heartbeat."""
     cfg = load_config()
@@ -1116,8 +1153,14 @@ def cmd_submit(args: argparse.Namespace) -> None:
 
     # Query the harness manifest for missing benchmarks
     manifest_cmd = [
-        "uv", "run", "--no-sync", "-m", "benchmarks.harness",
-        "manifest", "--commands", "--missing",
+        "uv",
+        "run",
+        "--no-sync",
+        "-m",
+        "benchmarks.harness",
+        "manifest",
+        "--commands",
+        "--missing",
     ]
     if category:
         manifest_cmd.extend(["--category", category])
@@ -1262,8 +1305,10 @@ def _show_latest_phase_log(s3, cfg: dict) -> None:
 
 def _help(p: argparse.ArgumentParser):
     """Return a handler that prints help for parser p."""
+
     def _print_help(_: argparse.Namespace) -> None:
         p.print_help()
+
     return _print_help
 
 

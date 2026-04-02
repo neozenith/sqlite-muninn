@@ -421,7 +421,8 @@ class SessionsBuild:
                 0 if not phase_stale.get("communities", True) else 1,
             ),
             "community_naming": (
-                _count_q("SELECT COUNT(*) FROM entity_cluster_labels") + _count_q("SELECT COUNT(*) FROM community_labels"),
+                _count_q("SELECT COUNT(*) FROM entity_cluster_labels")
+                + _count_q("SELECT COUNT(*) FROM community_labels"),
                 0 if not phase_stale.get("community_naming", True) else 1,
             ),
             "metadata": (_count_q("SELECT COUNT(*) FROM meta"), 0 if not phase_stale.get("metadata", True) else 1),

@@ -16,7 +16,7 @@ Usage:
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import boto3
@@ -196,7 +196,9 @@ def _get_asg_instances(cfg: dict, outputs: dict) -> list[dict]:
 
             # Compute uptime and accumulated cost
             launch_dt = inst["LaunchTime"]
-            uptime_s = (datetime.now(timezone.utc) - launch_dt.replace(tzinfo=timezone.utc if launch_dt.tzinfo is None else launch_dt.tzinfo)).total_seconds()
+            uptime_s = (
+                datetime.now(UTC) - launch_dt.replace(tzinfo=UTC if launch_dt.tzinfo is None else launch_dt.tzinfo)
+            ).total_seconds()
             uptime_hrs = uptime_s / 3600
 
             price_per_hr = 0.0
@@ -204,25 +206,29 @@ def _get_asg_instances(cfg: dict, outputs: dict) -> list[dict]:
                 price_per_hr = float(spot_price.replace("$", "").replace("/hr", ""))
 
             ondemand_price = _get_ondemand_price(itype, ec2_region)
-            savings_pct = round((1 - price_per_hr / ondemand_price) * 100) if ondemand_price > 0 and price_per_hr > 0 else 0
+            savings_pct = (
+                round((1 - price_per_hr / ondemand_price) * 100) if ondemand_price > 0 and price_per_hr > 0 else 0
+            )
 
             accumulated_cost = price_per_hr * uptime_hrs
 
-            instances.append({
-                "instance_id": inst["InstanceId"],
-                "state": inst["State"]["Name"],
-                "type": itype,
-                "az": az,
-                "launch_time": inst["LaunchTime"].isoformat(),
-                "ip": inst.get("PublicIpAddress", "n/a"),
-                "lifecycle": lifecycle,
-                "spot_price": spot_price,
-                "ondemand_price": f"${ondemand_price:.3f}/hr" if ondemand_price > 0 else "n/a",
-                "savings_pct": f"{savings_pct}%" if savings_pct > 0 else "n/a",
-                "uptime_hrs": round(uptime_hrs, 2),
-                "accumulated_cost": round(accumulated_cost, 4),
-                "price_per_hr": price_per_hr,
-            })
+            instances.append(
+                {
+                    "instance_id": inst["InstanceId"],
+                    "state": inst["State"]["Name"],
+                    "type": itype,
+                    "az": az,
+                    "launch_time": inst["LaunchTime"].isoformat(),
+                    "ip": inst.get("PublicIpAddress", "n/a"),
+                    "lifecycle": lifecycle,
+                    "spot_price": spot_price,
+                    "ondemand_price": f"${ondemand_price:.3f}/hr" if ondemand_price > 0 else "n/a",
+                    "savings_pct": f"{savings_pct}%" if savings_pct > 0 else "n/a",
+                    "uptime_hrs": round(uptime_hrs, 2),
+                    "accumulated_cost": round(accumulated_cost, 4),
+                    "price_per_hr": price_per_hr,
+                }
+            )
 
     return instances
 
@@ -236,7 +242,7 @@ def _get_heartbeats(cfg: dict, instance_ids: list[str]) -> dict[str, dict]:
             resp = s3.get_object(Bucket=bucket, Key=f"heartbeat/{iid}.json")
             hb = json.loads(resp["Body"].read())
             ts = datetime.fromisoformat(hb["timestamp"].replace("Z", "+00:00"))
-            age = (datetime.now(timezone.utc) - ts).total_seconds()
+            age = (datetime.now(UTC) - ts).total_seconds()
             heartbeats[iid] = {
                 "phase": hb.get("phase", "?"),
                 "age_s": round(age),
@@ -254,7 +260,7 @@ def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> 
     dlq_name = (outputs.get("DlqUrl") or "").rsplit("/", 1)[-1]
     asg_name = outputs.get("AsgName", "")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     start = now - timedelta(hours=hours)
 
     if hours <= 3:
@@ -269,14 +275,75 @@ def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> 
         return result
 
     queries = [
-        {"Id": "visible", "MetricStat": {"Metric": {"Namespace": "AWS/SQS", "MetricName": "ApproximateNumberOfMessagesVisible", "Dimensions": [{"Name": "QueueName", "Value": queue_name}]}, "Period": period, "Stat": "Maximum"}},
-        {"Id": "inflight", "MetricStat": {"Metric": {"Namespace": "AWS/SQS", "MetricName": "ApproximateNumberOfMessagesNotVisible", "Dimensions": [{"Name": "QueueName", "Value": queue_name}]}, "Period": period, "Stat": "Maximum"}},
+        {
+            "Id": "visible",
+            "MetricStat": {
+                "Metric": {
+                    "Namespace": "AWS/SQS",
+                    "MetricName": "ApproximateNumberOfMessagesVisible",
+                    "Dimensions": [{"Name": "QueueName", "Value": queue_name}],
+                },
+                "Period": period,
+                "Stat": "Maximum",
+            },
+        },
+        {
+            "Id": "inflight",
+            "MetricStat": {
+                "Metric": {
+                    "Namespace": "AWS/SQS",
+                    "MetricName": "ApproximateNumberOfMessagesNotVisible",
+                    "Dimensions": [{"Name": "QueueName", "Value": queue_name}],
+                },
+                "Period": period,
+                "Stat": "Maximum",
+            },
+        },
     ]
     if dlq_name:
-        queries.append({"Id": "dlq", "MetricStat": {"Metric": {"Namespace": "AWS/SQS", "MetricName": "ApproximateNumberOfMessagesVisible", "Dimensions": [{"Name": "QueueName", "Value": dlq_name}]}, "Period": period, "Stat": "Maximum"}})
+        queries.append(
+            {
+                "Id": "dlq",
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": "AWS/SQS",
+                        "MetricName": "ApproximateNumberOfMessagesVisible",
+                        "Dimensions": [{"Name": "QueueName", "Value": dlq_name}],
+                    },
+                    "Period": period,
+                    "Stat": "Maximum",
+                },
+            }
+        )
     if asg_name:
-        queries.append({"Id": "in_service", "MetricStat": {"Metric": {"Namespace": "AWS/AutoScaling", "MetricName": "GroupInServiceInstances", "Dimensions": [{"Name": "AutoScalingGroupName", "Value": asg_name}]}, "Period": period, "Stat": "Maximum"}})
-        queries.append({"Id": "desired", "MetricStat": {"Metric": {"Namespace": "AWS/AutoScaling", "MetricName": "GroupDesiredCapacity", "Dimensions": [{"Name": "AutoScalingGroupName", "Value": asg_name}]}, "Period": period, "Stat": "Maximum"}})
+        queries.append(
+            {
+                "Id": "in_service",
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": "AWS/AutoScaling",
+                        "MetricName": "GroupInServiceInstances",
+                        "Dimensions": [{"Name": "AutoScalingGroupName", "Value": asg_name}],
+                    },
+                    "Period": period,
+                    "Stat": "Maximum",
+                },
+            }
+        )
+        queries.append(
+            {
+                "Id": "desired",
+                "MetricStat": {
+                    "Metric": {
+                        "Namespace": "AWS/AutoScaling",
+                        "MetricName": "GroupDesiredCapacity",
+                        "Dimensions": [{"Name": "AutoScalingGroupName", "Value": asg_name}],
+                    },
+                    "Period": period,
+                    "Stat": "Maximum",
+                },
+            }
+        )
 
     try:
         resp = cw.get_metric_data(MetricDataQueries=queries, StartTime=start, EndTime=now)
@@ -287,9 +354,11 @@ def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> 
     series = {}
     for metric_result in resp.get("MetricDataResults", []):
         mid = metric_result["Id"]
-        for ts_val, val in zip(metric_result.get("Timestamps", []), metric_result.get("Values", [])):
+        for ts_val, val in zip(metric_result.get("Timestamps", []), metric_result.get("Values", []), strict=False):
             ts_str = ts_val.strftime(ts_fmt)
-            series.setdefault(ts_str, {"visible": 0, "inflight": 0, "dlq": 0, "in_service": 0, "desired": 0, "_sort": ts_val})
+            series.setdefault(
+                ts_str, {"visible": 0, "inflight": 0, "dlq": 0, "in_service": 0, "desired": 0, "_sort": ts_val}
+            )
             series[ts_str][mid] = int(val)
 
     for ts_str in sorted(series.keys(), key=lambda k: series[k].get("_sort", k)):
@@ -342,41 +411,68 @@ def _get_asg_events(cfg: dict, outputs: dict, max_events: int = 20) -> list[dict
         if cap_match:
             capacity = f"{cap_match.group(1)}->{cap_match.group(2)}"
 
-        events.append({"time": ts, "type": event_type, "instance": instance_id, "capacity": capacity, "status": act.get("StatusCode", "")})
+        events.append(
+            {
+                "time": ts,
+                "type": event_type,
+                "instance": instance_id,
+                "capacity": capacity,
+                "status": act.get("StatusCode", ""),
+            }
+        )
 
     return events
 
 
-def _get_cloudwatch_logs(cfg: dict, instance_id: str, level_filter: str, minutes: int = 30) -> list[dict]:
-    """Fetch CloudWatch logs for a specific instance, filtered by level."""
+def _get_log_stream_instance_ids(cfg: dict, max_streams: int = 20) -> list[str]:
+    """Get instance IDs that have CloudWatch log streams (current + recent)."""
     logs_client = boto3.client("logs", region_name=cfg["aws"]["ec2_region"])
-    start_time = int((datetime.now(timezone.utc) - timedelta(minutes=minutes)).timestamp() * 1000)
+    try:
+        resp = logs_client.describe_log_streams(
+            logGroupName="/muninn/benchmarks",
+            orderBy="LastEventTime",
+            descending=True,
+            limit=max_streams,
+        )
+        return [s["logStreamName"] for s in resp.get("logStreams", []) if s.get("logStreamName", "").startswith("i-")]
+    except ClientError:
+        return []
 
-    # Build filter pattern for log level
+
+def _get_cloudwatch_logs(cfg: dict, instance_ids: list[str], level_filter: str, minutes: int = 60) -> list[dict]:
+    """Fetch CloudWatch logs for one or more instances, filtered by level."""
+    if not instance_ids:
+        return []
+
+    logs_client = boto3.client("logs", region_name=cfg["aws"]["ec2_region"])
+    start_time = int((datetime.now(UTC) - timedelta(minutes=minutes)).timestamp() * 1000)
+
     filter_pattern = ""
     if level_filter == "ERROR":
         filter_pattern = "?ERROR ?Error ?error ?FAILED ?Traceback"
     elif level_filter == "WARN":
         filter_pattern = "?WARNING ?WARN ?warn ?STALE"
-    elif level_filter == "INFO":
-        filter_pattern = ""  # no filter = all lines
+
+    kwargs: dict = {
+        "logGroupName": "/muninn/benchmarks",
+        "logStreamNames": instance_ids,
+        "startTime": start_time,
+        "limit": 200,
+    }
+    if filter_pattern:
+        kwargs["filterPattern"] = filter_pattern
 
     try:
-        resp = logs_client.filter_log_events(
-            logGroupName="/muninn/benchmarks",
-            logStreamNames=[instance_id],
-            startTime=start_time,
-            filterPattern=filter_pattern,
-            limit=100,
-        )
+        resp = logs_client.filter_log_events(**kwargs)
     except ClientError:
         return []
 
     entries = []
     for event in resp.get("events", []):
-        ts = datetime.fromtimestamp(event["timestamp"] / 1000, tz=timezone.utc).strftime("%H:%M:%S")
+        ts = datetime.fromtimestamp(event["timestamp"] / 1000, tz=UTC).strftime("%H:%M:%S")
+        stream = event.get("logStreamName", "")[:12]
         msg = event["message"].rstrip()
-        entries.append({"time": ts, "message": msg})
+        entries.append({"time": ts, "instance": stream, "message": msg})
 
     return entries
 
@@ -391,13 +487,18 @@ def create_app() -> dash.Dash:
     app = dash.Dash(__name__, title=f"Muninn Benchmarks - {branch}")
 
     app.layout = html.Div(
-        style={"fontFamily": "monospace", "padding": "20px", "backgroundColor": BG_PAGE, "color": TEXT_PRIMARY, "minHeight": "100vh"},
+        style={
+            "fontFamily": "monospace",
+            "padding": "20px",
+            "backgroundColor": BG_PAGE,
+            "color": TEXT_PRIMARY,
+            "minHeight": "100vh",
+        },
         children=[
             html.H1("Muninn Benchmark Dashboard", style={"color": ACCENT_RED}),
             html.P(f"Branch: {branch}", style={"color": TEXT_SECONDARY, "fontSize": "14px"}),
             dcc.Interval(id="refresh", interval=REFRESH_INTERVAL_MS, n_intervals=0),
             html.Div(id="last-updated", style={"color": TEXT_MUTED, "fontSize": "12px", "marginBottom": "20px"}),
-
             # ── Metric Cards ──────────────────────────────────
             html.Div(
                 style={"display": "flex", "gap": "20px", "marginBottom": "30px", "flexWrap": "wrap"},
@@ -408,7 +509,6 @@ def create_app() -> dash.Dash:
                     _metric_card("asg-running", "Running Instances", ACCENT_GREEN),
                 ],
             ),
-
             # ── Time Series Chart ─────────────────────────────
             html.Div(
                 style={"display": "flex", "alignItems": "center", "gap": "15px", "marginBottom": "10px"},
@@ -416,7 +516,10 @@ def create_app() -> dash.Dash:
                     html.H3("Queue & Workers Over Time", style={"color": ACCENT_RED, "margin": "0"}),
                     dcc.RadioItems(
                         id="time-range",
-                        options=[{"label": l, "value": v} for l, v in [("1h", 1), ("3h", 3), ("12h", 12), ("1d", 24), ("3d", 72), ("7d", 168)]],
+                        options=[
+                            {"label": label, "value": v}
+                            for label, v in [("1h", 1), ("3h", 3), ("12h", 12), ("1d", 24), ("3d", 72), ("7d", 168)]
+                        ],
                         value=72,
                         inline=True,
                         inputStyle={"marginRight": "4px"},
@@ -428,15 +531,12 @@ def create_app() -> dash.Dash:
             ),
             dcc.Graph(id="queue-chart", style={"height": "250px"}),
             dcc.Graph(id="workers-chart", style={"height": "250px", "marginTop": "10px"}),
-
             # ── Workers Table ─────────────────────────────────
             html.H3("Workers", style={"color": ACCENT_RED, "marginBottom": "10px"}),
             html.Div(id="instance-table"),
-
             # ── Scaling Events ────────────────────────────────
             html.H3("Scaling Events", style={"color": ACCENT_RED, "marginTop": "30px", "marginBottom": "10px"}),
             html.Div(id="event-table"),
-
             # ── CloudWatch Logs Viewer ────────────────────────
             html.H3("CloudWatch Logs", style={"color": ACCENT_CYAN, "marginTop": "30px", "marginBottom": "10px"}),
             html.Div(
@@ -446,13 +546,20 @@ def create_app() -> dash.Dash:
                         id="log-instance-id",
                         type="text",
                         placeholder="Instance ID (e.g., i-0abc123...)",
-                        style={"backgroundColor": BG_CARD, "color": TEXT_PRIMARY, "border": f"1px solid {BORDER}", "padding": "8px", "borderRadius": "4px", "width": "300px"},
+                        style={
+                            "backgroundColor": BG_CARD,
+                            "color": TEXT_PRIMARY,
+                            "border": f"1px solid {BORDER}",
+                            "padding": "8px",
+                            "borderRadius": "4px",
+                            "width": "300px",
+                        },
                         persistence=True,
                         persistence_type="local",
                     ),
                     dcc.RadioItems(
                         id="log-level",
-                        options=[{"label": l, "value": l} for l in ["INFO", "WARN", "ERROR"]],
+                        options=[{"label": level, "value": level} for level in ["INFO", "WARN", "ERROR"]],
                         value="INFO",
                         inline=True,
                         inputStyle={"marginRight": "4px"},
@@ -463,7 +570,15 @@ def create_app() -> dash.Dash:
                     html.Button(
                         "Fetch Logs",
                         id="fetch-logs-btn",
-                        style={"backgroundColor": ACCENT_CYAN, "color": BG_PAGE, "border": "none", "padding": "8px 16px", "borderRadius": "4px", "cursor": "pointer", "fontWeight": "bold"},
+                        style={
+                            "backgroundColor": ACCENT_CYAN,
+                            "color": BG_PAGE,
+                            "border": "none",
+                            "padding": "8px 16px",
+                            "borderRadius": "4px",
+                            "cursor": "pointer",
+                            "fontWeight": "bold",
+                        },
                     ),
                 ],
             ),
@@ -501,7 +616,7 @@ def create_app() -> dash.Dash:
         [Input("refresh", "n_intervals"), Input("time-range", "value")],
     )
     def update_dashboard(n_intervals, time_range_hours):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ts = now.strftime("%H:%M:%S UTC")
 
         try:
@@ -515,7 +630,17 @@ def create_app() -> dash.Dash:
         except Exception as e:
             empty_fig = go.Figure()
             empty_fig.update_layout(template="plotly_dark", paper_bgcolor=BG_PAGE, plot_bgcolor=BG_CARD)
-            return "?", "?", "?", "?", empty_fig, empty_fig, html.P(f"Error: {e}", style={"color": ACCENT_RED}), "", f"Error at {ts}"
+            return (
+                "?",
+                "?",
+                "?",
+                "?",
+                empty_fig,
+                empty_fig,
+                html.P(f"Error: {e}", style={"color": ACCENT_RED}),
+                "",
+                f"Error at {ts}",
+            )
 
         # Running instance count (from EC2 API, not CloudWatch — no lag)
         running_count = sum(1 for i in instances if i["state"] == "running")
@@ -530,30 +655,55 @@ def create_app() -> dash.Dash:
             hb_status = hb.get("status", "?")
             age_str = f"{age}s" if age >= 0 else "n/a"
 
-            rows.append({
-                "Instance": iid,
-                "State": inst["state"],
-                "Type": inst["type"],
-                "Lifecycle": inst["lifecycle"],
-                "Spot $/hr": inst["spot_price"],
-                "OnDemand $/hr": inst["ondemand_price"],
-                "Saving": inst["savings_pct"],
-                "Uptime": f"{inst['uptime_hrs']:.1f}h",
-                "Cost": f"${inst['accumulated_cost']:.3f}",
-                "Phase": phase,
-                "Heartbeat": f"{hb_status} ({age_str})",
-            })
+            rows.append(
+                {
+                    "Instance": iid,
+                    "State": inst["state"],
+                    "Type": inst["type"],
+                    "Lifecycle": inst["lifecycle"],
+                    "Spot $/hr": inst["spot_price"],
+                    "OnDemand $/hr": inst["ondemand_price"],
+                    "Saving": inst["savings_pct"],
+                    "Uptime": f"{inst['uptime_hrs']:.1f}h",
+                    "Cost": f"${inst['accumulated_cost']:.3f}",
+                    "Phase": phase,
+                    "Heartbeat": f"{hb_status} ({age_str})",
+                }
+            )
 
         if rows:
             table = dash_table.DataTable(
                 data=rows,
                 columns=[{"name": c, "id": c} for c in rows[0].keys()],
-                style_header={"backgroundColor": BG_TABLE_HEAD, "color": TEXT_PRIMARY, "fontWeight": "bold", "border": f"1px solid {BORDER}"},
-                style_cell={"backgroundColor": BG_CARD, "color": TEXT_PRIMARY, "border": f"1px solid {BORDER}", "fontSize": "13px", "padding": "8px"},
+                style_header={
+                    "backgroundColor": BG_TABLE_HEAD,
+                    "color": TEXT_PRIMARY,
+                    "fontWeight": "bold",
+                    "border": f"1px solid {BORDER}",
+                },
+                style_cell={
+                    "backgroundColor": BG_CARD,
+                    "color": TEXT_PRIMARY,
+                    "border": f"1px solid {BORDER}",
+                    "fontSize": "13px",
+                    "padding": "8px",
+                },
                 style_data_conditional=[
-                    {"if": {"filter_query": '{Heartbeat} contains "STALE"'}, "backgroundColor": ROW_STALE, "color": ACCENT_RED},
-                    {"if": {"filter_query": '{Heartbeat} contains "OK"'}, "backgroundColor": ROW_OK, "color": ACCENT_GREEN},
-                    {"if": {"filter_query": '{State} eq "terminated"'}, "color": TEXT_MUTED, "backgroundColor": ROW_TERM},
+                    {
+                        "if": {"filter_query": '{Heartbeat} contains "STALE"'},
+                        "backgroundColor": ROW_STALE,
+                        "color": ACCENT_RED,
+                    },
+                    {
+                        "if": {"filter_query": '{Heartbeat} contains "OK"'},
+                        "backgroundColor": ROW_OK,
+                        "color": ACCENT_GREEN,
+                    },
+                    {
+                        "if": {"filter_query": '{State} eq "terminated"'},
+                        "color": TEXT_MUTED,
+                        "backgroundColor": ROW_TERM,
+                    },
                 ],
             )
         else:
@@ -571,22 +721,35 @@ def create_app() -> dash.Dash:
         }
 
         queue_fig = go.Figure()
-        queue_fig.add_trace(go.Scatter(
-            x=cw_data["timestamps"], y=cw_data["visible"],
-            name="Visible", mode="lines",
-            line={"color": ACCENT_RED, "width": 2},
-            fill="tozeroy", fillcolor="rgba(248,113,113,0.1)",
-        ))
-        queue_fig.add_trace(go.Scatter(
-            x=cw_data["timestamps"], y=cw_data["inflight"],
-            name="In Flight", mode="lines",
-            line={"color": ACCENT_VIOLET, "width": 2},
-        ))
-        queue_fig.add_trace(go.Scatter(
-            x=cw_data["timestamps"], y=cw_data["dlq"],
-            name="Dead Letter", mode="lines",
-            line={"color": ACCENT_AMBER, "width": 2, "dash": "dot"},
-        ))
+        queue_fig.add_trace(
+            go.Scatter(
+                x=cw_data["timestamps"],
+                y=cw_data["visible"],
+                name="Visible",
+                mode="lines",
+                line={"color": ACCENT_RED, "width": 2},
+                fill="tozeroy",
+                fillcolor="rgba(248,113,113,0.1)",
+            )
+        )
+        queue_fig.add_trace(
+            go.Scatter(
+                x=cw_data["timestamps"],
+                y=cw_data["inflight"],
+                name="In Flight",
+                mode="lines",
+                line={"color": ACCENT_VIOLET, "width": 2},
+            )
+        )
+        queue_fig.add_trace(
+            go.Scatter(
+                x=cw_data["timestamps"],
+                y=cw_data["dlq"],
+                name="Dead Letter",
+                mode="lines",
+                line={"color": ACCENT_AMBER, "width": 2, "dash": "dot"},
+            )
+        )
         queue_fig.update_layout(
             **chart_layout,
             yaxis={"title": "Messages", "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": TEXT_MUTED}},
@@ -594,16 +757,24 @@ def create_app() -> dash.Dash:
 
         # ── Chart 2: Workers + cumulative cost ───────────
         workers_fig = go.Figure()
-        workers_fig.add_trace(go.Scatter(
-            x=cw_data["timestamps"], y=cw_data["in_service"],
-            name="In Service", mode="lines",
-            line={"color": ACCENT_GREEN, "width": 3},
-        ))
-        workers_fig.add_trace(go.Scatter(
-            x=cw_data["timestamps"], y=cw_data["desired"],
-            name="Desired", mode="lines",
-            line={"color": ACCENT_GREEN, "width": 1, "dash": "dash"},
-        ))
+        workers_fig.add_trace(
+            go.Scatter(
+                x=cw_data["timestamps"],
+                y=cw_data["in_service"],
+                name="In Service",
+                mode="lines",
+                line={"color": ACCENT_GREEN, "width": 3},
+            )
+        )
+        workers_fig.add_trace(
+            go.Scatter(
+                x=cw_data["timestamps"],
+                y=cw_data["desired"],
+                name="Desired",
+                mode="lines",
+                line={"color": ACCENT_GREEN, "width": 1, "dash": "dash"},
+            )
+        )
 
         # Cumulative spot cost
         avg_spot_price = sum(i["price_per_hr"] for i in instances if i["price_per_hr"] > 0)
@@ -616,21 +787,29 @@ def create_app() -> dash.Dash:
             running_total += in_svc * avg_spot_price * period_hours
             cumulative_cost.append(round(running_total, 4))
         if cumulative_cost:
-            workers_fig.add_trace(go.Scatter(
-                x=cw_data["timestamps"], y=cumulative_cost,
-                name="Cumulative $", mode="lines",
-                line={"color": ACCENT_CYAN, "width": 2},
-                yaxis="y2",
-            ))
+            workers_fig.add_trace(
+                go.Scatter(
+                    x=cw_data["timestamps"],
+                    y=cumulative_cost,
+                    name="Cumulative $",
+                    mode="lines",
+                    line={"color": ACCENT_CYAN, "width": 2},
+                    yaxis="y2",
+                )
+            )
 
         workers_layout = {**chart_layout, "margin": {"l": 50, "r": 60, "t": 30, "b": 30}}
         workers_fig.update_layout(
             **workers_layout,
             yaxis={"title": "Workers", "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": TEXT_MUTED}},
             yaxis2={
-                "title": "Cost ($)", "overlaying": "y", "side": "right",
-                "gridcolor": BORDER, "rangemode": "tozero",
-                "tickfont": {"color": ACCENT_CYAN}, "showgrid": False,
+                "title": "Cost ($)",
+                "overlaying": "y",
+                "side": "right",
+                "gridcolor": BORDER,
+                "rangemode": "tozero",
+                "tickfont": {"color": ACCENT_CYAN},
+                "showgrid": False,
             },
         )
 
@@ -639,13 +818,36 @@ def create_app() -> dash.Dash:
             event_table = dash_table.DataTable(
                 data=asg_events,
                 columns=[{"name": c, "id": c} for c in ["time", "type", "instance", "capacity", "status"]],
-                style_header={"backgroundColor": BG_TABLE_HEAD, "color": TEXT_PRIMARY, "fontWeight": "bold", "border": f"1px solid {BORDER}"},
-                style_cell={"backgroundColor": BG_CARD, "color": TEXT_PRIMARY, "border": f"1px solid {BORDER}", "fontSize": "13px", "padding": "6px"},
+                style_header={
+                    "backgroundColor": BG_TABLE_HEAD,
+                    "color": TEXT_PRIMARY,
+                    "fontWeight": "bold",
+                    "border": f"1px solid {BORDER}",
+                },
+                style_cell={
+                    "backgroundColor": BG_CARD,
+                    "color": TEXT_PRIMARY,
+                    "border": f"1px solid {BORDER}",
+                    "fontSize": "13px",
+                    "padding": "6px",
+                },
                 style_data_conditional=[
-                    {"if": {"filter_query": '{type} eq "SPOT RECLAIM"'}, "backgroundColor": ROW_STALE, "color": ACCENT_RED},
+                    {
+                        "if": {"filter_query": '{type} eq "SPOT RECLAIM"'},
+                        "backgroundColor": ROW_STALE,
+                        "color": ACCENT_RED,
+                    },
                     {"if": {"filter_query": '{type} eq "SCALE OUT"'}, "backgroundColor": ROW_OK, "color": ACCENT_GREEN},
-                    {"if": {"filter_query": '{type} eq "SCALE IN"'}, "backgroundColor": ROW_WARN, "color": ACCENT_AMBER},
-                    {"if": {"filter_query": '{type} eq "UNHEALTHY"'}, "backgroundColor": ROW_STALE, "color": ACCENT_RED},
+                    {
+                        "if": {"filter_query": '{type} eq "SCALE IN"'},
+                        "backgroundColor": ROW_WARN,
+                        "color": ACCENT_AMBER,
+                    },
+                    {
+                        "if": {"filter_query": '{type} eq "UNHEALTHY"'},
+                        "backgroundColor": ROW_STALE,
+                        "color": ACCENT_RED,
+                    },
                 ],
                 page_size=10,
             )
@@ -691,9 +893,20 @@ def create_app() -> dash.Dash:
 
 def _metric_card(id_prefix: str, label: str, accent: str) -> html.Div:
     return html.Div(
-        style={"backgroundColor": BG_CARD, "borderRadius": "8px", "padding": "20px", "textAlign": "center", "minWidth": "150px", "borderLeft": f"4px solid {accent}"},
+        style={
+            "backgroundColor": BG_CARD,
+            "borderRadius": "8px",
+            "padding": "20px",
+            "textAlign": "center",
+            "minWidth": "150px",
+            "borderLeft": f"4px solid {accent}",
+        },
         children=[
-            html.Div(id=f"{id_prefix}-value", style={"fontSize": "36px", "fontWeight": "bold", "color": accent}, children="..."),
+            html.Div(
+                id=f"{id_prefix}-value",
+                style={"fontSize": "36px", "fontWeight": "bold", "color": accent},
+                children="...",
+            ),
             html.Div(label, style={"fontSize": "12px", "color": TEXT_SECONDARY, "marginTop": "5px"}),
         ],
     )
@@ -703,7 +916,9 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Muninn benchmark monitoring dashboard")
-    parser.add_argument("--port", type=int, default=DASHBOARD_PORT, help=f"Port to serve on (default: {DASHBOARD_PORT})")
+    parser.add_argument(
+        "--port", type=int, default=DASHBOARD_PORT, help=f"Port to serve on (default: {DASHBOARD_PORT})"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")

@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS events (
     uuid TEXT,
     parent_uuid TEXT,
     event_type TEXT NOT NULL,
-    msg_kind TEXT,  -- derived: human|user_text|assistant_text|tool_use|tool_result|thinking|meta|task_notification|other
+    msg_kind TEXT,  -- derived: human|user_text|assistant_text|tool_use|tool_result|thinking|meta|task_notification
     timestamp TEXT,
     timestamp_local TEXT,
     session_id TEXT,

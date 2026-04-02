@@ -11,13 +11,13 @@ from collections.abc import Generator
 
 import pytest
 
+from benchmarks.sessions_demo.cache import _derive_msg_kind
 from benchmarks.sessions_demo.constants import (
     CHUNK_MAX_CHARS,
     CHUNK_MIN_CHARS,
     PHASE_NAMES,
 )
 from benchmarks.sessions_demo.phases import Phase, default_phases
-from benchmarks.sessions_demo.cache import _derive_msg_kind
 from benchmarks.sessions_demo.phases.chunks import PhaseChunks, _split_into_chunks
 
 # ── _split_into_chunks ────────────────────────────────────────────
@@ -168,8 +168,7 @@ def conn_with_events() -> Generator[sqlite3.Connection, None, None]:
 
 def test_is_stale_true_when_no_events_chunked(conn_with_events: sqlite3.Connection) -> None:
     conn_with_events.execute(
-        "INSERT INTO events(id, event_type, msg_kind, message_content)"
-        " VALUES (1, 'user', 'human', 'hello world')"
+        "INSERT INTO events(id, event_type, msg_kind, message_content) VALUES (1, 'user', 'human', 'hello world')"
     )
     conn_with_events.commit()
     phase = PhaseChunks(message_types=["human"])
@@ -178,8 +177,7 @@ def test_is_stale_true_when_no_events_chunked(conn_with_events: sqlite3.Connecti
 
 def test_is_stale_false_when_all_events_chunked(conn_with_events: sqlite3.Connection) -> None:
     conn_with_events.execute(
-        "INSERT INTO events(id, event_type, msg_kind, message_content)"
-        " VALUES (1, 'user', 'human', 'hello world')"
+        "INSERT INTO events(id, event_type, msg_kind, message_content) VALUES (1, 'user', 'human', 'hello world')"
     )
     conn_with_events.execute(
         "INSERT INTO event_message_chunks(event_id, text, chunk_offset) VALUES (1, 'hello world', 0)"

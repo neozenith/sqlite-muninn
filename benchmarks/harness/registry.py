@@ -73,10 +73,18 @@ def _vss_permutations():
                         for m in HNSW_M_VALUES:
                             for efc in HNSW_EF_CONSTRUCTION_VALUES:
                                 for efs in HNSW_EF_SEARCH_VALUES:
-                                    perms.append(VSSTreatment(
-                                        engine_slug, model_name, dim, dataset, n,
-                                        hnsw_m=m, hnsw_ef_construction=efc, hnsw_ef_search=efs,
-                                    ))
+                                    perms.append(
+                                        VSSTreatment(
+                                            engine_slug,
+                                            model_name,
+                                            dim,
+                                            dataset,
+                                            n,
+                                            hnsw_m=m,
+                                            hnsw_ef_construction=efc,
+                                            hnsw_ef_search=efs,
+                                        )
+                                    )
                     else:
                         # Non-HNSW engines: single permutation with defaults
                         perms.append(VSSTreatment(engine_slug, model_name, dim, dataset, n))

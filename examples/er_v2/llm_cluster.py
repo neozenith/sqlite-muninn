@@ -282,9 +282,7 @@ def _betweenness_cleanup(
         return leiden_cluster(conn, all_entity_ids, match_edges), 0
 
     # Remove bridge edges
-    pruned_edges = [
-        (s, d, w) for s, d, w in match_edges if (min(s, d), max(s, d)) not in bridge_edges
-    ]
+    pruned_edges = [(s, d, w) for s, d, w in match_edges if (min(s, d), max(s, d)) not in bridge_edges]
 
     log.info(
         "Betweenness cleanup: %d bridge edges removed (threshold=%.4f), %d→%d edges",

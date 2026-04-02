@@ -82,9 +82,7 @@ class BenchStack(cdk.Stack):
         queue.grant_consume_messages(role)
 
         # SSM for remote access
-        role.add_managed_policy(
-            iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore")
-        )
+        role.add_managed_policy(iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSSMManagedInstanceCore"))
 
         # CloudWatch Logs
         role.add_to_policy(
@@ -99,7 +97,7 @@ class BenchStack(cdk.Stack):
         )
 
         # Instance profile
-        instance_profile = iam.CfnInstanceProfile(
+        iam.CfnInstanceProfile(
             self,
             "InstanceProfile",
             roles=[role.role_name],
@@ -200,10 +198,12 @@ class BenchStack(cdk.Stack):
         # Scale in:  backlog_per_instance == 0 for 10 min → scale to zero
 
         visible = queue.metric_approximate_number_of_messages_visible(
-            period=Duration.minutes(1), statistic="Maximum",
+            period=Duration.minutes(1),
+            statistic="Maximum",
         )
         not_visible = queue.metric_approximate_number_of_messages_not_visible(
-            period=Duration.minutes(1), statistic="Maximum",
+            period=Duration.minutes(1),
+            statistic="Maximum",
         )
 
         total_messages = cloudwatch.MathExpression(
@@ -213,8 +213,9 @@ class BenchStack(cdk.Stack):
         )
 
         # Scale out: any messages in queue → add capacity
-        scale_out_alarm = cloudwatch.Alarm(
-            self, "ScaleOutAlarm",
+        cloudwatch.Alarm(
+            self,
+            "ScaleOutAlarm",
             metric=total_messages,
             threshold=1,
             evaluation_periods=1,
@@ -223,8 +224,9 @@ class BenchStack(cdk.Stack):
         )
 
         # Scale in: zero messages (visible + in-flight) for 10 minutes → safe to remove
-        scale_in_alarm = cloudwatch.Alarm(
-            self, "ScaleInAlarm",
+        cloudwatch.Alarm(
+            self,
+            "ScaleInAlarm",
             metric=total_messages,
             threshold=0,
             evaluation_periods=10,  # 10 x 1-minute periods = 10 min of zero
@@ -236,9 +238,9 @@ class BenchStack(cdk.Stack):
             "ScaleOnBacklog",
             metric=total_messages,
             scaling_steps=[
-                autoscaling.ScalingInterval(change=-1, upper=0),   # 0 messages → scale in
+                autoscaling.ScalingInterval(change=-1, upper=0),  # 0 messages → scale in
                 autoscaling.ScalingInterval(change=+1, lower=1, upper=5),  # 1-5 → +1
-                autoscaling.ScalingInterval(change=+2, lower=5),   # 5+ → +2
+                autoscaling.ScalingInterval(change=+2, lower=5),  # 5+ → +2
             ],
             adjustment_type=autoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
             evaluation_periods=10,  # require 10 consecutive periods before scaling in

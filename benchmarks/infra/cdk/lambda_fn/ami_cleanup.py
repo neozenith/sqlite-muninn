@@ -9,7 +9,7 @@ Environment variables:
 """
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import boto3
 
@@ -20,7 +20,7 @@ def handler(event, context):
     max_age_days = int(os.environ.get("MAX_AGE_DAYS", "7"))
     project_tag = os.environ.get("PROJECT_TAG", "muninn-benchmarks")
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
 
     images = ec2.describe_images(
         Owners=["self"],
@@ -34,7 +34,7 @@ def handler(event, context):
         ami_id = img["ImageId"]
         name = img.get("Name", "unnamed")
         created = datetime.fromisoformat(img["CreationDate"].replace("Z", "+00:00"))
-        age_days = (datetime.now(timezone.utc) - created).days
+        age_days = (datetime.now(UTC) - created).days
 
         if created >= cutoff:
             print(f"KEEP  {ami_id} ({name}) — {age_days}d old")
