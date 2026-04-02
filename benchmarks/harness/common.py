@@ -73,6 +73,7 @@ EMBEDDING_MODELS: dict[str, dict[str, Any]] = {
         "params": "22M",
         "doc_prefix": "",
         "query_prefix": "",
+        "max_tokens": 512,
     },
     "NomicEmbed": {
         "gguf_filename": "nomic-embed-text-v1.5.Q8_0.gguf",
@@ -80,6 +81,7 @@ EMBEDDING_MODELS: dict[str, dict[str, Any]] = {
         "params": "137M",
         "doc_prefix": "search_document: ",
         "query_prefix": "search_query: ",
+        "max_tokens": 8192,
     },
     "BGE-Large": {
         "gguf_filename": "bge-large-en-v1.5-q8_0.gguf",
@@ -88,6 +90,7 @@ EMBEDDING_MODELS: dict[str, dict[str, Any]] = {
         "doc_prefix": "",
         "query_prefix": "Represent this sentence for searching relevant passages: ",
         "embed_enabled": False,  # Too slow for live-embed benchmarks (335M hangs)
+        "max_tokens": 512,
     },
 }
 
