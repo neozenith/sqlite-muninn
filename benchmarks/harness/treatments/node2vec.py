@@ -77,16 +77,16 @@ class Node2VecTreatment(Treatment):
         t0 = time.perf_counter()
         conn.execute(
             "SELECT node2vec_train("
-            "  'bench_edges', 'src', 'dst', 'weight',"
+            "  'bench_edges', 'src', 'dst',"
             "  'n2v_embeddings',"
             f"  {self._dim},"  # dimensions
             f"  {self._p},"  # p
             f"  {self._q},"  # q
-            "  10,"  # walk_length
-            "  80,"  # num_walks
+            "  80,"  # num_walks  (C argv[7])
+            "  10,"  # walk_length (C argv[8])
             "  5,"  # window
-            "  1,"  # min_count
-            "  4,"  # workers (unused in C impl)
+            "  5,"  # neg_samples
+            "  0.025,"  # lr_init
             "  100"  # epochs
             ")"
         )
