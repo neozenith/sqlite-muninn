@@ -11,7 +11,7 @@ import logging
 import sqlite3
 from typing import TYPE_CHECKING
 
-from benchmarks.demo_builder.common import ProgressTracker, load_muninn
+from benchmarks.sessions_demo.common import ProgressTracker, load_muninn
 from benchmarks.sessions_demo.constants import EMBED_MAX_CHARS, GGUF_EMBEDDING_DIM, GGUF_MODEL_NAME, GGUF_MODEL_PATH
 from benchmarks.sessions_demo.phases.base import Phase
 

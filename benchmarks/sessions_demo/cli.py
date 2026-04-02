@@ -179,8 +179,8 @@ def _parse_message_types(raw: str) -> list[str]:
 
 def _cmd_run_phase(args: argparse.Namespace) -> None:
     """Handle run-phase subcommand — run a single phase standalone."""
-    from benchmarks.demo_builder.manifest import write_manifest_json
     from benchmarks.sessions_demo.build import SessionsBuild
+    from benchmarks.sessions_demo.manifest import write_manifest_json
 
     message_types = _parse_message_types(args.message_types)
     db_path = args.output_folder / args.db_name
@@ -204,8 +204,8 @@ def _cmd_run_phase(args: argparse.Namespace) -> None:
 
 def _cmd_build(args: argparse.Namespace) -> None:
     """Handle build subcommand."""
-    from benchmarks.demo_builder.manifest import write_manifest_json
     from benchmarks.sessions_demo.build import SessionsBuild
+    from benchmarks.sessions_demo.manifest import write_manifest_json
 
     if args.run_from and args.run_from not in PHASE_NAMES:
         print(f"Error: unknown phase {args.run_from!r}")

@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from benchmarks.demo_builder.common import load_muninn
+from benchmarks.sessions_demo.common import load_muninn
 
 if TYPE_CHECKING:
     from benchmarks.sessions_demo.build import PhaseContext

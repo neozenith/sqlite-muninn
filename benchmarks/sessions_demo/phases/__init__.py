@@ -1,21 +1,10 @@
 """Build phases — each phase is a Phase subclass with setup/run/teardown lifecycle.
 
-The KG pipeline phases (NER, RE, entity_embeddings, entity_resolution, node2vec)
-are imported directly from demo_builder. They work against sessions_demo's
-PhaseContext via Python's structural (duck) typing — both contexts expose the
-same attribute names (num_chunks, num_entity_mentions, entity_vectors, etc.)
-and the phases only use TYPE_CHECKING imports for the context type hint.
+All phases are local to sessions_demo. No imports from demo_builder.
 """
 
 from __future__ import annotations
 
-from benchmarks.demo_builder.phases.communities import PhaseCommunities
-from benchmarks.demo_builder.phases.community_naming import PhaseCommunityNaming
-from benchmarks.demo_builder.phases.entity_embeddings import PhaseEntityEmbeddings
-from benchmarks.demo_builder.phases.entity_resolution import PhaseEntityResolution
-from benchmarks.demo_builder.phases.ner import PhaseNER
-from benchmarks.demo_builder.phases.node2vec import PhaseNode2Vec
-from benchmarks.demo_builder.phases.re import PhaseRE
 from benchmarks.sessions_demo.constants import (
     SESSION_GLINER2_NER_LABELS,
     SESSION_GLINER2_RE_LABELS,
@@ -25,8 +14,15 @@ from benchmarks.sessions_demo.constants import (
 from benchmarks.sessions_demo.phases.base import Phase
 from benchmarks.sessions_demo.phases.chunks import PhaseChunks
 from benchmarks.sessions_demo.phases.chunks_vec import PhaseChunksVec
+from benchmarks.sessions_demo.phases.communities import PhaseCommunities
+from benchmarks.sessions_demo.phases.community_naming import PhaseCommunityNaming
+from benchmarks.sessions_demo.phases.entity_embeddings import PhaseEntityEmbeddings
+from benchmarks.sessions_demo.phases.entity_resolution import PhaseEntityResolution
 from benchmarks.sessions_demo.phases.ingest import PhaseIngest
 from benchmarks.sessions_demo.phases.metadata import PhaseSessionMetadata
+from benchmarks.sessions_demo.phases.ner import PhaseNER
+from benchmarks.sessions_demo.phases.node2vec import PhaseNode2Vec
+from benchmarks.sessions_demo.phases.re import PhaseRE
 from benchmarks.sessions_demo.phases.umap import PhaseChunksUMAP, PhaseEntitiesUMAP
 
 __all__ = [
@@ -85,14 +81,14 @@ def default_phases(message_types: list[str] | None = None, legacy_models: bool =
         PhaseIngest(),  # 1
         PhaseChunks(message_types=message_types),  # 2
         PhaseChunksVec(),  # 3
-        PhaseChunksUMAP(),  # 4  — chunks_vec_nodes only
-        ner_phase,  # type: ignore[list-item]  # 5 — demo_builder Phase subclass
-        re_phase,  # type: ignore[list-item]  # 6 — demo_builder Phase subclass
-        PhaseEntityEmbeddings(model_name="NomicEmbed"),  # type: ignore[list-item]  # 7
-        PhaseEntitiesUMAP(),  # 8  — entities_vec_nodes only
-        PhaseEntityResolution(),  # type: ignore[list-item]  # 9
-        PhaseNode2Vec(),  # type: ignore[list-item]  # 10
-        PhaseCommunities(),  # type: ignore[list-item]  # 11
-        PhaseCommunityNaming(),  # type: ignore[list-item]  # 12
+        PhaseChunksUMAP(),  # 4
+        ner_phase,  # 5
+        re_phase,  # 6
+        PhaseEntityEmbeddings(),  # 7
+        PhaseEntitiesUMAP(),  # 8
+        PhaseEntityResolution(),  # 9
+        PhaseNode2Vec(),  # 10
+        PhaseCommunities(),  # 11
+        PhaseCommunityNaming(),  # 12
         PhaseSessionMetadata(),  # 13
     ]

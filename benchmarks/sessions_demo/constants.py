@@ -25,6 +25,12 @@ DEFAULT_DB_NAME = "sessions_demo.db"
 # Unique ID used in the meta table and manifest.json
 SESSION_DB_ID = "sessions_demo"
 
+# ── GGUF chat model (for muninn NER/RE backend) ─────────────────
+
+MUNINN_CHAT_MODEL_NAME = "Qwen3.5-4B"
+MUNINN_CHAT_MODEL_FILE = "Qwen3.5-4B-Q4_K_M.gguf"
+MUNINN_CHAT_MODELS_DIR = PROJECT_ROOT / "models"
+
 # ── GGUF embedding model ─────────────────────────────────────────
 
 GGUF_MODEL_PATH = str(PROJECT_ROOT / "models" / "nomic-embed-text-v1.5.Q8_0.gguf")

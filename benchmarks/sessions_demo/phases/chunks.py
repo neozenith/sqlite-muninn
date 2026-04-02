@@ -6,7 +6,7 @@ import logging
 import sqlite3
 from typing import TYPE_CHECKING
 
-from benchmarks.demo_builder.common import ProgressTracker
+from benchmarks.sessions_demo.common import ProgressTracker
 from benchmarks.sessions_demo.constants import CHUNK_MAX_CHARS, CHUNK_MIN_CHARS, DEFAULT_MESSAGE_TYPES
 from benchmarks.sessions_demo.phases.base import Phase
 

@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from benchmarks.demo_builder.common import _fmt_elapsed
+from benchmarks.sessions_demo.common import _fmt_elapsed
 from benchmarks.sessions_demo.phases import Phase, default_phases
 
 log = logging.getLogger(__name__)
@@ -220,7 +220,7 @@ class SessionsBuild:
         self._log.info("=" * 60)
 
         # Load muninn once for the shared connection.
-        from benchmarks.demo_builder.common import load_muninn
+        from benchmarks.sessions_demo.common import load_muninn
 
         load_muninn(self._db)
 
@@ -270,7 +270,7 @@ class SessionsBuild:
         target = phases[target_idx]
 
         # muninn must be registered before any HNSW phase creates or queries a VT.
-        from benchmarks.demo_builder.common import load_muninn
+        from benchmarks.sessions_demo.common import load_muninn
 
         load_muninn(self._db)
 
@@ -509,6 +509,12 @@ class SessionsBuild:
         cascade to shadow tables via xDestroy.  UMAP phases also delete their
         joblib model files so the next run does a full refit.
         """
+        # muninn must be loaded before dropping HNSW virtual tables — their
+        # xDestroy callback lives in the extension.
+        from benchmarks.sessions_demo.common import load_muninn
+
+        load_muninn(self._db)
+
         tables = _PHASE_TABLES.get(phase_name, [])
         for table in tables:
             self._db.execute(f'DROP TABLE IF EXISTS "{table}"')
