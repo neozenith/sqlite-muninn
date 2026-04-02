@@ -593,10 +593,16 @@ def _metric_card(id_prefix: str, label: str, accent: str) -> html.Div:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Muninn benchmark monitoring dashboard")
+    parser.add_argument("--port", type=int, default=DASHBOARD_PORT, help=f"Port to serve on (default: {DASHBOARD_PORT})")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     app = create_app()
-    log.info("Dashboard: http://localhost:%d", DASHBOARD_PORT)
-    app.run(debug=False, host="0.0.0.0", port=DASHBOARD_PORT)
+    log.info("Dashboard: http://localhost:%d", args.port)
+    app.run(debug=False, host="0.0.0.0", port=args.port)
 
 
 if __name__ == "__main__":
