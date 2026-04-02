@@ -35,11 +35,9 @@ import datetime
 import logging
 import sqlite3
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-import numpy as np
 
 from benchmarks.demo_builder.common import _fmt_elapsed
 from benchmarks.sessions_demo.phases import Phase, default_phases
@@ -57,6 +55,8 @@ _KG_PHASE_NAMES: frozenset[str] = frozenset(
         "entities_vec_umap",
         "entity_resolution",
         "node2vec",
+        "communities",
+        "community_naming",
         "metadata",
     ]
 )
@@ -78,6 +78,9 @@ _KG_TABLES: list[str] = [
     "entities_vec_umap",
     "node2vec_emb",
     "_match_edges",
+    "leiden_communities",
+    "entity_cluster_labels",
+    "community_labels",
 ]
 
 # Tables created by each phase. Used by clear_phase() for --force rebuilds.
@@ -93,6 +96,8 @@ _PHASE_TABLES: dict[str, list[str]] = {
     "entities_vec_umap": ["entities_vec_umap"],
     "entity_resolution": ["entity_clusters", "nodes", "edges", "_match_edges"],
     "node2vec": ["node2vec_emb"],
+    "communities": ["leiden_communities"],
+    "community_naming": ["entity_cluster_labels", "community_labels"],
     "metadata": ["meta"],
 }
 
@@ -125,7 +130,6 @@ class PhaseContext:
     num_entity_mentions: int = 0  # set by PhaseNER
     num_relations: int = 0  # set by PhaseRE
     num_unique_entities: int = 0  # set by PhaseEntityEmbeddings
-    entity_vectors: np.ndarray | None = field(default=None, repr=False)  # set by PhaseEntityEmbeddings
     num_nodes: int = 0  # set by PhaseEntityResolution
     num_edges: int = 0  # set by PhaseEntityResolution
     num_n2v: int = 0  # set by PhaseNode2Vec
@@ -412,6 +416,14 @@ class SessionsBuild:
             "entities_vec_umap": (umap_ent, max(0, ev_vec - umap_ent)),
             "entity_resolution": (ec, max(0, ent - ec)),
             "node2vec": (n2v, max(0, nodes - n2v)),
+            "communities": (
+                _count_q("SELECT COUNT(DISTINCT resolution) FROM leiden_communities"),
+                0 if not phase_stale.get("communities", True) else 1,
+            ),
+            "community_naming": (
+                _count_q("SELECT COUNT(*) FROM entity_cluster_labels") + _count_q("SELECT COUNT(*) FROM community_labels"),
+                0 if not phase_stale.get("community_naming", True) else 1,
+            ),
             "metadata": (_count_q("SELECT COUNT(*) FROM meta"), 0 if not phase_stale.get("metadata", True) else 1),
         }
 

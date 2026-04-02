@@ -34,7 +34,7 @@ GGUF_EMBEDDING_DIM = 768
 # ── Schema version ───────────────────────────────────────────────
 # Bump this when the schema changes to trigger a rebuild.
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 # ── Chunking parameters ──────────────────────────────────────────
 # Chunk size is constrained by the smallest model window in the pipeline.
@@ -72,11 +72,9 @@ EMBED_MAX_CHARS = 1500
 DEFAULT_MESSAGE_TYPES: list[str] = ["human"]
 ALL_MESSAGE_TYPES: list[str] = [
     # ── Named filter aliases ─────────────────────────────────────
-    "human",  # Compound filter: event_type='user' AND is_meta=0 AND
-    # first_content_block_type='string'. Matches only genuine
+    "human",  # Maps to msg_kind='human'. Matches only genuine
     # human-typed prompts (~9% of all events, ~6% of user events).
-    # Excludes tool_result blocks (92% of user events — auto-filtered
-    # by empty content), isMeta wrappers, and skill/hook injections.
+    # Excludes tool_result blocks, isMeta wrappers, and injections.
     # ── Raw event_type values ────────────────────────────────────
     "user",  # All user-role events: human prompts + tool results + injections.
     "assistant",  # Claude responses: text, thinking, and tool_use stub blocks.
@@ -148,5 +146,7 @@ PHASE_NAMES = [
     "entities_vec_umap",
     "entity_resolution",
     "node2vec",
+    "communities",
+    "community_naming",
     "metadata",
 ]

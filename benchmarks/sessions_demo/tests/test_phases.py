@@ -17,6 +17,7 @@ from benchmarks.sessions_demo.constants import (
     PHASE_NAMES,
 )
 from benchmarks.sessions_demo.phases import Phase, default_phases
+from benchmarks.sessions_demo.cache import _derive_msg_kind
 from benchmarks.sessions_demo.phases.chunks import PhaseChunks, _split_into_chunks
 
 # ── _split_into_chunks ────────────────────────────────────────────
@@ -74,8 +75,7 @@ def test_split_preserves_offsets() -> None:
 def test_type_filter_human_alias() -> None:
     phase = PhaseChunks(message_types=["human"])
     sql, params = phase._type_filter()
-    assert "event_type = 'user'" in sql
-    assert "is_meta = 0" in sql
+    assert "msg_kind = 'human'" in sql
     assert params == []
 
 
@@ -98,7 +98,7 @@ def test_type_filter_multiple_types() -> None:
 
 def test_default_phases_count() -> None:
     phases = default_phases()
-    assert len(phases) == 11
+    assert len(phases) == 13
 
 
 def test_default_phases_names_match_constants() -> None:
@@ -120,7 +120,7 @@ def test_default_phases_are_callable() -> None:
 
 def test_default_phases_legacy_models() -> None:
     phases = default_phases(legacy_models=True)
-    assert len(phases) == 11
+    assert len(phases) == 13
     names = [p.name for p in phases]
     assert names == PHASE_NAMES
 
@@ -149,8 +149,7 @@ def conn_with_events() -> Generator[sqlite3.Connection, None, None]:
         CREATE TABLE events (
             id INTEGER PRIMARY KEY,
             event_type TEXT,
-            is_meta INTEGER DEFAULT 0,
-            first_content_block_type TEXT,
+            msg_kind TEXT,
             message_content TEXT
         )
     """)
@@ -169,8 +168,8 @@ def conn_with_events() -> Generator[sqlite3.Connection, None, None]:
 
 def test_is_stale_true_when_no_events_chunked(conn_with_events: sqlite3.Connection) -> None:
     conn_with_events.execute(
-        "INSERT INTO events(id, event_type, is_meta, first_content_block_type, message_content)"
-        " VALUES (1, 'user', 0, 'string', 'hello world')"
+        "INSERT INTO events(id, event_type, msg_kind, message_content)"
+        " VALUES (1, 'user', 'human', 'hello world')"
     )
     conn_with_events.commit()
     phase = PhaseChunks(message_types=["human"])
@@ -179,8 +178,8 @@ def test_is_stale_true_when_no_events_chunked(conn_with_events: sqlite3.Connecti
 
 def test_is_stale_false_when_all_events_chunked(conn_with_events: sqlite3.Connection) -> None:
     conn_with_events.execute(
-        "INSERT INTO events(id, event_type, is_meta, first_content_block_type, message_content)"
-        " VALUES (1, 'user', 0, 'string', 'hello world')"
+        "INSERT INTO events(id, event_type, msg_kind, message_content)"
+        " VALUES (1, 'user', 'human', 'hello world')"
     )
     conn_with_events.execute(
         "INSERT INTO event_message_chunks(event_id, text, chunk_offset) VALUES (1, 'hello world', 0)"
@@ -195,6 +194,38 @@ def test_is_stale_true_when_table_missing() -> None:
     phase = PhaseChunks(message_types=["human"])
     assert phase.is_stale(conn) is True
     conn.close()
+
+
+# ── Constants sanity checks ───────────────────────────────────────
+
+
+# ── _derive_msg_kind ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "event_type,role,is_meta,first_block,content,expected",
+    [
+        ("user", "user", False, "string", "hello", "human"),
+        ("user", "user", False, "text", None, "user_text"),
+        ("user", "user", True, "string", "injected", "meta"),
+        ("user", "user", False, "tool_result", None, "tool_result"),
+        ("user", "user", False, "string", "<task-notification>\n<task-id>x</task-id>", "task_notification"),
+        ("assistant", "assistant", False, "tool_use", None, "tool_use"),
+        ("assistant", "assistant", False, "text", None, "assistant_text"),
+        ("assistant", "assistant", False, "thinking", None, "thinking"),
+        ("progress", None, False, None, None, "other"),
+        ("system", None, False, None, None, "other"),
+    ],
+)
+def test_derive_msg_kind(
+    event_type: str,
+    role: str | None,
+    is_meta: bool,
+    first_block: str | None,
+    content: str | None,
+    expected: str,
+) -> None:
+    assert _derive_msg_kind(event_type, role, is_meta, first_block, content) == expected
 
 
 # ── Constants sanity checks ───────────────────────────────────────

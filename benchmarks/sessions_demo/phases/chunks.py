@@ -87,17 +87,13 @@ class PhaseChunks(Phase):
     def _type_filter(self) -> tuple[str, list[str]]:
         """Return (SQL fragment, params) for the message-type filter.
 
-        The special alias 'human' expands to a compound condition targeting
-        only genuine human-typed prompts: user-role events with string content
-        that are not system-injected meta wrappers (isMeta=False).
+        The special alias 'human' maps to msg_kind='human' — a single-column
+        filter replacing the old compound is_meta + first_content_block_type check.
 
         Any other value is treated as a literal event_type matched via IN ().
         """
         if self._message_types == ["human"]:
-            return (
-                "AND e.event_type = 'user' AND e.is_meta = 0 AND e.first_content_block_type = 'string'",
-                [],
-            )
+            return "AND e.msg_kind = 'human'", []
         placeholders = ",".join("?" * len(self._message_types))
         return f"AND e.event_type IN ({placeholders})", list(self._message_types)
 

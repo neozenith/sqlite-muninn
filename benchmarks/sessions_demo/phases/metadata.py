@@ -113,6 +113,9 @@ class PhaseSessionMetadata(Phase):
             "edges",
             "chunks_vec_umap",
             "entities_vec_umap",
+            "leiden_communities",
+            "entity_cluster_labels",
+            "community_labels",
             "meta",
         ]
         for table_name in plain_tables:

@@ -9,6 +9,8 @@ and the phases only use TYPE_CHECKING imports for the context type hint.
 
 from __future__ import annotations
 
+from benchmarks.demo_builder.phases.communities import PhaseCommunities
+from benchmarks.demo_builder.phases.community_naming import PhaseCommunityNaming
 from benchmarks.demo_builder.phases.entity_embeddings import PhaseEntityEmbeddings
 from benchmarks.demo_builder.phases.entity_resolution import PhaseEntityResolution
 from benchmarks.demo_builder.phases.ner import PhaseNER
@@ -32,6 +34,8 @@ __all__ = [
     "PhaseChunks",
     "PhaseChunksUMAP",
     "PhaseChunksVec",
+    "PhaseCommunities",
+    "PhaseCommunityNaming",
     "PhaseEntitiesUMAP",
     "PhaseEntityEmbeddings",
     "PhaseEntityResolution",
@@ -66,7 +70,9 @@ def default_phases(message_types: list[str] | None = None, legacy_models: bool =
       8  entities_vec_umap → entities_vec_umap         (depends on: entity_embeddings)
       9  entity_resolution → entity_clusters, nodes, edges
      10  node2vec          → node2vec_emb (HNSW)
-     11  metadata          → meta
+     11  communities       → leiden_communities        (depends on: relations)
+     12  community_naming  → entity_cluster_labels, community_labels (depends on: communities)
+     13  metadata          → meta
     """
     if legacy_models:
         ner_phase = PhaseNER(labels=SESSION_NER_LABELS, backend="gliner")
@@ -86,5 +92,7 @@ def default_phases(message_types: list[str] | None = None, legacy_models: bool =
         PhaseEntitiesUMAP(),  # 8  — entities_vec_nodes only
         PhaseEntityResolution(),  # type: ignore[list-item]  # 9
         PhaseNode2Vec(),  # type: ignore[list-item]  # 10
-        PhaseSessionMetadata(),  # 11
+        PhaseCommunities(),  # type: ignore[list-item]  # 11
+        PhaseCommunityNaming(),  # type: ignore[list-item]  # 12
+        PhaseSessionMetadata(),  # 13
     ]

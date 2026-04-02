@@ -79,8 +79,8 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT,
     parent_uuid TEXT,
-    fqn_id TEXT,  -- {project_id}::{session_id}::{uuid} for global uniqueness
     event_type TEXT NOT NULL,
+    msg_kind TEXT,  -- derived: human|user_text|assistant_text|tool_use|tool_result|thinking|meta|task_notification|other
     timestamp TEXT,
     timestamp_local TEXT,
     session_id TEXT,
@@ -89,8 +89,6 @@ CREATE TABLE IF NOT EXISTS events (
     agent_id TEXT,
     agent_slug TEXT,
     message_role TEXT,
-    is_meta INTEGER NOT NULL DEFAULT 0,  -- raw_json.isMeta: system-injected wrappers
-    first_content_block_type TEXT,       -- 'string' | 'text' | 'tool_use' | 'tool_result' | 'thinking' | NULL
     message_content TEXT,  -- Plain text for FTS
     message_content_json TEXT,  -- Original JSON structure
     model_id TEXT,
@@ -109,13 +107,12 @@ CREATE INDEX IF NOT EXISTS idx_events_parent_uuid ON events(parent_uuid);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+CREATE INDEX IF NOT EXISTS idx_events_msg_kind ON events(msg_kind);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_source_file ON events(source_file_id);
 CREATE INDEX IF NOT EXISTS idx_events_project_session ON events(project_id, session_id);
 CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(session_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_events_session_uuid ON events(session_id, uuid);
-CREATE INDEX IF NOT EXISTS idx_events_human ON events(event_type, is_meta, first_content_block_type);
-CREATE INDEX IF NOT EXISTS idx_events_fqn_id ON events(fqn_id);
 
 -- FTS5 virtual table for full-text search on message content
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
@@ -151,15 +148,11 @@ CREATE TABLE IF NOT EXISTS event_edges (
     session_id TEXT NOT NULL,
     event_uuid TEXT NOT NULL,
     parent_event_uuid TEXT NOT NULL,
-    fqn_src TEXT NOT NULL,  -- {project_id}::{session_id}::{parent_event_uuid}
-    fqn_dst TEXT NOT NULL,  -- {project_id}::{session_id}::{event_uuid}
     source_file_id INTEGER NOT NULL REFERENCES source_files(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_event_edges_forward ON event_edges(project_id, session_id, event_uuid);
 CREATE INDEX IF NOT EXISTS idx_event_edges_reverse ON event_edges(project_id, session_id, parent_event_uuid);
 CREATE INDEX IF NOT EXISTS idx_event_edges_source_file ON event_edges(source_file_id);
-CREATE INDEX IF NOT EXISTS idx_event_edges_fqn_src ON event_edges(fqn_src);
-CREATE INDEX IF NOT EXISTS idx_event_edges_fqn_dst ON event_edges(fqn_dst);
 
 CREATE INDEX IF NOT EXISTS idx_source_files_project_session ON source_files(project_id, session_id);
 """
@@ -441,24 +434,23 @@ class CacheManager:
         source_file_id = cursor.lastrowid
 
         # Insert events
-        sid = detected_session_id or ""
         for event in events_data:
-            fqn_id = f"{project_id}::{sid}::{event['uuid']}" if event["uuid"] else None
             cursor.execute(
                 """INSERT INTO events
-                   (uuid, parent_uuid, fqn_id, event_type, timestamp, timestamp_local,
+                   (uuid, parent_uuid, event_type, msg_kind,
+                    timestamp, timestamp_local,
                     session_id, project_id, is_sidechain, agent_id, agent_slug,
-                    message_role, is_meta, first_content_block_type,
+                    message_role,
                     message_content, message_content_json, model_id,
                     input_tokens, output_tokens, cache_read_tokens,
                     cache_creation_tokens, cache_5m_tokens,
                     source_file_id, line_number, raw_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     event["uuid"],
                     event["parent_uuid"],
-                    fqn_id,
                     event["event_type"],
+                    event["msg_kind"],
                     event["timestamp"],
                     event["timestamp_local"],
                     detected_session_id,
@@ -467,8 +459,6 @@ class CacheManager:
                     event["agent_id"],
                     event["agent_slug"],
                     event["message_role"],
-                    event["is_meta"],
-                    event["first_content_block_type"],
                     event["message_content"],
                     event["message_content_json"],
                     event["model_id"],
@@ -486,20 +476,16 @@ class CacheManager:
         # Insert event edges for parent-child relationships
         for event in events_data:
             if event["uuid"] and event["parent_uuid"]:
-                fqn_src = f"{project_id}::{sid}::{event['parent_uuid']}"
-                fqn_dst = f"{project_id}::{sid}::{event['uuid']}"
                 cursor.execute(
                     """INSERT INTO event_edges
                        (project_id, session_id, event_uuid, parent_event_uuid,
-                        fqn_src, fqn_dst, source_file_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        source_file_id)
+                       VALUES (?, ?, ?, ?, ?)""",
                     (
                         project_id,
                         detected_session_id,
                         event["uuid"],
                         event["parent_uuid"],
-                        fqn_src,
-                        fqn_dst,
                         source_file_id,
                     ),
                 )
@@ -678,6 +664,50 @@ def _extract_text_content(content: Any) -> str:
     return ""
 
 
+def _derive_msg_kind(
+    event_type: str,
+    message_role: str | None,
+    is_meta: bool,
+    first_block_type: str | None,
+    content_raw: Any,
+) -> str:
+    """Derive msg_kind from event attributes.
+
+    Returns one of 9 categories:
+        human             — user event, string content, not meta (real human prompts)
+        user_text         — user event, text block content, not meta
+        meta              — user event with isMeta=true (system-injected wrappers)
+        tool_result       — user event whose first content block is tool_result
+        tool_use          — assistant event whose first content block is tool_use
+        assistant_text    — assistant event whose first content block is text
+        thinking          — assistant event whose first content block is thinking
+        task_notification — user event whose content starts with <task-notification>
+        other             — everything else (progress, system, queue-operation, etc.)
+    """
+    if event_type == "user" and message_role == "user":
+        if is_meta:
+            return "meta"
+        if first_block_type == "string":
+            # Check for task_notification (string content starting with <task-notification>)
+            if isinstance(content_raw, str) and content_raw.strip().startswith("<task-notification>"):
+                return "task_notification"
+            return "human"
+        if first_block_type == "text":
+            return "user_text"
+        if first_block_type == "tool_result":
+            return "tool_result"
+        return "other"
+    if event_type == "assistant" and message_role == "assistant":
+        if first_block_type == "tool_use":
+            return "tool_use"
+        if first_block_type == "thinking":
+            return "thinking"
+        if first_block_type == "text":
+            return "assistant_text"
+        return "other"
+    return "other"
+
+
 def _parse_event_for_cache(
     raw: dict[str, Any],
     project_id: str,
@@ -698,7 +728,7 @@ def _parse_event_for_cache(
     agent_id = raw.get("agentId")
     agent_slug = raw.get("slug")
 
-    is_meta = 1 if raw.get("isMeta") else 0
+    is_meta = bool(raw.get("isMeta"))
 
     message = raw.get("message", {}) or {}
     message_role = message.get("role") if isinstance(message, dict) else None
@@ -707,6 +737,10 @@ def _parse_event_for_cache(
 
     first_block_type = _first_content_block_type(message_content_raw)
     message_content_text = _extract_text_content(message_content_raw)
+
+    # Derive msg_kind — a single column replacing the is_meta + first_content_block_type combo.
+    # 9 categories matching the introspect_sessions.py schema.
+    msg_kind = _derive_msg_kind(event_type, message_role, is_meta, first_block_type, message_content_raw)
 
     usage = message.get("usage", {}) if isinstance(message, dict) else {}
     input_tokens = usage.get("input_tokens", 0) or 0
@@ -729,14 +763,13 @@ def _parse_event_for_cache(
         "uuid": uuid,
         "parent_uuid": parent_uuid,
         "event_type": event_type,
+        "msg_kind": msg_kind,
         "timestamp": timestamp,
         "timestamp_local": timestamp_local,
         "is_sidechain": 1 if is_sidechain else 0,
         "agent_id": agent_id,
         "agent_slug": agent_slug,
         "message_role": message_role,
-        "is_meta": is_meta,
-        "first_content_block_type": first_block_type,
         "message_content": message_content_text,
         "message_content_json": json.dumps(message_content_raw) if message_content_raw else None,
         "model_id": model_id,
