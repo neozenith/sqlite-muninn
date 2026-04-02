@@ -198,7 +198,14 @@ class CacheManager:
                     wal.unlink()
 
     def init_schema(self) -> None:
-        """Initialize database schema."""
+        """Initialize database schema.
+
+        If the DB already exists with a stale schema version, destroys it
+        first to avoid CREATE INDEX failures on missing columns.
+        """
+        if self.db_path.exists() and self.needs_rebuild():
+            log.info("Schema version mismatch — destroying stale database")
+            self.destroy()
         log.info("Initializing cache schema...")
         self.conn.executescript(SCHEMA_SQL)
         self.conn.execute(
