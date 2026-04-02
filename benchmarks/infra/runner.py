@@ -312,6 +312,20 @@ def cmd_setup(args: argparse.Namespace) -> None:
     log.info("Setup complete. Run 'uv run benchmarks/infra/runner.py run' to launch.")
 
 
+def _get_asg_name(cfg: dict) -> str | None:
+    """Get the ASG name from CloudFormation stack outputs."""
+    branch = cfg["repo"]["branch"]
+    safe_branch = _sanitize_branch(branch)
+    stack_name = f"MuninnBench-{safe_branch}"
+    cf = boto3.client("cloudformation", region_name=cfg["aws"]["ec2_region"])
+    try:
+        stack = cf.describe_stacks(StackName=stack_name)
+        outputs = {o["OutputKey"]: o["OutputValue"] for o in stack["Stacks"][0].get("Outputs", [])}
+        return outputs.get("AsgName")
+    except ClientError:
+        return None
+
+
 def _sanitize_branch(branch: str) -> str:
     """Sanitize branch name for AWS resource names (alphanumeric + hyphens)."""
     return re.sub(r"[^a-zA-Z0-9]", "-", branch).strip("-")[:64]
@@ -343,6 +357,18 @@ def cmd_prime(args: argparse.Namespace) -> None:
 
     ec2 = boto3.client("ec2", region_name=aws_cfg["ec2_region"])
     s3 = boto3.client("s3", region_name=aws_cfg["s3_region"])
+    asg_client = boto3.client("autoscaling", region_name=aws_cfg["ec2_region"])
+
+    # Suspend ASG scaling and scale to 0 so workers don't launch
+    # from the old AMI while we're building a new one
+    asg_name = _get_asg_name(cfg)
+    if asg_name:
+        log.info("Suspending ASG scaling and scaling to 0...")
+        asg_client.suspend_processes(
+            AutoScalingGroupName=asg_name,
+            ScalingProcesses=["AlarmNotification", "ScheduledActions"],
+        )
+        asg_client.set_desired_capacity(AutoScalingGroupName=asg_name, DesiredCapacity=0)
 
     # Check for existing tracked instance
     state = _load_state()
@@ -525,6 +551,14 @@ def cmd_prime(args: argparse.Namespace) -> None:
     log.info("Branch: %s (commit %s)", branch, commit_hash)
     log.info("config.yml updated with new ami_id.")
     log.info("")
+    # Resume ASG scaling now that the new AMI is ready
+    if asg_name:
+        log.info("Resuming ASG scaling...")
+        asg_client.resume_processes(
+            AutoScalingGroupName=asg_name,
+            ScalingProcesses=["AlarmNotification", "ScheduledActions"],
+        )
+
     log.info("Next steps:")
     log.info("  uv run benchmarks/infra/runner.py run       # single instance from AMI")
     log.info("  uv run benchmarks/infra/runner.py submit    # enqueue to SQS for parallel workers")
