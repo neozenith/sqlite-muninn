@@ -99,15 +99,32 @@ def _compute_recall(search_results: list[set[int]], ground_truth: list[set[int]]
 
 
 class VSSTreatment(Treatment):
-    """Single VSS benchmark permutation."""
+    """Single VSS benchmark permutation.
 
-    def __init__(self, engine_slug: str, model_name: str, dim: int, dataset: str, n: int) -> None:
+    For HNSW engines (muninn-hnsw, vectorlite-hnsw), accepts tunable parameters
+    (m, ef_construction, ef_search). Non-HNSW engines ignore these parameters.
+    """
+
+    def __init__(
+        self,
+        engine_slug: str,
+        model_name: str,
+        dim: int,
+        dataset: str,
+        n: int,
+        hnsw_m: int = HNSW_M,
+        hnsw_ef_construction: int = HNSW_EF_CONSTRUCTION,
+        hnsw_ef_search: int = HNSW_EF_SEARCH,
+    ) -> None:
         self._engine_slug = engine_slug
         self._engine_config = ENGINE_CONFIGS[engine_slug]
         self._model_name = model_name
         self._dim = dim
         self._dataset = dataset
         self._n = n
+        self._hnsw_m = hnsw_m
+        self._hnsw_ef_construction = hnsw_ef_construction
+        self._hnsw_ef_search = hnsw_ef_search
         # Pool-based state (set during setup)
         self._doc_vectors: np.ndarray | None = None
         self._query_vectors: np.ndarray | None = None
@@ -125,20 +142,39 @@ class VSSTreatment(Treatment):
         return "vss"
 
     @property
+    def _is_hnsw_engine(self) -> bool:
+        return self._engine_config["method"] == "hnsw"
+
+    @property
+    def _has_non_default_hnsw(self) -> bool:
+        """True if HNSW params differ from defaults (affects permutation_id)."""
+        return self._is_hnsw_engine and (
+            self._hnsw_m != HNSW_M
+            or self._hnsw_ef_construction != HNSW_EF_CONSTRUCTION
+            or self._hnsw_ef_search != HNSW_EF_SEARCH
+        )
+
+    @property
     def permutation_id(self) -> str:
         ds = self._dataset.replace("_", "-")
-        return f"vss_{self._engine_slug}_{self._model_name}_{ds}_n{self._n}"
+        base = f"vss_{self._engine_slug}_{self._model_name}_{ds}_n{self._n}"
+        if self._has_non_default_hnsw:
+            base += f"_m{self._hnsw_m}_efc{self._hnsw_ef_construction}_efs{self._hnsw_ef_search}"
+        return base
 
     @property
     def label(self) -> str:
-        return f"VSS: {self._engine_slug} / {self._model_name} / {self._dataset} / N={self._n}"
+        base = f"VSS: {self._engine_slug} / {self._model_name} / {self._dataset} / N={self._n}"
+        if self._has_non_default_hnsw:
+            base += f" / M={self._hnsw_m} ef_c={self._hnsw_ef_construction} ef_s={self._hnsw_ef_search}"
+        return base
 
     @property
     def sort_key(self) -> tuple[Any, ...]:
-        return (self._n, self._dim, self._model_name, self._engine_slug)
+        return (self._n, self._dim, self._hnsw_m, self._model_name, self._engine_slug)
 
     def params_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "engine": self._engine_config["engine"],
             "search_method": self._engine_config["method"],
             "model_name": self._model_name,
@@ -149,6 +185,11 @@ class VSSTreatment(Treatment):
             "n_queries": self._n_queries,
             "seed": self._seed,
         }
+        if self._is_hnsw_engine:
+            d["hnsw_m"] = self._hnsw_m
+            d["hnsw_ef_construction"] = self._hnsw_ef_construction
+            d["hnsw_ef_search"] = self._hnsw_ef_search
+        return d
 
     def setup(self, conn: sqlite3.Connection, db_path: Path) -> dict[str, Any]:
         """Load embedding pools, sample docs + queries, compute ground truth."""
@@ -248,15 +289,15 @@ class VSSTreatment(Treatment):
         insert_time = self._insert_doc_vectors(
             conn,
             f"CREATE VIRTUAL TABLE bench_vec USING hnsw_index("
-            f"dimensions={dim}, metric='l2', m={HNSW_M}, "
-            f"ef_construction={HNSW_EF_CONSTRUCTION})",
+            f"dimensions={dim}, metric='l2', m={self._hnsw_m}, "
+            f"ef_construction={self._hnsw_ef_construction})",
             "INSERT INTO bench_vec (rowid, vector) VALUES (?, ?)",
         )
 
         results, search_time = self._search_queries(
             conn,
             "SELECT rowid, distance FROM bench_vec WHERE vector MATCH ? AND k = ? AND ef_search = ?",
-            extra_params=(K, HNSW_EF_SEARCH),
+            extra_params=(K, self._hnsw_ef_search),
         )
 
         conn.commit()
@@ -266,7 +307,11 @@ class VSSTreatment(Treatment):
             "insert_rate_vps": round(self._actual_n / insert_time, 1) if insert_time > 0 else 0,
             "search_latency_ms": round((search_time / self._n_queries) * 1000, 3),
             "recall_at_k": round(recall, 4),
-            "engine_params": {"m": HNSW_M, "ef_construction": HNSW_EF_CONSTRUCTION, "ef_search": HNSW_EF_SEARCH},
+            "engine_params": {
+                "m": self._hnsw_m,
+                "ef_construction": self._hnsw_ef_construction,
+                "ef_search": self._hnsw_ef_search,
+            },
         }
 
     def _run_sqlite_vector_quantize(self, conn: sqlite3.Connection) -> dict[str, Any]:
@@ -359,7 +404,7 @@ class VSSTreatment(Treatment):
         cursor.execute(
             f"CREATE VIRTUAL TABLE bench_vl USING vectorlite("
             f"embedding float32[{dim}] l2, "
-            f"hnsw(max_elements={n}, ef_construction={HNSW_EF_CONSTRUCTION}, M={HNSW_M}))"
+            f"hnsw(max_elements={n}, ef_construction={self._hnsw_ef_construction}, M={self._hnsw_m}))"
         )
 
         t0 = time.perf_counter()
@@ -376,7 +421,7 @@ class VSSTreatment(Treatment):
             rows = list(
                 cursor.execute(
                     "SELECT rowid, distance FROM bench_vl WHERE knn_search(embedding, knn_param(?, ?, ?))",
-                    (pack_vector(self._query_vectors[q]), K, HNSW_EF_SEARCH),
+                    (pack_vector(self._query_vectors[q]), K, self._hnsw_ef_search),
                 )
             )
             results.append({r[0] for r in rows})
@@ -390,7 +435,11 @@ class VSSTreatment(Treatment):
             "insert_rate_vps": round(n / insert_time, 1) if insert_time > 0 else 0,
             "search_latency_ms": round((search_time / self._n_queries) * 1000, 3),
             "recall_at_k": round(recall, 4),
-            "engine_params": {"m": HNSW_M, "ef_construction": HNSW_EF_CONSTRUCTION, "ef_search": HNSW_EF_SEARCH},
+            "engine_params": {
+                "m": self._hnsw_m,
+                "ef_construction": self._hnsw_ef_construction,
+                "ef_search": self._hnsw_ef_search,
+            },
         }
 
     def _run_sqlite_vec(self, conn: sqlite3.Connection) -> dict[str, Any]:

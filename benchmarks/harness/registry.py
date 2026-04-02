@@ -24,6 +24,9 @@ from benchmarks.harness.common import (
     GRAPH_TVF_ENGINES,
     GRAPH_VT_APPROACHES,
     GRAPH_VT_WORKLOADS,
+    HNSW_EF_CONSTRUCTION_VALUES,
+    HNSW_EF_SEARCH_VALUES,
+    HNSW_M_VALUES,
     KG_GRAPHRAG_BOOK_IDS,
     KG_GRAPHRAG_ENTRIES,
     KG_GRAPHRAG_EXPANSIONS,
@@ -48,18 +51,35 @@ log = logging.getLogger(__name__)
 
 
 def _vss_permutations():
-    """Generate all VSS treatment permutations."""
-    from benchmarks.harness.treatments.vss import VSSTreatment
+    """Generate all VSS treatment permutations.
+
+    Non-HNSW engines get one permutation per (model, dataset, N) with default params.
+    HNSW engines (muninn-hnsw, vectorlite-hnsw) get a full sweep of
+    M x ef_construction x ef_search per (model, dataset, N).
+    """
+    from benchmarks.harness.treatments.vss import ENGINE_CONFIGS, VSSTreatment
 
     perms = []
     all_engine_slugs = [e["slug"] for e in VSS_ENGINES]
+    hnsw_engines = {slug for slug, cfg in ENGINE_CONFIGS.items() if cfg["method"] == "hnsw"}
 
     for model_name, model_info in EMBEDDING_MODELS.items():
         dim = model_info["dim"]
         for dataset in DATASETS:
             for n in VSS_SIZES:
                 for engine_slug in all_engine_slugs:
-                    perms.append(VSSTreatment(engine_slug, model_name, dim, dataset, n))
+                    if engine_slug in hnsw_engines:
+                        # HNSW engines: sweep M, ef_construction, ef_search
+                        for m in HNSW_M_VALUES:
+                            for efc in HNSW_EF_CONSTRUCTION_VALUES:
+                                for efs in HNSW_EF_SEARCH_VALUES:
+                                    perms.append(VSSTreatment(
+                                        engine_slug, model_name, dim, dataset, n,
+                                        hnsw_m=m, hnsw_ef_construction=efc, hnsw_ef_search=efs,
+                                    ))
+                    else:
+                        # Non-HNSW engines: single permutation with defaults
+                        perms.append(VSSTreatment(engine_slug, model_name, dim, dataset, n))
 
     return perms
 

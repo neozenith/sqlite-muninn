@@ -45,6 +45,13 @@ HNSW_M = 16
 HNSW_EF_CONSTRUCTION = 200
 HNSW_EF_SEARCH = 64
 
+# HNSW parameter sweep axes for VSS benchmarks.
+# Only applied to HNSW engines (muninn-hnsw, vectorlite-hnsw).
+# Non-HNSW engines ignore these and get a single (default, default, default) entry.
+HNSW_M_VALUES: list[int] = [8, 16, 32, 64]
+HNSW_EF_CONSTRUCTION_VALUES: list[int] = [100, 200]
+HNSW_EF_SEARCH_VALUES: list[int] = [10, 50, 100, 200, 400]
+
 # Memory budget per-dimension max N (safe for 8GB total)
 MAX_N_BY_DIM: dict[int, int] = {
     32: 500_000,
