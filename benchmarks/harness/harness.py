@@ -185,10 +185,10 @@ def run_treatment(treatment: Treatment, results_dir: Path | None = None, force: 
 
     write_jsonl(jsonl_path, record)
 
-    # Upload results to S3 if configured
+    # Upload JSONL results to S3 if configured. SQLite DB is not uploaded —
+    # it is only a local scratch workspace during the benchmark run.
     mirror = get_s3_mirror()
     mirror.sync_to_s3(jsonl_path)
-    mirror.sync_to_s3(db_path)
 
     log.info("  Setup: %.1f ms, Run: %.1f ms, DB: %d bytes", wall_time_setup_ms, wall_time_run_ms, db_size_bytes)
     log.info("  Results: %s", jsonl_path)

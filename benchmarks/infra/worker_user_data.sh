@@ -246,6 +246,10 @@ while true; do
         benchmark --id "$BENCH_ID" --force; then
         echo "  SUCCESS: $BENCH_ID"
         CONSECUTIVE_FAILURES=0
+        # Remove local SQLite DB after successful S3 upload to reclaim disk space.
+        # The db.sqlite lives in results/{permutation_id}/ and can be many MB (HNSW
+        # shadow tables). The flat JSONL result at results/{category}.jsonl is kept.
+        rm -rf "${WORK_DIR}/benchmarks/results/${BENCH_ID}/" 2>/dev/null || true
     else
         EXIT_CODE=$?
         echo "  FAILED: $BENCH_ID (exit code $EXIT_CODE)"
