@@ -124,6 +124,32 @@ if ! command -v uv &>/dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 
+# CloudWatch agent config — streams /var/log/muninn/benchmark.log
+if [ -f /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl ]; then
+    CW_CONFIG="/opt/aws/amazon-cloudwatch-agent/etc/muninn-config.json"
+    cat > "$CW_CONFIG" << CWEOF
+{
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/muninn/benchmark.log",
+            "log_group_name": "/muninn/benchmarks",
+            "log_stream_name": "${INSTANCE_ID}",
+            "retention_in_days": 7
+          }
+        ]
+      }
+    }
+  }
+}
+CWEOF
+    /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+        -a fetch-config -m ec2 -s -c "file:${CW_CONFIG}" 2>/dev/null || true
+    echo "  CloudWatch agent -> /muninn/benchmarks/${INSTANCE_ID}"
+fi
+
 log_phase "01_deps" "$PHASE_START"
 
 # ── Phase 2: Source ───────────────────────────────────────────────
