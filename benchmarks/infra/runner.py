@@ -355,6 +355,15 @@ def cmd_prime(args: argparse.Namespace) -> None:
     prime_cfg.setdefault("benchmark", {})["limit"] = "0"
     user_data = _render_user_data(prime_cfg)
 
+    # Upload a no-op worker script so the systemd service on the AMI
+    # doesn't start pulling from SQS during the prime boot
+    s3.put_object(
+        Bucket=aws_cfg["s3_bucket"],
+        Key="scripts/worker.sh",
+        Body=b"#!/bin/bash\necho 'Prime mode - worker script is a no-op'\nexit 0\n",
+    )
+    log.info("Uploaded no-op worker script (prevents SQS polling during prime)")
+
     log.info("Priming AMI for branch '%s' (commit %s)...", branch, commit_hash)
     log.info("Launching on-demand %s (cold start, no benchmarks)...", aws_cfg["instance_type"])
 
