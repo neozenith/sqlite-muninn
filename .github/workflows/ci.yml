@@ -40,15 +40,13 @@ jobs:
           make lint-c
 
       - name: Lint Python (ruff)
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
+        run: make lint-python
 
       - name: Lint TypeScript (biome)
         run: make lint-js
 
       - name: Type-check Python (mypy)
-        run: uv run mypy sqlite_muninn/
+        run: make typecheck-python
 
       - name: Type-check TypeScript (tsc)
         run: make typecheck-js
@@ -101,16 +99,17 @@ jobs:
           key: gguf-models-${{ hashFiles('pytests/test_embed_gguf.py') }}
 
       - name: Python integration tests
-        run: uv run pytest pytests/ -v
+        run: make test-python
 
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
+      - name: Install Node.js dependencies
+        run: npm --prefix npm ci
+
       - name: TypeScript tests
-        run: |
-          npm --prefix npm ci
-          npm --prefix npm test
+        run: make test-js
 
       - uses: actions/upload-artifact@v7
         with:
@@ -165,16 +164,17 @@ jobs:
           key: gguf-models-${{ hashFiles('pytests/test_embed_gguf.py') }}
 
       - name: Python integration tests
-        run: uv run pytest pytests/ -v
+        run: make test-python
 
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
+      - name: Install Node.js dependencies
+        run: npm --prefix npm ci
+
       - name: TypeScript tests
-        run: |
-          npm --prefix npm ci
-          npm --prefix npm test
+        run: make test-js
 
       - uses: actions/upload-artifact@v7
         with:
@@ -268,17 +268,18 @@ jobs:
         run: uv run scripts/verify_sqlite3_ext.py
 
       - name: Python integration tests
-        run: uv run pytest pytests/ -v
+        run: make test-python
 
       # ── Node.js tests ────────────────────────────────────
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
+      - name: Install Node.js dependencies
+        run: npm --prefix npm ci
+
       - name: TypeScript tests
-        run: |
-          npm --prefix npm ci
-          npm --prefix npm test
+        run: make test-js
 
       - uses: actions/upload-artifact@v7
         with:
@@ -441,10 +442,11 @@ jobs:
           npm --prefix npm ci
           npm --prefix npm run build
 
+      - name: Sync Python environment
+        run: uv sync --group dev
+
       - name: Run install integration tests
-        run: |
-          uv sync --group dev
-          uv run pytest pytests/test_install.py -v -m integration --override-ini="addopts="
+        run: make test-install
 
   # ── WASM Build ───────────────────────────────────────────
   wasm:

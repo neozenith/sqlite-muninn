@@ -219,7 +219,7 @@ build/test_runner: $(TEST_SRC) $(TEST_LINK_SRC) $(VENDOR_SRC) $(LLAMA_LIBS)
 		$(TEST_SRC) $(TEST_LINK_SRC) $(VENDOR_SRC) $(LLAMA_LIBS) $(LDFLAGS_TEST)
 
 test-python: build/muninn$(EXT)                ## Run Python integration tests + coverage
-	.venv/bin/python -m pytest pytests/ -v
+	uv run -m pytest pytests/ -v
 
 test-js:                                       ## Run TypeScript tests + coverage
 	npm --prefix npm test
@@ -241,9 +241,9 @@ init-python: .venv/.init-python                       ## Set up Python virtual e
 	CMAKE_ARGS="-DGGML_NATIVE=OFF -DGGML_METAL=ON" uv sync --all-groups
 	@touch $@
 
-format-python: .venv/.init-python                       ## Format Python code with ruff
-	.venv/bin/ruff check --fix-only .
-	.venv/bin/ruff format .
+format-python:                                 ## Format Python code with ruff
+	uv run ruff check --fix-only .
+	uv run ruff format .
 
 format-js:                                     ## Format TypeScript code with biome
 	npm --prefix npm run format
@@ -258,17 +258,17 @@ lint-c:                                        ## Lint C code with clang-format 
 		echo "clang-format not installed — skipping C lint"; \
 	fi
 
-lint-python: .venv/.init-python                       ## Lint Python code with ruff
-	.venv/bin/ruff check .
-	.venv/bin/ruff format --check .
+lint-python:                                   ## Lint Python code with ruff
+	uv run ruff check .
+	uv run ruff format --check .
 
 lint-js:                                       ## Lint TypeScript code with biome
 	npm --prefix npm run lint
 
 typecheck: typecheck-python typecheck-js format       ## Type-check all code
 
-typecheck-python: .venv/.init-python                       ## Type-check Python with mypy
-	.venv/bin/mypy sqlite_muninn/
+typecheck-python:                              ## Type-check Python with mypy
+	uv run mypy sqlite_muninn/
 
 typecheck-js:                                  ## Type-check TypeScript with tsc
 	npm --prefix npm run typecheck
@@ -363,7 +363,7 @@ uninstall:                                     ## Remove installed files
 	rm -f $(DESTDIR)$(PREFIX)/include/muninn.h
 
 test-install: build/muninn$(EXT)               ## Run install integration tests (pip + npm)
-	.venv/bin/python -m pytest pytests/test_install.py -v -m integration --no-cov
+	uv run pytest pytests/test_install.py -v -m integration --override-ini="addopts="
 
 ######################################################################
 # DOCUMENTATION
