@@ -978,7 +978,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     ]
     if category:
         manifest_cmd.extend(["--category", category])
-    if limit:
+    if limit is not None:
         manifest_cmd.extend(["--limit", str(limit)])
 
     log.info("Querying manifest for missing benchmarks (category=%s, limit=%s)...", category or "all", limit or "all")
@@ -1121,7 +1121,7 @@ def cmd_submit(args: argparse.Namespace) -> None:
     ]
     if category:
         manifest_cmd.extend(["--category", category])
-    if limit:
+    if limit is not None:
         manifest_cmd.extend(["--limit", str(limit)])
 
     log.info("Querying manifest for missing benchmarks (category=%s, limit=%s)...", category or "all", limit or "all")
