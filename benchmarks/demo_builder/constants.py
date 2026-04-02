@@ -22,6 +22,8 @@ EMBEDDING_MODELS: dict[str, dict[str, Any]] = {
         "dim": 384,
         "max_tokens": 256,
         "chunk_chars": 768,
+        "gguf_name": "minilm",
+        "gguf_file": "all-MiniLM-L6-v2.Q8_0.gguf",
     },
     "NomicEmbed": {
         "st_name": "nomic-ai/nomic-embed-text-v1.5",
@@ -29,8 +31,13 @@ EMBEDDING_MODELS: dict[str, dict[str, Any]] = {
         "max_tokens": 8192,
         "chunk_chars": 4096,
         "trust_remote_code": True,
+        "gguf_name": "nomic",
+        "gguf_file": "nomic-embed-text-v1.5.Q8_0.gguf",
     },
 }
+
+# Resolved GGUF model paths (derived from GGUF_MODELS_DIR + gguf_file).
+GGUF_MODELS_DIR = PROJECT_ROOT / "models"
 
 # ── NER/RE model limits ─────────────────────────────────────────
 # GLiNER truncates at 384 word-level tokens (\w+(?:-\w+)*|\S regex —
@@ -144,7 +151,7 @@ PHASE_NAMES = [
     "chunks_umap",  # UMAP on chunks_vec_nodes (independent of ner path)
     "ner",  # GLiNER entity extraction (parallel with chunks_embeddings)
     "relations",  # GLiREL relation extraction
-    "entity_embeddings",  # SentenceTransformer → entities_vec HNSW
+    "entity_embeddings",  # muninn_embed GGUF → entities_vec HNSW
     "entities_umap",  # UMAP on entities_vec_nodes
     "entity_resolution",  # HNSW blocking + Jaro-Winkler + Leiden
     "node2vec",  # Node2Vec structural embeddings
