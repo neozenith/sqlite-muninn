@@ -78,6 +78,7 @@ benchmark = [
     "llama-cpp-python>=0.3.16",
     "gliner2>=1.2.4",
     "dash>=4.1.0",
+    "sqlite-lembed",
 ]
 docs = [
     "mkdocs>=1.6.0",
