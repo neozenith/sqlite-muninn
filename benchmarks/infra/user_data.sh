@@ -278,7 +278,7 @@ Type=oneshot
 ExecStart=/usr/local/bin/muninn-worker-bootstrap.sh
 StandardOutput=journal+console
 StandardError=journal+console
-TimeoutStartSec=7200
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=multi-user.target

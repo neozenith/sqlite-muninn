@@ -147,6 +147,17 @@ def _get_asg_instances(cfg: dict, outputs: dict) -> list[dict]:
                 except ClientError:
                     pass
 
+            # Compute uptime and accumulated cost
+            launch_dt = inst["LaunchTime"]
+            uptime_s = (datetime.now(timezone.utc) - launch_dt.replace(tzinfo=timezone.utc if launch_dt.tzinfo is None else launch_dt.tzinfo)).total_seconds()
+            uptime_hrs = uptime_s / 3600
+
+            price_per_hr = 0.0
+            if lifecycle == "spot" and spot_price != "n/a":
+                price_per_hr = float(spot_price.replace("$", "").replace("/hr", ""))
+
+            accumulated_cost = price_per_hr * uptime_hrs
+
             instances.append({
                 "instance_id": inst["InstanceId"],
                 "state": inst["State"]["Name"],
@@ -156,6 +167,9 @@ def _get_asg_instances(cfg: dict, outputs: dict) -> list[dict]:
                 "ip": inst.get("PublicIpAddress", "n/a"),
                 "lifecycle": lifecycle,
                 "spot_price": spot_price,
+                "uptime_hrs": round(uptime_hrs, 2),
+                "accumulated_cost": round(accumulated_cost, 4),
+                "price_per_hr": price_per_hr,
             })
 
     return instances
@@ -198,7 +212,7 @@ def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> 
     else:
         period = 3600
 
-    result = {"timestamps": [], "visible": [], "inflight": [], "dlq": [], "workers": []}
+    result = {"timestamps": [], "visible": [], "inflight": [], "dlq": [], "in_service": [], "desired": []}
     if not queue_name:
         return result
 
@@ -209,7 +223,8 @@ def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> 
     if dlq_name:
         queries.append({"Id": "dlq", "MetricStat": {"Metric": {"Namespace": "AWS/SQS", "MetricName": "ApproximateNumberOfMessagesVisible", "Dimensions": [{"Name": "QueueName", "Value": dlq_name}]}, "Period": period, "Stat": "Maximum"}})
     if asg_name:
-        queries.append({"Id": "workers", "MetricStat": {"Metric": {"Namespace": "AWS/AutoScaling", "MetricName": "GroupInServiceInstances", "Dimensions": [{"Name": "AutoScalingGroupName", "Value": asg_name}]}, "Period": period, "Stat": "Maximum"}})
+        queries.append({"Id": "in_service", "MetricStat": {"Metric": {"Namespace": "AWS/AutoScaling", "MetricName": "GroupInServiceInstances", "Dimensions": [{"Name": "AutoScalingGroupName", "Value": asg_name}]}, "Period": period, "Stat": "Maximum"}})
+        queries.append({"Id": "desired", "MetricStat": {"Metric": {"Namespace": "AWS/AutoScaling", "MetricName": "GroupDesiredCapacity", "Dimensions": [{"Name": "AutoScalingGroupName", "Value": asg_name}]}, "Period": period, "Stat": "Maximum"}})
 
     try:
         resp = cw.get_metric_data(MetricDataQueries=queries, StartTime=start, EndTime=now)
@@ -222,7 +237,7 @@ def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> 
         mid = metric_result["Id"]
         for ts_val, val in zip(metric_result.get("Timestamps", []), metric_result.get("Values", [])):
             ts_str = ts_val.strftime(ts_fmt)
-            series.setdefault(ts_str, {"visible": 0, "inflight": 0, "dlq": 0, "workers": 0, "_sort": ts_val})
+            series.setdefault(ts_str, {"visible": 0, "inflight": 0, "dlq": 0, "in_service": 0, "desired": 0, "_sort": ts_val})
             series[ts_str][mid] = int(val)
 
     for ts_str in sorted(series.keys(), key=lambda k: series[k].get("_sort", k)):
@@ -230,7 +245,8 @@ def _get_cloudwatch_timeseries(cfg: dict, outputs: dict, hours: float = 1.0) -> 
         result["visible"].append(series[ts_str]["visible"])
         result["inflight"].append(series[ts_str]["inflight"])
         result["dlq"].append(series[ts_str]["dlq"])
-        result["workers"].append(series[ts_str]["workers"])
+        result["in_service"].append(series[ts_str]["in_service"])
+        result["desired"].append(series[ts_str]["desired"])
 
     return result
 
@@ -458,9 +474,10 @@ def create_app() -> dash.Dash:
                 "Instance": iid,
                 "State": inst["state"],
                 "Type": inst["type"],
-                "AZ": inst["az"],
                 "Lifecycle": inst["lifecycle"],
-                "Spot Price": inst["spot_price"],
+                "Spot $/hr": inst["spot_price"],
+                "Uptime": f"{inst['uptime_hrs']:.1f}h",
+                "Cost": f"${inst['accumulated_cost']:.3f}",
                 "Phase": phase,
                 "Heartbeat": f"{hb_status} ({age_str})",
             })
@@ -485,14 +502,30 @@ def create_app() -> dash.Dash:
         fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["visible"], name="Queue Visible", mode="lines", line={"color": ACCENT_RED, "width": 2}, fill="tozeroy", fillcolor="rgba(248,113,113,0.1)"))
         fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["inflight"], name="In Flight", mode="lines", line={"color": ACCENT_VIOLET, "width": 2}))
         fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["dlq"], name="Dead Letter", mode="lines", line={"color": ACCENT_AMBER, "width": 2, "dash": "dot"}))
-        fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["workers"], name="ASG Workers", mode="lines", line={"color": ACCENT_GREEN, "width": 3}, yaxis="y2"))
+        fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["in_service"], name="In Service", mode="lines", line={"color": ACCENT_GREEN, "width": 3}, yaxis="y2"))
+        fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["desired"], name="Desired", mode="lines", line={"color": ACCENT_GREEN, "width": 1, "dash": "dash"}, yaxis="y2"))
+
+        # Cumulative spot cost estimate: sum of (in_service * avg_spot_price * period_hours)
+        avg_spot_price = sum(i["price_per_hr"] for i in instances if i["price_per_hr"] > 0)
+        if avg_spot_price == 0:
+            avg_spot_price = 0.084  # fallback: t3.xlarge spot in ap-southeast-2
+        period_hours = (1 if time_range_hours <= 3 else 5 if time_range_hours <= 24 else 60) / 60
+        cumulative_cost = []
+        running_total = 0.0
+        for in_svc in cw_data["in_service"]:
+            running_total += in_svc * avg_spot_price * period_hours
+            cumulative_cost.append(round(running_total, 4))
+        if cumulative_cost:
+            fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cumulative_cost, name="Cumulative $", mode="lines", line={"color": ACCENT_CYAN, "width": 2}, yaxis="y3"))
+
         fig.update_layout(
             template="plotly_dark", paper_bgcolor=BG_PAGE, plot_bgcolor=BG_CARD, font={"color": TEXT_PRIMARY},
-            margin={"l": 50, "r": 50, "t": 30, "b": 40},
-            legend={"orientation": "h", "y": 1.12, "font": {"color": TEXT_SECONDARY}},
+            margin={"l": 50, "r": 80, "t": 30, "b": 40},
+            legend={"orientation": "h", "y": 1.15, "font": {"color": TEXT_SECONDARY}},
             xaxis={"title": None, "gridcolor": BORDER, "tickfont": {"color": TEXT_MUTED}},
             yaxis={"title": "Messages", "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": TEXT_MUTED}},
             yaxis2={"title": "Workers", "overlaying": "y", "side": "right", "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": TEXT_MUTED}},
+            yaxis3={"title": "Cost ($)", "overlaying": "y", "side": "right", "anchor": "free", "position": 0.97, "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": ACCENT_CYAN}, "showgrid": False},
         )
 
         # ── Scaling events table ──────────────────────────
