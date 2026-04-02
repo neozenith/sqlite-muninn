@@ -182,6 +182,7 @@ class BenchStack(cdk.Stack):
             ),
             cooldown=Duration.minutes(5),
             new_instances_protected_from_scale_in=False,
+            group_metrics=[autoscaling.GroupMetrics.all()],
         )
 
         # ── Scaling: backlog-per-instance (AWS recommended for SQS) ─
