@@ -118,18 +118,19 @@ if ! command -v cmake &>/dev/null; then
     # SSM agent
     snap install amazon-ssm-agent --classic 2>/dev/null || true
     systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
-    systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
-
-    # CloudWatch agent
-    if [ ! -f /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl ]; then
-        curl -sf -o /tmp/cw-agent.deb \
-            "https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb"
-        dpkg -i /tmp/cw-agent.deb
-        rm -f /tmp/cw-agent.deb
-    fi
 else
     echo "  Build tools already installed (warm restart)"
-    systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
+fi
+
+# SSM agent (ensure running on every boot)
+systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
+
+# CloudWatch agent (install if missing — outside cmake check so it runs on warm AMI too)
+if [ ! -f /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl ]; then
+    curl -sf -o /tmp/cw-agent.deb \
+        "https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb"
+    dpkg -i /tmp/cw-agent.deb
+    rm -f /tmp/cw-agent.deb
 fi
 
 # ccache (EBS-persistent)
