@@ -104,8 +104,55 @@ def _get_queue_stats(cfg: dict, outputs: dict) -> dict:
     return result
 
 
+# Cache on-demand prices per instance type to avoid repeated API calls
+_ondemand_price_cache: dict[str, float] = {}
+
+
+def _get_ondemand_price(instance_type: str, region: str) -> float:
+    """Look up on-demand price for an instance type via the EC2 pricing API."""
+    cache_key = f"{instance_type}:{region}"
+    if cache_key in _ondemand_price_cache:
+        return _ondemand_price_cache[cache_key]
+
+    # Map EC2 region codes to pricing API location names
+    region_names = {
+        "us-east-1": "US East (N. Virginia)",
+        "us-west-2": "US West (Oregon)",
+        "ap-southeast-2": "Asia Pacific (Sydney)",
+        "eu-west-1": "EU (Ireland)",
+    }
+    location = region_names.get(region, region)
+
+    try:
+        pricing = boto3.client("pricing", region_name="us-east-1")
+        resp = pricing.get_products(
+            ServiceCode="AmazonEC2",
+            Filters=[
+                {"Type": "TERM_MATCH", "Field": "instanceType", "Value": instance_type},
+                {"Type": "TERM_MATCH", "Field": "location", "Value": location},
+                {"Type": "TERM_MATCH", "Field": "operatingSystem", "Value": "Linux"},
+                {"Type": "TERM_MATCH", "Field": "tenancy", "Value": "Shared"},
+                {"Type": "TERM_MATCH", "Field": "preInstalledSw", "Value": "NA"},
+                {"Type": "TERM_MATCH", "Field": "capacitystatus", "Value": "Used"},
+            ],
+            MaxResults=1,
+        )
+        for price_item in resp.get("PriceList", []):
+            product = json.loads(price_item)
+            for term in product.get("terms", {}).get("OnDemand", {}).values():
+                for dim in term.get("priceDimensions", {}).values():
+                    price = float(dim["pricePerUnit"]["USD"])
+                    _ondemand_price_cache[cache_key] = price
+                    return price
+    except (ClientError, Exception):
+        pass
+
+    _ondemand_price_cache[cache_key] = 0.0
+    return 0.0
+
+
 def _get_asg_instances(cfg: dict, outputs: dict) -> list[dict]:
-    """Get ASG instance details including spot pricing."""
+    """Get ASG instance details including spot and on-demand pricing."""
     asg_name = outputs.get("AsgName")
     if not asg_name:
         return []
@@ -156,6 +203,9 @@ def _get_asg_instances(cfg: dict, outputs: dict) -> list[dict]:
             if lifecycle == "spot" and spot_price != "n/a":
                 price_per_hr = float(spot_price.replace("$", "").replace("/hr", ""))
 
+            ondemand_price = _get_ondemand_price(itype, ec2_region)
+            savings_pct = round((1 - price_per_hr / ondemand_price) * 100) if ondemand_price > 0 and price_per_hr > 0 else 0
+
             accumulated_cost = price_per_hr * uptime_hrs
 
             instances.append({
@@ -167,6 +217,8 @@ def _get_asg_instances(cfg: dict, outputs: dict) -> list[dict]:
                 "ip": inst.get("PublicIpAddress", "n/a"),
                 "lifecycle": lifecycle,
                 "spot_price": spot_price,
+                "ondemand_price": f"${ondemand_price:.3f}/hr" if ondemand_price > 0 else "n/a",
+                "savings_pct": f"{savings_pct}%" if savings_pct > 0 else "n/a",
                 "uptime_hrs": round(uptime_hrs, 2),
                 "accumulated_cost": round(accumulated_cost, 4),
                 "price_per_hr": price_per_hr,
@@ -476,6 +528,8 @@ def create_app() -> dash.Dash:
                 "Type": inst["type"],
                 "Lifecycle": inst["lifecycle"],
                 "Spot $/hr": inst["spot_price"],
+                "OnDemand $/hr": inst["ondemand_price"],
+                "Saving": inst["savings_pct"],
                 "Uptime": f"{inst['uptime_hrs']:.1f}h",
                 "Cost": f"${inst['accumulated_cost']:.3f}",
                 "Phase": phase,
