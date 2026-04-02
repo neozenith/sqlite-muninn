@@ -421,6 +421,8 @@ def create_app() -> dash.Dash:
                         inline=True,
                         inputStyle={"marginRight": "4px"},
                         labelStyle={"marginRight": "12px", "cursor": "pointer", "color": TEXT_SECONDARY},
+                        persistence=True,
+                        persistence_type="local",
                     ),
                 ],
             ),
@@ -444,6 +446,8 @@ def create_app() -> dash.Dash:
                         type="text",
                         placeholder="Instance ID (e.g., i-0abc123...)",
                         style={"backgroundColor": BG_CARD, "color": TEXT_PRIMARY, "border": f"1px solid {BORDER}", "padding": "8px", "borderRadius": "4px", "width": "300px"},
+                        persistence=True,
+                        persistence_type="local",
                     ),
                     dcc.RadioItems(
                         id="log-level",
@@ -452,6 +456,8 @@ def create_app() -> dash.Dash:
                         inline=True,
                         inputStyle={"marginRight": "4px"},
                         labelStyle={"marginRight": "12px", "cursor": "pointer", "color": TEXT_SECONDARY},
+                        persistence=True,
+                        persistence_type="local",
                     ),
                     html.Button(
                         "Fetch Logs",
