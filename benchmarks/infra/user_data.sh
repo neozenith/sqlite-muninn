@@ -177,6 +177,43 @@ CMAKE_ARGS="-DGGML_NATIVE=OFF" uv sync --group benchmark --directory "$WORK_DIR"
 
 log_phase "04_python_deps" "$PHASE_START"
 
+# ── Phase 4b: Sync prep data from S3 ─────────────────────────────
+# Vector caches, texts, and GGUF models are large and slow to generate.
+# Sync them from S3 so workers don't need to run 'prep vectors' (hours).
+set_phase "04b_sync_prep"
+PHASE_START=$SECONDS
+
+echo "  Syncing prep data from S3..."
+aws s3 sync "s3://${S3_BUCKET}/prep/benchmarks/vectors/" "${WORK_DIR}/benchmarks/vectors/" \
+    --region "$S3_REGION" --no-cli-pager 2>/dev/null || echo "  WARN: vector sync failed (may not exist in S3)"
+aws s3 sync "s3://${S3_BUCKET}/prep/benchmarks/texts/" "${WORK_DIR}/benchmarks/texts/" \
+    --region "$S3_REGION" --no-cli-pager 2>/dev/null || echo "  WARN: texts sync failed"
+aws s3 sync "s3://${S3_BUCKET}/prep/models/" "${WORK_DIR}/models/" \
+    --region "$S3_REGION" --no-cli-pager 2>/dev/null || echo "  WARN: models sync failed"
+
+# Validate critical prep artifacts exist
+MISSING_PREP=0
+for model in MiniLM NomicEmbed BGE-Large; do
+    for dataset in ag_news wealth_of_nations; do
+        for kind in docs queries; do
+            NPY="${WORK_DIR}/benchmarks/vectors/${model}_${dataset}_${kind}.npy"
+            if [ ! -f "$NPY" ]; then
+                echo "  MISSING: $NPY"
+                MISSING_PREP=$((MISSING_PREP + 1))
+            fi
+        done
+    done
+done
+
+if [ "$MISSING_PREP" -gt 0 ]; then
+    echo "  WARNING: $MISSING_PREP prep file(s) missing. Some benchmarks will fail."
+    echo "  Run 'prep vectors' locally and sync to S3, or add to the prime step."
+else
+    echo "  All vector caches present ($((3 * 2 * 2)) files)"
+fi
+
+log_phase "04b_sync_prep" "$PHASE_START"
+
 # ── Phase 5: Pick and run benchmarks ─────────────────────────────
 set_phase "05_benchmarks"
 PHASE_START=$SECONDS

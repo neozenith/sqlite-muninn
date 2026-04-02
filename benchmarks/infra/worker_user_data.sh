@@ -166,11 +166,32 @@ CMAKE_ARGS="-DGGML_NATIVE=OFF" uv sync --group benchmark --directory "$WORK_DIR"
 
 log_phase "04_python_deps" "$PHASE_START"
 
+# ── Phase 4b: Sync prep data from S3 (vectors, texts, models) ────
+set_phase "04b_sync_prep"
+PHASE_START=$SECONDS
+
+echo "  Syncing prep data from S3..."
+aws s3 sync "s3://${S3_BUCKET}/prep/benchmarks/vectors/" "${WORK_DIR}/benchmarks/vectors/" \
+    --region "$S3_REGION" --no-cli-pager 2>/dev/null || echo "  WARN: vector sync failed"
+aws s3 sync "s3://${S3_BUCKET}/prep/benchmarks/texts/" "${WORK_DIR}/benchmarks/texts/" \
+    --region "$S3_REGION" --no-cli-pager 2>/dev/null || echo "  WARN: texts sync failed"
+aws s3 sync "s3://${S3_BUCKET}/prep/models/" "${WORK_DIR}/models/" \
+    --region "$S3_REGION" --no-cli-pager 2>/dev/null || echo "  WARN: models sync failed"
+
+# Count available vector caches
+VECTOR_COUNT=$(ls "${WORK_DIR}/benchmarks/vectors/"*.npy 2>/dev/null | wc -l | tr -d ' ')
+echo "  Vector caches available: ${VECTOR_COUNT}"
+
+log_phase "04b_sync_prep" "$PHASE_START"
+
 # ── Phase 5: Poll SQS and run benchmarks ─────────────────────────
 set_phase "05_sqs_poll"
 PHASE_START=$SECONDS
 
 BENCHMARKS_RUN=0
+BENCHMARKS_FAILED=0
+CONSECUTIVE_FAILURES=0
+MAX_CONSECUTIVE_FAILURES=3
 
 while true; do
     # Long-poll SQS (up to 20s wait)
@@ -198,8 +219,12 @@ while true; do
         -m benchmarks.harness --s3-bucket "$S3_BUCKET" \
         benchmark --id "$BENCH_ID" --force; then
         echo "  SUCCESS: $BENCH_ID"
+        CONSECUTIVE_FAILURES=0
     else
-        echo "  FAILED: $BENCH_ID (exit code $?)"
+        EXIT_CODE=$?
+        echo "  FAILED: $BENCH_ID (exit code $EXIT_CODE)"
+        BENCHMARKS_FAILED=$((BENCHMARKS_FAILED + 1))
+        CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
     fi
 
     BENCH_ELAPSED=$(( SECONDS - BENCH_START ))
@@ -213,9 +238,18 @@ while true; do
         --receipt-handle "$RECEIPT" \
         --region "$INSTANCE_REGION" \
         --no-cli-pager 2>/dev/null || true
+
+    # Circuit breaker: stop if too many consecutive failures
+    # Prevents burning through the entire queue when there's a systemic issue
+    # (e.g., missing prep data, broken extension, import errors)
+    if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
+        echo "  CIRCUIT BREAKER: $CONSECUTIVE_FAILURES consecutive failures. Stopping."
+        echo "  Total: $BENCHMARKS_RUN run, $BENCHMARKS_FAILED failed"
+        break
+    fi
 done
 
-log_phase "05_benchmarks_total (${BENCHMARKS_RUN} run)" "$PHASE_START"
+log_phase "05_benchmarks_total (${BENCHMARKS_RUN} run, ${BENCHMARKS_FAILED} failed)" "$PHASE_START"
 
 # ── Summary ───────────────────────────────────────────────────────
 TOTAL_ELAPSED=$(( SECONDS - TOTAL_START ))
