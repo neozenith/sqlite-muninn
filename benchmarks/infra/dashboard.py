@@ -540,20 +540,19 @@ def create_app() -> dash.Dash:
             # ── CloudWatch Logs Viewer ────────────────────────
             html.H3("CloudWatch Logs", style={"color": ACCENT_CYAN, "marginTop": "30px", "marginBottom": "10px"}),
             html.Div(
-                style={"display": "flex", "gap": "15px", "alignItems": "center", "marginBottom": "10px"},
+                style={
+                    "display": "flex",
+                    "gap": "15px",
+                    "alignItems": "center",
+                    "marginBottom": "10px",
+                    "flexWrap": "wrap",
+                },
                 children=[
-                    dcc.Input(
-                        id="log-instance-id",
-                        type="text",
-                        placeholder="Instance ID (e.g., i-0abc123...)",
-                        style={
-                            "backgroundColor": BG_CARD,
-                            "color": TEXT_PRIMARY,
-                            "border": f"1px solid {BORDER}",
-                            "padding": "8px",
-                            "borderRadius": "4px",
-                            "width": "300px",
-                        },
+                    dcc.Dropdown(
+                        id="log-instance-ids",
+                        multi=True,
+                        placeholder="Select instance(s)...",
+                        style={"minWidth": "400px", "backgroundColor": BG_CARD, "color": TEXT_PRIMARY},
                         persistence=True,
                         persistence_type="local",
                     ),
@@ -611,6 +610,7 @@ def create_app() -> dash.Dash:
             Output("workers-chart", "figure"),
             Output("instance-table", "children"),
             Output("event-table", "children"),
+            Output("log-instance-ids", "options"),
             Output("last-updated", "children"),
         ],
         [Input("refresh", "n_intervals"), Input("time-range", "value")],
@@ -639,6 +639,7 @@ def create_app() -> dash.Dash:
                 empty_fig,
                 html.P(f"Error: {e}", style={"color": ACCENT_RED}),
                 "",
+                [],
                 f"Error at {ts}",
             )
 
@@ -854,6 +855,15 @@ def create_app() -> dash.Dash:
         else:
             event_table = html.P("No scaling events", style={"color": TEXT_MUTED, "padding": "20px"})
 
+        # ── Log stream dropdown options ─────────────────
+        # Combine running instance IDs + recent CloudWatch log streams
+        running_ids = [i["instance_id"] for i in instances]
+        log_stream_ids = _get_log_stream_instance_ids(cfg)
+        all_ids = list(dict.fromkeys(running_ids + log_stream_ids))  # dedupe, preserve order
+        log_options = [
+            {"label": f"{iid} {'(running)' if iid in running_ids else '(recent)'}", "value": iid} for iid in all_ids
+        ]
+
         return (
             str(queue["visible"]),
             str(queue["in_flight"]),
@@ -863,6 +873,7 @@ def create_app() -> dash.Dash:
             workers_fig,
             table,
             event_table,
+            log_options,
             f"Last updated: {ts} (every {REFRESH_INTERVAL_MS // 1000}s)",
         )
 
@@ -870,22 +881,22 @@ def create_app() -> dash.Dash:
     @app.callback(
         Output("log-viewer", "children"),
         [Input("fetch-logs-btn", "n_clicks")],
-        [dash.State("log-instance-id", "value"), dash.State("log-level", "value")],
+        [dash.State("log-instance-ids", "value"), dash.State("log-level", "value")],
         prevent_initial_call=True,
     )
-    def fetch_logs(n_clicks, instance_id, level):
-        if not instance_id or not instance_id.strip():
-            return "Enter an instance ID and click Fetch Logs."
+    def fetch_logs(n_clicks, instance_ids, level):
+        if not instance_ids:
+            return "Select instance(s) from the dropdown and click Fetch Logs."
 
-        instance_id = instance_id.strip()
-        entries = _get_cloudwatch_logs(cfg, instance_id, level, minutes=60)
+        entries = _get_cloudwatch_logs(cfg, instance_ids, level, minutes=60)
 
         if not entries:
-            return f"No {level} logs found for {instance_id} in the last 60 minutes."
+            ids_str = ", ".join(instance_ids)
+            return f"No {level} logs found for {ids_str} in the last 60 minutes."
 
         lines = []
         for e in entries:
-            lines.append(f"[{e['time']}] {e['message']}")
+            lines.append(f"[{e['time']}] {e['instance']} | {e['message']}")
         return "\n".join(lines)
 
     return app
