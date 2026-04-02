@@ -469,12 +469,20 @@ def cmd_prime(args: argparse.Namespace) -> None:
         hb = _get_heartbeat(s3, cfg, instance_id)
         age = _heartbeat_age(hb)
 
-        if ec2_state == "stopped":
-            log.info("[%s] Instance stopped. Cold start complete.", ts_str)
+        if ec2_state in ("stopped", "shutting-down"):
+            # shutting-down is the normal transition to stopped
+            # (InstanceInitiatedShutdownBehavior=stop)
+            log.info("[%s] Instance %s. Cold start complete.", ts_str, ec2_state)
+            if ec2_state == "shutting-down":
+                log.info("Waiting for instance to fully stop...")
+                ec2.get_waiter("instance_stopped").wait(
+                    InstanceIds=[instance_id],
+                    WaiterConfig={"Delay": 10, "MaxAttempts": 30},
+                )
             break
 
-        if ec2_state in ("terminated", "shutting-down"):
-            log.error("[%s] Instance %s unexpectedly. Aborting prime.", ts_str, ec2_state)
+        if ec2_state == "terminated":
+            log.error("[%s] Instance terminated unexpectedly. Aborting prime.", ts_str)
             _clear_state()
             sys.exit(1)
 
