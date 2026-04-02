@@ -426,7 +426,8 @@ def create_app() -> dash.Dash:
                     ),
                 ],
             ),
-            dcc.Graph(id="timeseries-chart", style={"height": "350px"}),
+            dcc.Graph(id="queue-chart", style={"height": "250px"}),
+            dcc.Graph(id="workers-chart", style={"height": "250px", "marginTop": "10px"}),
 
             # ── Workers Table ─────────────────────────────────
             html.H3("Workers", style={"color": ACCENT_RED, "marginBottom": "10px"}),
@@ -491,7 +492,8 @@ def create_app() -> dash.Dash:
             Output("sqs-inflight-value", "children"),
             Output("sqs-dlq-value", "children"),
             Output("asg-running-value", "children"),
-            Output("timeseries-chart", "figure"),
+            Output("queue-chart", "figure"),
+            Output("workers-chart", "figure"),
             Output("instance-table", "children"),
             Output("event-table", "children"),
             Output("last-updated", "children"),
@@ -513,7 +515,7 @@ def create_app() -> dash.Dash:
         except Exception as e:
             empty_fig = go.Figure()
             empty_fig.update_layout(template="plotly_dark", paper_bgcolor=BG_PAGE, plot_bgcolor=BG_CARD)
-            return "?", "?", "?", "?", empty_fig, html.P(f"Error: {e}", style={"color": ACCENT_RED}), "", f"Error at {ts}"
+            return "?", "?", "?", "?", empty_fig, empty_fig, html.P(f"Error: {e}", style={"color": ACCENT_RED}), "", f"Error at {ts}"
 
         # Running instance count (from EC2 API, not CloudWatch — no lag)
         running_count = sum(1 for i in instances if i["state"] == "running")
@@ -557,18 +559,56 @@ def create_app() -> dash.Dash:
         else:
             table = html.P("No workers running", style={"color": TEXT_MUTED, "padding": "20px"})
 
-        # ── Time series chart ─────────────────────────────
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["visible"], name="Queue Visible", mode="lines", line={"color": ACCENT_RED, "width": 2}, fill="tozeroy", fillcolor="rgba(248,113,113,0.1)"))
-        fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["inflight"], name="In Flight", mode="lines", line={"color": ACCENT_VIOLET, "width": 2}))
-        fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["dlq"], name="Dead Letter", mode="lines", line={"color": ACCENT_AMBER, "width": 2, "dash": "dot"}))
-        fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["in_service"], name="In Service", mode="lines", line={"color": ACCENT_GREEN, "width": 3}, yaxis="y2"))
-        fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cw_data["desired"], name="Desired", mode="lines", line={"color": ACCENT_GREEN, "width": 1, "dash": "dash"}, yaxis="y2"))
+        # ── Chart 1: Queue depth ─────────────────────────
+        chart_layout = {
+            "template": "plotly_dark",
+            "paper_bgcolor": BG_PAGE,
+            "plot_bgcolor": BG_CARD,
+            "font": {"color": TEXT_PRIMARY},
+            "margin": {"l": 50, "r": 50, "t": 30, "b": 30},
+            "legend": {"orientation": "h", "y": 1.15, "font": {"color": TEXT_SECONDARY}},
+            "xaxis": {"title": None, "gridcolor": BORDER, "tickfont": {"color": TEXT_MUTED}},
+        }
 
-        # Cumulative spot cost estimate: sum of (in_service * avg_spot_price * period_hours)
+        queue_fig = go.Figure()
+        queue_fig.add_trace(go.Scatter(
+            x=cw_data["timestamps"], y=cw_data["visible"],
+            name="Visible", mode="lines",
+            line={"color": ACCENT_RED, "width": 2},
+            fill="tozeroy", fillcolor="rgba(248,113,113,0.1)",
+        ))
+        queue_fig.add_trace(go.Scatter(
+            x=cw_data["timestamps"], y=cw_data["inflight"],
+            name="In Flight", mode="lines",
+            line={"color": ACCENT_VIOLET, "width": 2},
+        ))
+        queue_fig.add_trace(go.Scatter(
+            x=cw_data["timestamps"], y=cw_data["dlq"],
+            name="Dead Letter", mode="lines",
+            line={"color": ACCENT_AMBER, "width": 2, "dash": "dot"},
+        ))
+        queue_fig.update_layout(
+            **chart_layout,
+            yaxis={"title": "Messages", "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": TEXT_MUTED}},
+        )
+
+        # ── Chart 2: Workers + cumulative cost ───────────
+        workers_fig = go.Figure()
+        workers_fig.add_trace(go.Scatter(
+            x=cw_data["timestamps"], y=cw_data["in_service"],
+            name="In Service", mode="lines",
+            line={"color": ACCENT_GREEN, "width": 3},
+        ))
+        workers_fig.add_trace(go.Scatter(
+            x=cw_data["timestamps"], y=cw_data["desired"],
+            name="Desired", mode="lines",
+            line={"color": ACCENT_GREEN, "width": 1, "dash": "dash"},
+        ))
+
+        # Cumulative spot cost
         avg_spot_price = sum(i["price_per_hr"] for i in instances if i["price_per_hr"] > 0)
         if avg_spot_price == 0:
-            avg_spot_price = 0.084  # fallback: t3.xlarge spot in ap-southeast-2
+            avg_spot_price = 0.084  # fallback: t3.xlarge spot
         period_hours = (1 if time_range_hours <= 3 else 5 if time_range_hours <= 24 else 60) / 60
         cumulative_cost = []
         running_total = 0.0
@@ -576,16 +616,22 @@ def create_app() -> dash.Dash:
             running_total += in_svc * avg_spot_price * period_hours
             cumulative_cost.append(round(running_total, 4))
         if cumulative_cost:
-            fig.add_trace(go.Scatter(x=cw_data["timestamps"], y=cumulative_cost, name="Cumulative $", mode="lines", line={"color": ACCENT_CYAN, "width": 2}, yaxis="y3"))
+            workers_fig.add_trace(go.Scatter(
+                x=cw_data["timestamps"], y=cumulative_cost,
+                name="Cumulative $", mode="lines",
+                line={"color": ACCENT_CYAN, "width": 2},
+                yaxis="y2",
+            ))
 
-        fig.update_layout(
-            template="plotly_dark", paper_bgcolor=BG_PAGE, plot_bgcolor=BG_CARD, font={"color": TEXT_PRIMARY},
-            margin={"l": 50, "r": 80, "t": 30, "b": 40},
-            legend={"orientation": "h", "y": 1.15, "font": {"color": TEXT_SECONDARY}},
-            xaxis={"title": None, "gridcolor": BORDER, "tickfont": {"color": TEXT_MUTED}},
-            yaxis={"title": "Messages", "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": TEXT_MUTED}},
-            yaxis2={"title": "Workers", "overlaying": "y", "side": "right", "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": TEXT_MUTED}},
-            yaxis3={"title": "Cost ($)", "overlaying": "y", "side": "right", "anchor": "free", "position": 0.97, "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": ACCENT_CYAN}, "showgrid": False},
+        workers_layout = {**chart_layout, "margin": {"l": 50, "r": 60, "t": 30, "b": 30}}
+        workers_fig.update_layout(
+            **workers_layout,
+            yaxis={"title": "Workers", "gridcolor": BORDER, "rangemode": "tozero", "tickfont": {"color": TEXT_MUTED}},
+            yaxis2={
+                "title": "Cost ($)", "overlaying": "y", "side": "right",
+                "gridcolor": BORDER, "rangemode": "tozero",
+                "tickfont": {"color": ACCENT_CYAN}, "showgrid": False,
+            },
         )
 
         # ── Scaling events table ──────────────────────────
@@ -611,7 +657,8 @@ def create_app() -> dash.Dash:
             str(queue["in_flight"]),
             str(queue["dlq"]),
             str(running_count),
-            fig,
+            queue_fig,
+            workers_fig,
             table,
             event_table,
             f"Last updated: {ts} (every {REFRESH_INTERVAL_MS // 1000}s)",
