@@ -437,6 +437,24 @@ char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const c
 
     const char *tmpl = llama_model_chat_template(me->model, NULL);
 
+    /* Gemma 4 detection: uses <|turn>/<turn|> tokens, not <start_of_turn> like Gemma 2/3.
+     * llama_chat_apply_template() returns -1 for this template (no heuristic match yet).
+     * Format: <bos><|turn>system\n{sys}<turn|>\n<|turn>user\n{usr}<turn|>\n<|turn>model\n */
+    if (tmpl && strstr(tmpl, "<turn|>")) {
+        size_t sys_len = (system_msg && system_msg[0]) ? strlen(system_msg) : 0;
+        size_t usr_len = strlen(user_msg);
+        size_t cap = 5 + (sys_len ? sys_len + 20 : 0) + usr_len + 35;
+        char *buf = (char *)malloc(cap);
+        if (!buf) return NULL;
+        int n = 0;
+        n += snprintf(buf + n, (int)(cap - (size_t)n), "<bos>");
+        if (system_msg && system_msg[0])
+            n += snprintf(buf + n, (int)(cap - (size_t)n), "<|turn>system\n%s<turn|>\n", system_msg);
+        n += snprintf(buf + n, (int)(cap - (size_t)n), "<|turn>user\n%s<turn|>\n<|turn>model\n", user_msg);
+        if (out_len) *out_len = n;
+        return buf;
+    }
+
     /* First call: measure required buffer size */
     int32_t needed = llama_chat_apply_template(tmpl, msgs, (size_t)n_msg, 1, NULL, 0);
     if (needed <= 0)
