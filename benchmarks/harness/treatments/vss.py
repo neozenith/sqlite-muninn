@@ -80,9 +80,13 @@ def _compute_ground_truth(doc_vectors: np.ndarray, query_vectors: np.ndarray, k:
     Returns:
         List of M sets, each containing K rowids (1-based positions in doc set).
     """
-    # Vectorized L2 distance: [M, N]
-    # dists[i, j] = ||query_i - doc_j||^2
-    dists = np.sum((doc_vectors[None, :, :] - query_vectors[:, None, :]) ** 2, axis=2)
+    # L2 squared distance: [M, N] — avoids the (M, N, dim) intermediate that OOMs at large N.
+    # Uses identity: ||q - d||^2 = ||q||^2 + ||d||^2 - 2*(q @ d^T)
+    # Memory: O(M*N) only — e.g. 40 MB for M=100, N=50000, dim=768 vs 14+ GiB from broadcasting.
+    query_sq = np.sum(query_vectors**2, axis=1)  # (M,)
+    doc_sq = np.sum(doc_vectors**2, axis=1)  # (N,)
+    cross = query_vectors @ doc_vectors.T  # (M, N)
+    dists = query_sq[:, None] + doc_sq[None, :] - 2 * cross  # (M, N)
     # Top-K indices per query
     top_k_indices = np.argsort(dists, axis=1)[:, :k]
     # Convert to 1-based rowids (matching INSERT positions)

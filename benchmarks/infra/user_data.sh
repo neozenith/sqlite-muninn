@@ -221,6 +221,16 @@ else
     echo "  All vector caches present ($((3 * 2 * 2)) files)"
 fi
 
+# Disk usage report — logged after all sync phases so prime captures AMI footprint
+echo ""
+echo "=== Disk Usage After Sync ==="
+df -h /
+echo ""
+echo "  Top directories under /home/ubuntu/muninn:"
+du -sh "${WORK_DIR}"/vendor "${WORK_DIR}"/.venv "${WORK_DIR}"/build "${WORK_DIR}"/models \
+       "${WORK_DIR}"/benchmarks/vectors "${WORK_DIR}"/benchmarks/texts 2>/dev/null | sort -rh
+echo ""
+
 log_phase "04b_sync_prep" "$PHASE_START"
 
 # ── Phase 5: Pick and run benchmarks ─────────────────────────────
