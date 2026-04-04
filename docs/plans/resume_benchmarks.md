@@ -1,8 +1,8 @@
 # Benchmark Run Resume Notes
 
-**Left off:** 2026-04-04  
+**Last updated:** 2026-04-04 (evening session)  
 **Branch:** `feat/benchmarks-cloud-support-2`  
-**State:** ASG scaled to 0, SQS queue + DLQ purged.
+**State:** ASG desired=0, scaling suspended, SQS queue empty.
 
 ---
 
@@ -17,9 +17,35 @@ All other categories (CENTRALITY, COMMUNITY, GRAPH, GRAPH_VT, NODE2VEC) are 100%
 
 ---
 
+## Current Completion
+
+```
+~2737 / 3886 done (EMBED count may be slightly higher after session 2 runs)
+Missing: ~30 EMBED + ~1119 VSS
+```
+
+All other categories (CENTRALITY, COMMUNITY, GRAPH, GRAPH_VT, NODE2VEC) are 100% complete.
+
+---
+
+## ✅ Fixed This Session (session 2)
+
+| Commit | Fix |
+|--------|-----|
+| `c11cd22` | prep/\_\_init\_\_.py: remove `vectors` import to break `llama_cpp` import chain |
+| `50a22bf` | worker: add `shutdown -h now` to EXIT trap |
+| `aa4af55` | EBS: 20→40 GiB in both runner.py and CDK stack; disk report in worker_user_data.sh |
+| `ccc1014` | AMI name: `%Y%m%d` → `%Y%m%d_%H%M` to prevent same-day collision |
+| `bcbd309` | **VSS OOM fix**: replace `(M,N,dim)` broadcast with L2 identity expansion; disk report in user_data.sh |
+
+**New AMI:** `ami-02fd844e73df018b4` (commit `5aa7f84`, 40 GiB, VSS OOM fixed)  
+**CDK stack:** redeployed with new AMI — launch template version 7 active.
+
+---
+
 ## Blockers to Fix Before Re-Submitting
 
-### 1. OOM in VSS ground-truth computation — HIGH PRIORITY
+### ~~1. OOM in VSS ground-truth computation~~ — ✅ FIXED in `bcbd309`
 
 **File:** `benchmarks/harness/treatments/vss.py` line 85  
 **Function:** `_compute_ground_truth()`
@@ -73,11 +99,13 @@ These didn't fail — they just weren't picked up (workers exhausted by VSS jobs
 
 | Resource | State |
 |----------|-------|
-| ASG `MuninnBench-feat-benchmarks-cloud-support-2-ASG*` | desired=0 |
-| SQS main queue | purged |
-| SQS DLQ | purged |
-| AMI `ami-0b7a1eab5b8bdd47a` | still valid (commit `9c152a8`) |
-| S3 results | 2737 JSONL records intact |
+| ASG `MuninnBench-feat-benchmarks-cloud-support-2-ASG*` | desired=0, scaling **suspended** |
+| SQS main queue | empty (0 visible, 0 in-flight) |
+| SQS DLQ | empty |
+| AMI | `ami-02fd844e73df018b4` (commit `5aa7f84`, 40 GiB EBS, VSS OOM fixed) |
+| CDK launch template | version 7 — uses new AMI |
+| S3 results | ~2737+ JSONL records intact under `prep/benchmarks/results/` |
+| Disk usage (new AMI) | 25 GB used / 38 GB total — .venv 8.7G, models 6.3G, vectors 1.9G |
 
 ---
 
@@ -97,23 +125,23 @@ These didn't fail — they just weren't picked up (workers exhausted by VSS jobs
 
 ## Resumption Checklist
 
-1. **Fix OOM in `_compute_ground_truth`** — replace the `(M, N, dim)` broadcast with `cdist` or per-query loop (see §1 above).
+All blockers are fixed. To resume:
 
-2. **Redeploy CDK stack** — the `shutdown -in-trap` fix (`50a22bf`) is in `worker_user_data.sh` but CDK embeds user-data at deploy time. Re-deploy so new instances pick up the fix:
+1. **Resume ASG scaling** (suspended during this session):
    ```bash
-   npx aws-cdk@latest deploy MuninnBench-feat-benchmarks-cloud-support-2 \
-     --app "uv run --group cdk benchmarks/infra/cdk/app.py" \
-     -c account=389956346255 -c branch=feat/benchmarks-cloud-support-2 \
-     -c ami_id=ami-0b7a1eab5b8bdd47a
+   aws autoscaling resume-processes \
+     --auto-scaling-group-name "MuninnBench-feat-benchmarks-cloud-support-2-ASG46ED3070-F9uArT8rQ2aI" \
+     --region ap-southeast-2 \
+     --scaling-processes Launch Terminate
    ```
 
-3. **Re-submit missing benchmarks:**
+2. **Re-submit missing benchmarks:**
    ```bash
    uv run --no-sync benchmarks/infra/runner.py submit
    ```
-   Expected: ~1149 messages enqueued (30 EMBED + 1119 VSS).
+   Expected: ~1149 messages enqueued (30 EMBED + ~1119 VSS).
 
-4. **Scale ASG up** (if CW alarm hasn't fired yet):
+3. **Scale ASG up manually** (CW alarm takes 15 min on idle queues):
    ```bash
    aws autoscaling set-desired-capacity \
      --auto-scaling-group-name "MuninnBench-feat-benchmarks-cloud-support-2-ASG46ED3070-F9uArT8rQ2aI" \
@@ -121,7 +149,16 @@ These didn't fail — they just weren't picked up (workers exhausted by VSS jobs
      --region ap-southeast-2
    ```
 
-5. **Monitor** — `uv run --no-sync benchmarks/infra/runner.py diagnose --minutes 30`
+4. **Monitor** — `uv run --no-sync benchmarks/infra/runner.py diagnose --minutes 30`
+
+> **Note:** If a new prime is needed in future, remember to also redeploy CDK to update the launch template AMI:
+> ```bash
+> npx aws-cdk@latest deploy MuninnBench-feat-benchmarks-cloud-support-2 \
+>   --app "uv run --group cdk benchmarks/infra/cdk/app.py" \
+>   -c account=389956346255 -c branch=feat/benchmarks-cloud-support-2 \
+>   -c ami_id=<new-ami-id>
+> ```
+> The `prime` command updates `config.yml` only — CDK is a separate step.
 
 ---
 
