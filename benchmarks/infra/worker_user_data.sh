@@ -213,6 +213,16 @@ aws s3 sync "s3://${S3_BUCKET}/prep/models/" "${WORK_DIR}/models/" \
 VECTOR_COUNT=$(ls "${WORK_DIR}/benchmarks/vectors/"*.npy 2>/dev/null | wc -l | tr -d ' ')
 echo "  Vector caches available: ${VECTOR_COUNT}"
 
+# Disk usage report — logged after all sync phases so prime captures AMI footprint
+echo ""
+echo "=== Disk Usage After Sync ==="
+df -h /
+echo ""
+echo "  Top directories under /home/ubuntu/muninn:"
+du -sh "${WORK_DIR}"/vendor "${WORK_DIR}"/.venv "${WORK_DIR}"/build "${WORK_DIR}"/models \
+       "${WORK_DIR}"/benchmarks/vectors "${WORK_DIR}"/benchmarks/texts 2>/dev/null | sort -rh
+echo ""
+
 log_phase "04b_sync_prep" "$PHASE_START"
 
 # ── Phase 5: Poll SQS and run benchmarks ─────────────────────────

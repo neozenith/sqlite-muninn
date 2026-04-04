@@ -149,7 +149,7 @@ class BenchStack(cdk.Stack):
                 ec2.BlockDevice(
                     device_name="/dev/sda1",
                     volume=ec2.BlockDeviceVolume.ebs(
-                        20,
+                        40,
                         volume_type=ec2.EbsDeviceVolumeType.GP3,
                         delete_on_termination=True,
                     ),

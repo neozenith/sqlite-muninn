@@ -403,7 +403,7 @@ def cmd_prime(args: argparse.Namespace) -> None:
         BlockDeviceMappings=[
             {
                 "DeviceName": "/dev/sda1",
-                "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
+                "Ebs": {"VolumeSize": 40, "VolumeType": "gp3", "DeleteOnTermination": True},
             }
         ],
         UserData=user_data,
@@ -603,7 +603,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         "BlockDeviceMappings": [
             {
                 "DeviceName": "/dev/sda1",
-                "Ebs": {"VolumeSize": 20, "VolumeType": "gp3", "DeleteOnTermination": True},
+                "Ebs": {"VolumeSize": 40, "VolumeType": "gp3", "DeleteOnTermination": True},
             }
         ],
         "UserData": user_data,
@@ -1080,20 +1080,21 @@ def cmd_diagnose(args: argparse.Namespace) -> None:
     # Known failure patterns: (regex, short_label, remediation_hint)
     # Order matters — first match wins.
     known_patterns: list[tuple[str, str, str]] = [
-        (r"No space left on device",        "DISK_FULL",        "db cleanup missing; add rm -rf results/{id}/ after each run"),
-        (r"wrong number of arguments",      "WRONG_ARGS",       "node2vec arg mismatch; fixed in 51dba03"),
-        (r"text too long.*exceeds context", "TEXT_TOO_LONG",    "embed token overflow; fixed in 10c0171"),
-        (r"No module named 'sqlite_lembed'","MISSING_LEMBED",   "sqlite-lembed not in benchmark dep group; fixed in 4615d9b"),
-        (r"OutOfMemory|MemoryError|Cannot allocate memory",
-                                            "OOM",              "instance needs more RAM"),
-        (r"CIRCUIT BREAKER",                "CIRCUIT_BREAKER",  "3 consecutive failures — investigate root cause"),
-        (r"EndpointResolutionError|ConnectTimeout|Connection refused",
-                                            "NETWORK",          "transient AWS connectivity"),
-        (r"ModuleNotFoundError|ImportError","IMPORT_ERROR",     "missing Python dep — check benchmark dep group"),
-        (r"TimeoutExpired",                 "TIMEOUT",          "benchmark exceeded time limit"),
-        (r"OperationalError",               "SQLITE_ERROR",     "SQLite error — check full traceback"),
-        (r"Traceback \(most recent call last\)",
-                                            "UNHANDLED_EXC",    "unclassified exception — see log lines below"),
+        (r"No space left on device", "DISK_FULL", "db cleanup missing; add rm -rf results/{id}/ after each run"),
+        (r"wrong number of arguments", "WRONG_ARGS", "node2vec arg mismatch; fixed in 51dba03"),
+        (r"text too long.*exceeds context", "TEXT_TOO_LONG", "embed token overflow; fixed in 10c0171"),
+        (
+            r"No module named 'sqlite_lembed'",
+            "MISSING_LEMBED",
+            "sqlite-lembed not in benchmark dep group; fixed in 4615d9b",
+        ),
+        (r"OutOfMemory|MemoryError|Cannot allocate memory", "OOM", "instance needs more RAM"),
+        (r"CIRCUIT BREAKER", "CIRCUIT_BREAKER", "3 consecutive failures — investigate root cause"),
+        (r"EndpointResolutionError|ConnectTimeout|Connection refused", "NETWORK", "transient AWS connectivity"),
+        (r"ModuleNotFoundError|ImportError", "IMPORT_ERROR", "missing Python dep — check benchmark dep group"),
+        (r"TimeoutExpired", "TIMEOUT", "benchmark exceeded time limit"),
+        (r"OperationalError", "SQLITE_ERROR", "SQLite error — check full traceback"),
+        (r"Traceback \(most recent call last\)", "UNHANDLED_EXC", "unclassified exception — see log lines below"),
     ]
     noise_patterns = [r"Run failed:", r"Cleaning up failed", r"FAILED: \w"]
 
@@ -1151,9 +1152,7 @@ def cmd_diagnose(args: argparse.Namespace) -> None:
         | limit 200
     """)
     job_failures = {
-        _field(r, "bench_id").strip(): int(_field(r, "n") or 0)
-        for r in job_rows
-        if _field(r, "bench_id").strip()
+        _field(r, "bench_id").strip(): int(_field(r, "n") or 0) for r in job_rows if _field(r, "bench_id").strip()
     }
 
     # ── Query 2: Error lines for pattern classification ───────────────────────
@@ -1245,9 +1244,9 @@ def cmd_diagnose(args: argparse.Namespace) -> None:
     # ── Render report ─────────────────────────────────────────────────────────
     W = 72
     ts = datetime.now().strftime("%H:%M:%S")
-    print(f"\n{'─'*W}")
+    print(f"\n{'─' * W}")
     print(f"  Worker Diagnostics  {ts}  (last {minutes} min)")
-    print(f"{'─'*W}")
+    print(f"{'─' * W}")
 
     dlq_flag = f"  ⚠  DLQ={q['dlq']}" if isinstance(q["dlq"], int) and q["dlq"] > 0 else ""
     print(f"  Queue:   visible={q['visible']}  inflight={q['inflight']}  dlq={q['dlq']}{dlq_flag}")
@@ -1261,7 +1260,7 @@ def cmd_diagnose(args: argparse.Namespace) -> None:
         print(f"\n  ⚠  CIRCUIT BREAKER fired: {', '.join(set(circuit_breaks))}")
 
     if known:
-        print(f"\n  Known failure types:")
+        print("\n  Known failure types:")
         for label, info in sorted(known.items(), key=lambda x: -x[1]["count"]):
             instances = ", ".join(sorted(info["instances"]))
             print(f"    {label:<24}  ×{info['count']:<4}  [{instances}]")
@@ -1275,7 +1274,7 @@ def cmd_diagnose(args: argparse.Namespace) -> None:
             suffix = f"  ×{n}" if n > 1 else ""
             print(f"    {bid}{suffix}")
         if len(job_failures) > 20:
-            print(f"    … and {len(job_failures)-20} more")
+            print(f"    … and {len(job_failures) - 20} more")
     else:
         print(f"\n  No job failures in last {minutes} min  ✓")
 
@@ -1284,11 +1283,11 @@ def cmd_diagnose(args: argparse.Namespace) -> None:
         for excerpt, count in unknown[:10]:
             print(f"    ×{count:<3} {excerpt}")
         if len(unknown) > 10:
-            print(f"    … and {len(unknown)-10} more")
+            print(f"    … and {len(unknown) - 10} more")
     else:
-        print(f"\n  No unknown error patterns  ✓")
+        print("\n  No unknown error patterns  ✓")
 
-    print(f"{'─'*W}\n")
+    print(f"{'─' * W}\n")
 
 
 def cmd_teardown(args: argparse.Namespace) -> None:
