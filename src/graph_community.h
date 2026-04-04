@@ -23,7 +23,6 @@ int community_register_tvfs(sqlite3 *db);
  *
  * Returns modularity Q.
  */
-double run_leiden(const GraphData *g, int *community, double resolution,
-                  const char *direction);
+double run_leiden(const GraphData *g, int *community, double resolution, const char *direction);
 
 #endif /* GRAPH_COMMUNITY_H */

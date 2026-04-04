@@ -77,9 +77,8 @@ double jaro_winkler(const char *s1, const char *s2) {
     if (len2 > 256)
         free(s2_matched);
 
-    double jaro = ((double)matches / len1 + (double)matches / len2 +
-                   ((double)matches - transpositions / 2.0) / matches) /
-                  3.0;
+    double jaro =
+        ((double)matches / len1 + (double)matches / len2 + ((double)matches - transpositions / 2.0) / matches) / 3.0;
 
     /* Winkler prefix bonus (up to 4 chars) */
     int prefix = 0;

@@ -149,10 +149,12 @@
       "mode": "lines+markers",
       "name": "muninn-embed + muninn-hnsw / MiniLM",
       "x": [
-        100
+        100,
+        500
       ],
       "y": [
-        2.269
+        2.269,
+        19.266
       ],
       "marker": {
         "color": "hsl(270, 85%, 58%)",
@@ -197,10 +199,14 @@
       "mode": "lines+markers",
       "name": "muninn-embed + sqlite-vec-brute / MiniLM",
       "x": [
-        100
+        100,
+        500,
+        1000
       ],
       "y": [
-        2.344
+        2.344,
+        15.481,
+        18.175
       ],
       "marker": {
         "color": "hsl(240, 85%, 58%)",

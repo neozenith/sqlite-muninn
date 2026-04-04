@@ -107,8 +107,8 @@ static int load_chat_model(const char *path, int n_ctx, LoadedChatModel *out, ch
  * batch, then runs autoregressive sampling until EOG or max_tokens.
  * ────────────────────────────────────────────────────────────── */
 
-int chat_generate(MuninnModelEntry *me, const char *prompt, const char *grammar_gbnf, int max_tokens,
-                         char **out_text, int *out_len, char *errbuf, int errbuf_sz) {
+int chat_generate(MuninnModelEntry *me, const char *prompt, const char *grammar_gbnf, int max_tokens, char **out_text,
+                  int *out_len, char *errbuf, int errbuf_sz) {
     const struct llama_vocab *vocab = llama_model_get_vocab(me->model);
 
     /* Clear KV cache for a fresh start */
@@ -421,8 +421,8 @@ static int chat_generate_batch(MuninnModelEntry *me, const char **prompts, int n
  * For convenience functions, builds system+user message pairs.
  * ────────────────────────────────────────────────────────────── */
 
-char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const char *user_msg,
-                                  int inject_skip_think, int *out_len) {
+char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const char *user_msg, int inject_skip_think,
+                           int *out_len) {
     struct llama_chat_message msgs[2];
     int n_msg = 0;
 
@@ -445,13 +445,15 @@ char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const c
         size_t usr_len = strlen(user_msg);
         size_t cap = 5 + (sys_len ? sys_len + 20 : 0) + usr_len + 35;
         char *buf = (char *)malloc(cap);
-        if (!buf) return NULL;
+        if (!buf)
+            return NULL;
         int n = 0;
         n += snprintf(buf + n, (int)(cap - (size_t)n), "<bos>");
         if (system_msg && system_msg[0])
             n += snprintf(buf + n, (int)(cap - (size_t)n), "<|turn>system\n%s<turn|>\n", system_msg);
         n += snprintf(buf + n, (int)(cap - (size_t)n), "<|turn>user\n%s<turn|>\n<|turn>model\n", user_msg);
-        if (out_len) *out_len = n;
+        if (out_len)
+            *out_len = n;
         return buf;
     }
 

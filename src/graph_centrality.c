@@ -390,13 +390,9 @@ static void sssp_dijkstra(const GraphData *g, int source, double *dist, double *
  * Returns SQLITE_OK or SQLITE_NOMEM.
  * ═══════════════════════════════════════════════════════════════ */
 
-int brandes_compute(
-    const GraphData *g,
-    const char *direction,
-    int auto_approx,
-    int normalized,
-    double *CB,       /* out: node betweenness, size N, caller must calloc */
-    double *EB        /* out: edge betweenness, size N*N, caller must calloc. NULL = skip. */
+int brandes_compute(const GraphData *g, const char *direction, int auto_approx, int normalized,
+                    double *CB, /* out: node betweenness, size N, caller must calloc */
+                    double *EB  /* out: edge betweenness, size N*N, caller must calloc. NULL = skip. */
 ) {
     int N = g->node_count;
 
@@ -406,7 +402,11 @@ int brandes_compute(
     int *stack = (int *)malloc((size_t)N * sizeof(int));
     IntList *pred = (IntList *)calloc((size_t)N, sizeof(IntList));
     if (!dist || !sigma || !delta || !stack || !pred) {
-        free(dist); free(sigma); free(delta); free(stack); free(pred);
+        free(dist);
+        free(sigma);
+        free(delta);
+        free(stack);
+        free(pred);
         return SQLITE_NOMEM;
     }
     for (int i = 0; i < N; i++)
@@ -419,9 +419,11 @@ int brandes_compute(
 
     if (auto_approx > 0 && N > auto_approx) {
         n_sources = (int)ceil(sqrt((double)N));
-        if (n_sources < 1) n_sources = 1;
+        if (n_sources < 1)
+            n_sources = 1;
         int step = N / n_sources;
-        if (step < 1) step = 1;
+        if (step < 1)
+            step = 1;
         n_sources = 0;
         for (int i = 0; i < N && n_sources < (int)ceil(sqrt((double)N)); i += step)
             sources[n_sources++] = i;
@@ -452,7 +454,8 @@ int brandes_compute(
                 if (sigma[w] > 0) {
                     double flow = (sigma[v] / sigma[w]) * (1.0 + delta[w]);
                     delta[v] += flow;
-                    if (EB) EB[v * N + w] += flow;
+                    if (EB)
+                        EB[v * N + w] += flow;
                 }
             }
             if (w != s)
@@ -462,32 +465,36 @@ int brandes_compute(
 
     /* Scale for approximation */
     if (scale != 1.0) {
-        for (int i = 0; i < N; i++) CB[i] *= scale;
+        for (int i = 0; i < N; i++)
+            CB[i] *= scale;
         if (EB) {
             int NN = N * N;
-            for (int i = 0; i < NN; i++) EB[i] *= scale;
+            for (int i = 0; i < NN; i++)
+                EB[i] *= scale;
         }
     }
 
     /* Undirected correction: halve (each path counted twice) */
     int undirected = direction && strcmp(direction, "both") == 0;
     if (undirected) {
-        for (int i = 0; i < N; i++) CB[i] /= 2.0;
+        for (int i = 0; i < N; i++)
+            CB[i] /= 2.0;
         if (EB) {
             int NN = N * N;
-            for (int i = 0; i < NN; i++) EB[i] /= 2.0;
+            for (int i = 0; i < NN; i++)
+                EB[i] /= 2.0;
         }
     }
 
     /* Normalize */
     if (normalized && N > 2) {
-        double norm_factor = undirected
-            ? (double)(N - 1) * (double)(N - 2) / 2.0
-            : (double)(N - 1) * (double)(N - 2);
-        for (int i = 0; i < N; i++) CB[i] /= norm_factor;
+        double norm_factor = undirected ? (double)(N - 1) * (double)(N - 2) / 2.0 : (double)(N - 1) * (double)(N - 2);
+        for (int i = 0; i < N; i++)
+            CB[i] /= norm_factor;
         if (EB) {
             int NN = N * N;
-            for (int i = 0; i < NN; i++) EB[i] /= norm_factor;
+            for (int i = 0; i < NN; i++)
+                EB[i] /= norm_factor;
         }
     }
 
@@ -897,7 +904,10 @@ static int bet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
     }
 
     double *CB = (double *)calloc((size_t)N, sizeof(double));
-    if (!CB) { graph_data_destroy(&g); return SQLITE_NOMEM; }
+    if (!CB) {
+        graph_data_destroy(&g);
+        return SQLITE_NOMEM;
+    }
 
     rc = brandes_compute(&g, config.direction, auto_approx, normalized, CB, NULL);
     if (rc != SQLITE_OK) {
@@ -986,16 +996,16 @@ enum {
     EBET_COL_SRC = 0,
     EBET_COL_DST,
     EBET_COL_CENTRALITY,
-    EBET_COL_EDGE_TABLE,     /* hidden */
-    EBET_COL_SRC_COL,        /* hidden */
-    EBET_COL_DST_COL,        /* hidden */
-    EBET_COL_WEIGHT_COL,     /* hidden */
-    EBET_COL_NORMALIZED,     /* hidden */
-    EBET_COL_DIRECTION,      /* hidden */
-    EBET_COL_AUTO_APPROX,    /* hidden */
-    EBET_COL_TIMESTAMP_COL,  /* hidden */
-    EBET_COL_TIME_START,     /* hidden */
-    EBET_COL_TIME_END,       /* hidden */
+    EBET_COL_EDGE_TABLE,    /* hidden */
+    EBET_COL_SRC_COL,       /* hidden */
+    EBET_COL_DST_COL,       /* hidden */
+    EBET_COL_WEIGHT_COL,    /* hidden */
+    EBET_COL_NORMALIZED,    /* hidden */
+    EBET_COL_DIRECTION,     /* hidden */
+    EBET_COL_AUTO_APPROX,   /* hidden */
+    EBET_COL_TIMESTAMP_COL, /* hidden */
+    EBET_COL_TIME_START,    /* hidden */
+    EBET_COL_TIME_END,      /* hidden */
 };
 
 typedef struct {
@@ -1005,8 +1015,8 @@ typedef struct {
     int eof;
 } EdgeBetweennessCursor;
 
-static int ebet_connect(sqlite3 *db, void *pAux, int argc, const char *const *argv,
-                        sqlite3_vtab **ppVtab, char **pzErr) {
+static int ebet_connect(sqlite3 *db, void *pAux, int argc, const char *const *argv, sqlite3_vtab **ppVtab,
+                        char **pzErr) {
     (void)pAux;
     (void)argc;
     (void)argv;
@@ -1052,8 +1062,7 @@ static int ebet_close(sqlite3_vtab_cursor *pCursor) {
     return SQLITE_OK;
 }
 
-static int ebet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
-                       int argc, sqlite3_value **argv) {
+static int ebet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr, int argc, sqlite3_value **argv) {
     (void)idxStr;
     EdgeBetweennessCursor *cur = (EdgeBetweennessCursor *)pCursor;
     CentralityVtab *vtab = (CentralityVtab *)pCursor->pVtab;
@@ -1141,14 +1150,16 @@ static int ebet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idx
     double *CB = (double *)calloc((size_t)N, sizeof(double));
     double *EB = (double *)calloc((size_t)N * (size_t)N, sizeof(double));
     if (!CB || !EB) {
-        free(CB); free(EB);
+        free(CB);
+        free(EB);
         graph_data_destroy(&g);
         return SQLITE_NOMEM;
     }
 
     rc = brandes_compute(&g, config.direction, auto_approx, normalized, CB, EB);
     if (rc != SQLITE_OK) {
-        free(CB); free(EB);
+        free(CB);
+        free(EB);
         graph_data_destroy(&g);
         return rc;
     }

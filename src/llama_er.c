@@ -34,7 +34,7 @@ typedef struct {
 } ErEntity;
 
 typedef struct {
-    int r1, r2;      /* indices into entity array */
+    int r1, r2; /* indices into entity array */
     double cosine_dist;
 } CandidatePair;
 
@@ -55,12 +55,13 @@ static char *str_lower(const char *s) {
 
 /* ── Helper: grow dynamic arrays ─────────────────────────────────── */
 
-#define GROW_ARRAY(arr, count, cap, type) do { \
-    if ((count) >= (cap)) { \
-        (cap) = (cap) ? (cap) * 2 : 64; \
-        (arr) = (type *)realloc((arr), (size_t)(cap) * sizeof(type)); \
-    } \
-} while (0)
+#define GROW_ARRAY(arr, count, cap, type)                                                                              \
+    do {                                                                                                               \
+        if ((count) >= (cap)) {                                                                                        \
+            (cap) = (cap) ? (cap) * 2 : 64;                                                                            \
+            (arr) = (type *)realloc((arr), (size_t)(cap) * sizeof(type));                                              \
+        }                                                                                                              \
+    } while (0)
 
 /* ── Helper: write JSON-escaped string into buffer ────────────────── */
 
@@ -70,23 +71,34 @@ static size_t json_escape(char *out, size_t out_size, const char *s) {
     for (; *s && pos < out_size - 2; s++) {
         unsigned char c = (unsigned char)*s;
         if (c == '"') {
-            if (pos + 2 >= out_size) break;
-            out[pos++] = '\\'; out[pos++] = '"';
+            if (pos + 2 >= out_size)
+                break;
+            out[pos++] = '\\';
+            out[pos++] = '"';
         } else if (c == '\\') {
-            if (pos + 2 >= out_size) break;
-            out[pos++] = '\\'; out[pos++] = '\\';
+            if (pos + 2 >= out_size)
+                break;
+            out[pos++] = '\\';
+            out[pos++] = '\\';
         } else if (c == '\n') {
-            if (pos + 2 >= out_size) break;
-            out[pos++] = '\\'; out[pos++] = 'n';
+            if (pos + 2 >= out_size)
+                break;
+            out[pos++] = '\\';
+            out[pos++] = 'n';
         } else if (c == '\r') {
-            if (pos + 2 >= out_size) break;
-            out[pos++] = '\\'; out[pos++] = 'r';
+            if (pos + 2 >= out_size)
+                break;
+            out[pos++] = '\\';
+            out[pos++] = 'r';
         } else if (c == '\t') {
-            if (pos + 2 >= out_size) break;
-            out[pos++] = '\\'; out[pos++] = 't';
+            if (pos + 2 >= out_size)
+                break;
+            out[pos++] = '\\';
+            out[pos++] = 't';
         } else if (c < 0x20) {
             /* Other control characters: \uXXXX */
-            if (pos + 6 >= out_size) break;
+            if (pos + 6 >= out_size)
+                break;
             pos += (size_t)snprintf(out + pos, out_size - pos, "\\u%04x", c);
         } else {
             out[pos++] = (char)c;
@@ -106,14 +118,13 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
     }
 
     const char *hnsw_table = (const char *)sqlite3_value_text(argv[0]);
-    const char *name_col   = (const char *)sqlite3_value_text(argv[1]);
-    int k                  = sqlite3_value_int(argv[2]);
-    double dist_threshold  = sqlite3_value_double(argv[3]);
-    double jw_weight       = sqlite3_value_double(argv[4]);
+    const char *name_col = (const char *)sqlite3_value_text(argv[1]);
+    int k = sqlite3_value_int(argv[2]);
+    double dist_threshold = sqlite3_value_double(argv[3]);
+    double jw_weight = sqlite3_value_double(argv[4]);
     double borderline_delta = sqlite3_value_double(argv[5]);
     const char *chat_model = argc > 6 ? (const char *)sqlite3_value_text(argv[6]) : NULL;
-    double eb_threshold    = argc > 7 && sqlite3_value_type(argv[7]) != SQLITE_NULL
-                             ? sqlite3_value_double(argv[7]) : -1.0;
+    double eb_threshold = argc > 7 && sqlite3_value_type(argv[7]) != SQLITE_NULL ? sqlite3_value_double(argv[7]) : -1.0;
     const char *type_guard = argc > 8 ? (const char *)sqlite3_value_text(argv[8]) : NULL;
 
     /* Type guard modes:
@@ -122,7 +133,7 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
      *   NULL or ""    — no type filtering
      */
     int guard_same_source = type_guard && strcmp(type_guard, "same_source") == 0;
-    int guard_diff_type   = type_guard && strcmp(type_guard, "diff_type") == 0;
+    int guard_diff_type = type_guard && strcmp(type_guard, "diff_type") == 0;
 
     if (!hnsw_table || !name_col) {
         sqlite3_result_error(ctx, "muninn_extract_er: hnsw_table and name_col required", -1);
@@ -154,8 +165,7 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
          * or just use "entities" as convention. */
         const char *entity_table = "entities";
         char sql[512];
-        snprintf(sql, sizeof(sql),
-            "SELECT rowid, entity_id, [%s], source FROM [%s]", name_col, entity_table);
+        snprintf(sql, sizeof(sql), "SELECT rowid, entity_id, [%s], source FROM [%s]", name_col, entity_table);
 
         sqlite3_stmt *stmt;
         rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
@@ -186,7 +196,8 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
     /* Simple approach: array indexed by max rowid (works for contiguous rowids) */
     int max_rowid = 0;
     for (int i = 0; i < n_entities; i++)
-        if (entities[i].rowid > max_rowid) max_rowid = entities[i].rowid;
+        if (entities[i].rowid > max_rowid)
+            max_rowid = entities[i].rowid;
 
     int *rid_to_idx = (int *)malloc(((size_t)max_rowid + 1) * sizeof(int));
     memset(rid_to_idx, -1, ((size_t)max_rowid + 1) * sizeof(int));
@@ -206,11 +217,9 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
     /* Prepare statements: one to fetch vector, one to search KNN */
     {
         char sql_vec[256], sql_knn[256];
-        snprintf(sql_vec, sizeof(sql_vec),
-            "SELECT vector FROM [%s] WHERE rowid = ?", hnsw_table);
-        snprintf(sql_knn, sizeof(sql_knn),
-            "SELECT rowid, distance FROM [%s] WHERE vector MATCH ? AND k = %d",
-            hnsw_table, k + 1);
+        snprintf(sql_vec, sizeof(sql_vec), "SELECT vector FROM [%s] WHERE rowid = ?", hnsw_table);
+        snprintf(sql_knn, sizeof(sql_knn), "SELECT rowid, distance FROM [%s] WHERE vector MATCH ? AND k = %d",
+                 hnsw_table, k + 1);
 
         sqlite3_stmt *stmt_vec, *stmt_knn;
         rc = sqlite3_prepare_v2(db, sql_vec, -1, &stmt_vec, NULL);
@@ -241,9 +250,12 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
                 int nid = sqlite3_column_int(stmt_knn, 0);
                 double dist = sqlite3_column_double(stmt_knn, 1);
 
-                if (nid == entities[i].rowid) continue;
-                if (dist > dist_threshold) continue;
-                if (nid > max_rowid || rid_to_idx[nid] < 0) continue;
+                if (nid == entities[i].rowid)
+                    continue;
+                if (dist > dist_threshold)
+                    continue;
+                if (nid > max_rowid || rid_to_idx[nid] < 0)
+                    continue;
 
                 int j = rid_to_idx[nid];
                 int lo = i < j ? i : j;
@@ -289,12 +301,10 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
          *   diff_type:   skip if sources differ (KG: person≠location)
          */
         if (guard_same_source) {
-            if (entities[i].source[0] && entities[j].source[0] &&
-                strcmp(entities[i].source, entities[j].source) == 0)
+            if (entities[i].source[0] && entities[j].source[0] && strcmp(entities[i].source, entities[j].source) == 0)
                 continue;
         } else if (guard_diff_type) {
-            if (entities[i].source[0] && entities[j].source[0] &&
-                strcmp(entities[i].source, entities[j].source) != 0)
+            if (entities[i].source[0] && entities[j].source[0] && strcmp(entities[i].source, entities[j].source) != 0)
                 continue;
         }
 
@@ -325,8 +335,7 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
 
     /* Create temp edge table for Leiden */
     sqlite3_exec(db, "DROP TABLE IF EXISTS temp._er_edges", NULL, NULL, NULL);
-    rc = sqlite3_exec(db, "CREATE TEMP TABLE _er_edges(src TEXT, dst TEXT, weight REAL)",
-                      NULL, NULL, &errmsg);
+    rc = sqlite3_exec(db, "CREATE TEMP TABLE _er_edges(src TEXT, dst TEXT, weight REAL)", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
         sqlite3_result_error(ctx, errmsg ? errmsg : "failed to create temp table", -1);
         sqlite3_free(errmsg);
@@ -336,9 +345,7 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
     /* Insert bidirectional edges */
     {
         sqlite3_stmt *ins;
-        rc = sqlite3_prepare_v2(db,
-            "INSERT INTO temp._er_edges(src, dst, weight) VALUES(?, ?, ?)",
-            -1, &ins, NULL);
+        rc = sqlite3_prepare_v2(db, "INSERT INTO temp._er_edges(src, dst, weight) VALUES(?, ?, ?)", -1, &ins, NULL);
         if (rc != SQLITE_OK) {
             sqlite3_result_error(ctx, sqlite3_errmsg(db), -1);
             goto cleanup;
@@ -368,18 +375,19 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
     /* Run Leiden */
     /* cluster_map[i] = community_id for entity i. -1 = singleton */
     cluster_map = (int *)malloc((size_t)n_entities * sizeof(int));
-    for (int i = 0; i < n_entities; i++) cluster_map[i] = -1;
+    for (int i = 0; i < n_entities; i++)
+        cluster_map[i] = -1;
     int next_cluster = 0;
 
     if (n_edges > 0) {
         sqlite3_stmt *leiden;
         rc = sqlite3_prepare_v2(db,
-            "SELECT node, community_id FROM graph_leiden"
-            " WHERE edge_table = '_er_edges'"
-            "   AND src_col = 'src'"
-            "   AND dst_col = 'dst'"
-            "   AND weight_col = 'weight'",
-            -1, &leiden, NULL);
+                                "SELECT node, community_id FROM graph_leiden"
+                                " WHERE edge_table = '_er_edges'"
+                                "   AND src_col = 'src'"
+                                "   AND dst_col = 'dst'"
+                                "   AND weight_col = 'weight'",
+                                -1, &leiden, NULL);
         if (rc != SQLITE_OK) {
             sqlite3_result_error(ctx, sqlite3_errmsg(db), -1);
             free(cluster_map);
@@ -399,7 +407,10 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
                 if (strcmp(entities[i].entity_id, node) == 0) {
                     int mapped = -1;
                     for (int r = 0; r < n_remap; r++) {
-                        if (comm_keys[r] == comm_id) { mapped = comm_remap[r]; break; }
+                        if (comm_keys[r] == comm_id) {
+                            mapped = comm_remap[r];
+                            break;
+                        }
                     }
                     if (mapped < 0) {
                         if (n_remap >= cap_remap) {
@@ -433,12 +444,12 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
     if (eb_threshold >= 0 && n_edges > 0) {
         sqlite3_stmt *eb_stmt;
         rc = sqlite3_prepare_v2(db,
-            "SELECT src, dst, centrality FROM graph_edge_betweenness"
-            " WHERE edge_table = '_er_edges'"
-            "   AND src_col = 'src'"
-            "   AND dst_col = 'dst'"
-            "   AND direction = 'both'",
-            -1, &eb_stmt, NULL);
+                                "SELECT src, dst, centrality FROM graph_edge_betweenness"
+                                " WHERE edge_table = '_er_edges'"
+                                "   AND src_col = 'src'"
+                                "   AND dst_col = 'dst'"
+                                "   AND direction = 'both'",
+                                -1, &eb_stmt, NULL);
 
         if (rc == SQLITE_OK) {
             /* Collect bridge edges */
@@ -465,9 +476,9 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
                 for (int b = 0; b < n_bridges; b++) {
                     char del_sql[512];
                     snprintf(del_sql, sizeof(del_sql),
-                        "DELETE FROM temp._er_edges WHERE"
-                        " (src = '%s' AND dst = '%s') OR (src = '%s' AND dst = '%s')",
-                        bridge_src[b], bridge_dst[b], bridge_dst[b], bridge_src[b]);
+                             "DELETE FROM temp._er_edges WHERE"
+                             " (src = '%s' AND dst = '%s') OR (src = '%s' AND dst = '%s')",
+                             bridge_src[b], bridge_dst[b], bridge_dst[b], bridge_src[b]);
                     sqlite3_exec(db, del_sql, NULL, NULL, NULL);
                     free(bridge_src[b]);
                     free(bridge_dst[b]);
@@ -476,17 +487,18 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
                 free(bridge_dst);
 
                 /* Re-run Leiden on pruned edges */
-                for (int i = 0; i < n_entities; i++) cluster_map[i] = -1;
+                for (int i = 0; i < n_entities; i++)
+                    cluster_map[i] = -1;
                 next_cluster = 0;
 
                 sqlite3_stmt *leiden2;
                 rc = sqlite3_prepare_v2(db,
-                    "SELECT node, community_id FROM graph_leiden"
-                    " WHERE edge_table = '_er_edges'"
-                    "   AND src_col = 'src'"
-                    "   AND dst_col = 'dst'"
-                    "   AND weight_col = 'weight'",
-                    -1, &leiden2, NULL);
+                                        "SELECT node, community_id FROM graph_leiden"
+                                        " WHERE edge_table = '_er_edges'"
+                                        "   AND src_col = 'src'"
+                                        "   AND dst_col = 'dst'"
+                                        "   AND weight_col = 'weight'",
+                                        -1, &leiden2, NULL);
 
                 if (rc == SQLITE_OK) {
                     int *comm_remap2 = NULL, *comm_keys2 = NULL;
@@ -499,7 +511,10 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
                             if (strcmp(entities[i].entity_id, node) == 0) {
                                 int mapped = -1;
                                 for (int r = 0; r < n_remap2; r++) {
-                                    if (comm_keys2[r] == comm_id) { mapped = comm_remap2[r]; break; }
+                                    if (comm_keys2[r] == comm_id) {
+                                        mapped = comm_remap2[r];
+                                        break;
+                                    }
                                 }
                                 if (mapped < 0) {
                                     if (n_remap2 >= cap_remap2) {
@@ -523,7 +538,8 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
                 }
 
                 for (int i = 0; i < n_entities; i++)
-                    if (cluster_map[i] < 0) cluster_map[i] = next_cluster++;
+                    if (cluster_map[i] < 0)
+                        cluster_map[i] = next_cluster++;
             }
         }
     }
@@ -539,7 +555,8 @@ static void fn_extract_er(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
 
         pos += (size_t)snprintf(json + pos, buf_size - pos, "{\"clusters\":{");
         for (int i = 0; i < n_entities; i++) {
-            if (i > 0) json[pos++] = ',';
+            if (i > 0)
+                json[pos++] = ',';
             size_t key_len = json_escape(esc_buf, sizeof(esc_buf), entities[i].entity_id);
             /* Grow if needed */
             if (pos + key_len + 16 > buf_size) {
@@ -577,7 +594,6 @@ cleanup:
 /* ── Registration ────────────────────────────────────────────────── */
 
 int llama_er_register_functions(sqlite3 *db) {
-    return sqlite3_create_function(
-        db, "muninn_extract_er", -1, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
-        NULL, fn_extract_er, NULL, NULL);
+    return sqlite3_create_function(db, "muninn_extract_er", -1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL, fn_extract_er,
+                                   NULL, NULL);
 }

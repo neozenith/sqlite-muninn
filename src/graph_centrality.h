@@ -29,8 +29,6 @@ int centrality_register_tvfs(sqlite3 *db);
  *
  * Returns SQLITE_OK or SQLITE_NOMEM.
  */
-int brandes_compute(const GraphData *g, const char *direction,
-                    int auto_approx, int normalized,
-                    double *CB, double *EB);
+int brandes_compute(const GraphData *g, const char *direction, int auto_approx, int normalized, double *CB, double *EB);
 
 #endif /* GRAPH_CENTRALITY_H */

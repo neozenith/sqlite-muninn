@@ -13,11 +13,11 @@
         50000
       ],
       "y": [
-        589824.0,
-        2895872.0,
+        652697.6,
+        2758656.0,
         5783552.0,
         28909568.0,
-        57753600.0,
+        51450880.0,
         290832384.0
       ],
       "marker": {
@@ -32,6 +32,27 @@
       "legendgroup": "muninn_hnsw",
       "legendgrouptitle": {
         "text": "muninn-hnsw"
+      },
+      "error_y": {
+        "type": "data",
+        "symmetric": false,
+        "array": [
+          154214.40000000002,
+          137216.0,
+          0.0,
+          0.0,
+          38603776.0,
+          0.0
+        ],
+        "arrayminus": [
+          112025.59999999998,
+          137216.0,
+          0.0,
+          0.0,
+          49787904.0,
+          0.0
+        ],
+        "visible": true
       }
     },
     {
@@ -48,12 +69,12 @@
         100000
       ],
       "y": [
-        327680.0,
-        1601536.0,
+        391617.56097560975,
+        1875148.8,
         3203072.0,
         16125952.0,
-        32186368.0,
-        163045376.0,
+        46684842.666666664,
+        85800960.0,
         331563008.0
       ],
       "marker": {
@@ -68,6 +89,29 @@
       "legendgroup": "muninn_hnsw",
       "legendgrouptitle": {
         "text": "muninn-hnsw"
+      },
+      "error_y": {
+        "type": "data",
+        "symmetric": false,
+        "array": [
+          149054.43902439025,
+          1389363.2,
+          0.0,
+          0.0,
+          17659221.333333336,
+          77244416.0,
+          0.0
+        ],
+        "arrayminus": [
+          113089.56097560975,
+          978124.8,
+          0.0,
+          0.0,
+          14498474.666666664,
+          77244416.0,
+          0.0
+        ],
+        "visible": true
       }
     },
     {
@@ -84,11 +128,11 @@
         100000
       ],
       "y": [
-        536576.0,
-        2629632.0,
+        595918.0487804879,
+        2939172.5714285714,
         5279744.0,
         26361856.0,
-        52723712.0,
+        37346645.333333336,
         265748480.0,
         537030656.0
       ],
@@ -104,6 +148,29 @@
       "legendgroup": "muninn_hnsw",
       "legendgrouptitle": {
         "text": "muninn-hnsw"
+      },
+      "error_y": {
+        "type": "data",
+        "symmetric": false,
+        "array": [
+          149553.95121951215,
+          1332955.4285714286,
+          0.0,
+          0.0,
+          47436458.666666664,
+          0.0,
+          0.0
+        ],
+        "arrayminus": [
+          112590.04878048785,
+          579876.5714285714,
+          0.0,
+          0.0,
+          36969813.333333336,
+          0.0,
+          0.0
+        ],
+        "visible": true
       }
     },
     {
@@ -456,6 +523,27 @@
       "legendgroup": "vectorlite_hnsw",
       "legendgrouptitle": {
         "text": "vectorlite-hnsw"
+      },
+      "error_y": {
+        "type": "data",
+        "symmetric": false,
+        "array": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "arrayminus": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "visible": true
       }
     },
     {
@@ -492,6 +580,29 @@
       "legendgroup": "vectorlite_hnsw",
       "legendgrouptitle": {
         "text": "vectorlite-hnsw"
+      },
+      "error_y": {
+        "type": "data",
+        "symmetric": false,
+        "array": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "arrayminus": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "visible": true
       }
     },
     {
@@ -528,6 +639,29 @@
       "legendgroup": "vectorlite_hnsw",
       "legendgrouptitle": {
         "text": "vectorlite-hnsw"
+      },
+      "error_y": {
+        "type": "data",
+        "symmetric": false,
+        "array": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "arrayminus": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "visible": true
       }
     }
   ],

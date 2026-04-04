@@ -123,24 +123,27 @@ static char *clean_label(const char *raw) {
 
 /* ── VTab methods ────────────────────────────────────────────────── */
 
-static int lg_connect(sqlite3 *db, void *pAux, int argc, const char *const *argv,
-                      sqlite3_vtab **ppVtab, char **pzErr) {
-    (void)pAux; (void)argc; (void)argv; (void)pzErr;
-    int rc = sqlite3_declare_vtab(db,
-        "CREATE TABLE x("
-        "  group_id TEXT, label TEXT, member_count INTEGER,"
-        "  model TEXT HIDDEN,"
-        "  membership_table TEXT HIDDEN,"
-        "  group_col TEXT HIDDEN,"
-        "  member_col TEXT HIDDEN,"
-        "  min_group_size INTEGER HIDDEN,"
-        "  max_members_in_prompt INTEGER HIDDEN,"
-        "  system_prompt TEXT HIDDEN"
-        ")");
-    if (rc != SQLITE_OK) return rc;
+static int lg_connect(sqlite3 *db, void *pAux, int argc, const char *const *argv, sqlite3_vtab **ppVtab, char **pzErr) {
+    (void)pAux;
+    (void)argc;
+    (void)argv;
+    (void)pzErr;
+    int rc = sqlite3_declare_vtab(db, "CREATE TABLE x("
+                                      "  group_id TEXT, label TEXT, member_count INTEGER,"
+                                      "  model TEXT HIDDEN,"
+                                      "  membership_table TEXT HIDDEN,"
+                                      "  group_col TEXT HIDDEN,"
+                                      "  member_col TEXT HIDDEN,"
+                                      "  min_group_size INTEGER HIDDEN,"
+                                      "  max_members_in_prompt INTEGER HIDDEN,"
+                                      "  system_prompt TEXT HIDDEN"
+                                      ")");
+    if (rc != SQLITE_OK)
+        return rc;
 
     LGVtab *vtab = (LGVtab *)sqlite3_malloc(sizeof(LGVtab));
-    if (!vtab) return SQLITE_NOMEM;
+    if (!vtab)
+        return SQLITE_NOMEM;
     memset(vtab, 0, sizeof(LGVtab));
     vtab->db = db;
     *ppVtab = &vtab->base;
@@ -158,8 +161,10 @@ static int lg_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     int argv_idx = 1;
 
     for (int i = 0; i < pIdxInfo->nConstraint; i++) {
-        if (!pIdxInfo->aConstraint[i].usable) continue;
-        if (pIdxInfo->aConstraint[i].op != SQLITE_INDEX_CONSTRAINT_EQ) continue;
+        if (!pIdxInfo->aConstraint[i].usable)
+            continue;
+        if (pIdxInfo->aConstraint[i].op != SQLITE_INDEX_CONSTRAINT_EQ)
+            continue;
 
         int col = pIdxInfo->aConstraint[i].iColumn;
         if (col >= LG_COL_MODEL && col <= LG_COL_SYSTEM_PROMPT) {
@@ -177,7 +182,8 @@ static int lg_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
 static int lg_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
     (void)pVTab;
     LGCursor *cur = (LGCursor *)calloc(1, sizeof(LGCursor));
-    if (!cur) return SQLITE_NOMEM;
+    if (!cur)
+        return SQLITE_NOMEM;
     cur->eof = 1;
     *ppCursor = &cur->base;
     return SQLITE_OK;
@@ -190,8 +196,7 @@ static int lg_close(sqlite3_vtab_cursor *pCursor) {
     return SQLITE_OK;
 }
 
-static int lg_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr,
-                     int argc, sqlite3_value **argv) {
+static int lg_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr, int argc, sqlite3_value **argv) {
     (void)idxStr;
     LGCursor *cur = (LGCursor *)pCursor;
     LGVtab *vtab = (LGVtab *)pCursor->pVtab;
@@ -210,7 +215,8 @@ static int lg_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxSt
 
     int pos = 0;
     for (int bit = 0; bit < 7 && pos < argc; bit++) {
-        if (!(idxNum & (1 << bit))) continue;
+        if (!(idxNum & (1 << bit)))
+            continue;
         int col = bit + LG_COL_MODEL;
         switch (col) {
         case LG_COL_MODEL:
@@ -239,16 +245,15 @@ static int lg_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxSt
     }
 
     if (!model_name || !membership_table || !group_col || !member_col) {
-        vtab->base.zErrMsg = sqlite3_mprintf(
-            "muninn_label_groups: model, membership_table, group_col, and member_col are required");
+        vtab->base.zErrMsg =
+            sqlite3_mprintf("muninn_label_groups: model, membership_table, group_col, and member_col are required");
         cur->eof = 1;
         return SQLITE_ERROR;
     }
 
     /* Validate identifiers to prevent SQL injection */
     if (id_validate(membership_table) != 0 || id_validate(group_col) != 0 || id_validate(member_col) != 0) {
-        vtab->base.zErrMsg = sqlite3_mprintf(
-            "muninn_label_groups: invalid identifier in table/column names");
+        vtab->base.zErrMsg = sqlite3_mprintf("muninn_label_groups: invalid identifier in table/column names");
         cur->eof = 1;
         return SQLITE_ERROR;
     }
@@ -256,23 +261,20 @@ static int lg_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxSt
     /* Find the chat model */
     MuninnModelEntry *me = muninn_registry_find_type(model_name, MUNINN_MODEL_CHAT);
     if (!me) {
-        vtab->base.zErrMsg = sqlite3_mprintf(
-            "muninn_label_groups: model '%s' not loaded", model_name);
+        vtab->base.zErrMsg = sqlite3_mprintf("muninn_label_groups: model '%s' not loaded", model_name);
         cur->eof = 1;
         return SQLITE_ERROR;
     }
 
     /* Query: SELECT group_col, member_col FROM membership_table ORDER BY group_col, member_col */
     char sql[512];
-    snprintf(sql, sizeof(sql),
-        "SELECT [%s], [%s] FROM [%s] ORDER BY [%s], [%s]",
-        group_col, member_col, membership_table, group_col, member_col);
+    snprintf(sql, sizeof(sql), "SELECT [%s], [%s] FROM [%s] ORDER BY [%s], [%s]", group_col, member_col,
+             membership_table, group_col, member_col);
 
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(vtab->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        vtab->base.zErrMsg = sqlite3_mprintf(
-            "muninn_label_groups: %s", sqlite3_errmsg(vtab->db));
+        vtab->base.zErrMsg = sqlite3_mprintf("muninn_label_groups: %s", sqlite3_errmsg(vtab->db));
         cur->eof = 1;
         return SQLITE_ERROR;
     }
@@ -292,7 +294,8 @@ static int lg_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxSt
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const char *gid = (const char *)sqlite3_column_text(stmt, 0);
         const char *member = (const char *)sqlite3_column_text(stmt, 1);
-        if (!gid || !member) continue;
+        if (!gid || !member)
+            continue;
 
         if (!cur_group || strcmp(cur_group, gid) != 0) {
             /* New group */
@@ -325,33 +328,34 @@ static int lg_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxSt
 
     for (int gi = 0; gi < n_groups; gi++) {
         Group *g = &groups[gi];
-        if (g->count < min_group_size) continue;
+        if (g->count < min_group_size)
+            continue;
 
         /* Build prompt: list top N members */
         int prompt_size = 512 + g->count * 64;
         char *prompt = (char *)malloc((size_t)prompt_size);
         int ppos = 0;
 
-        ppos += snprintf(prompt + ppos, (size_t)(prompt_size - ppos),
-            "Group '%s' (%d members):\n", g->group_id, g->count);
+        ppos +=
+            snprintf(prompt + ppos, (size_t)(prompt_size - ppos), "Group '%s' (%d members):\n", g->group_id, g->count);
 
         int show = g->count < max_members ? g->count : max_members;
         for (int mi = 0; mi < show; mi++) {
-            ppos += snprintf(prompt + ppos, (size_t)(prompt_size - ppos),
-                "- %s\n", g->members[mi]);
+            ppos += snprintf(prompt + ppos, (size_t)(prompt_size - ppos), "- %s\n", g->members[mi]);
         }
         if (g->count > max_members) {
-            ppos += snprintf(prompt + ppos, (size_t)(prompt_size - ppos),
-                "- ...and %d others\n", g->count - max_members);
+            ppos +=
+                snprintf(prompt + ppos, (size_t)(prompt_size - ppos), "- ...and %d others\n", g->count - max_members);
         }
         ppos += snprintf(prompt + ppos, (size_t)(prompt_size - ppos),
-            "\nGenerate a concise label (3-8 words) for this group.");
+                         "\nGenerate a concise label (3-8 words) for this group.");
 
         /* Format with chat template, skip_think=1 */
         char *formatted = format_chat_messages(me, system_prompt, prompt, 1, NULL);
         free(prompt);
 
-        if (!formatted) continue;
+        if (!formatted)
+            continue;
 
         /* Generate */
         char errbuf[256];

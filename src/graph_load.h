@@ -67,10 +67,12 @@ void adj_add(GraphAdjList *adj, int target, double weight);
  * Add a weighted edge between two nodes (by index).
  * Adds to out[src] and optionally in[dst]. Increments edge_count.
  */
-static inline void graph_data_add_edge(GraphData *g, int src_idx, int dst_idx, double weight,
-                                       int add_forward, int add_reverse) {
-    if (add_forward) adj_add(&g->out[src_idx], dst_idx, weight);
-    if (add_reverse) adj_add(&g->in[dst_idx], src_idx, weight);
+static inline void graph_data_add_edge(GraphData *g, int src_idx, int dst_idx, double weight, int add_forward,
+                                       int add_reverse) {
+    if (add_forward)
+        adj_add(&g->out[src_idx], dst_idx, weight);
+    if (add_reverse)
+        adj_add(&g->in[dst_idx], src_idx, weight);
     g->edge_count++;
 }
 
