@@ -513,7 +513,7 @@ def cmd_prime(args: argparse.Namespace) -> None:
         time.sleep(poll_interval)
 
     # ── Create AMI from the stopped instance ──────────────────────
-    ami_name = f"muninn-bench-{safe_branch}-{commit_hash}-{launch_time.strftime('%Y%m%d')}"
+    ami_name = f"muninn-bench-{safe_branch}-{commit_hash}-{launch_time.strftime('%Y%m%d_%H%M')}"
     log.info("Creating AMI: %s", ami_name)
 
     ami_resp = ec2.create_image(
