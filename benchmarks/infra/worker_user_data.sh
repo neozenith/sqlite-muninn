@@ -51,6 +51,7 @@ HEARTBEAT_PID=$!
 
 # ── Cleanup on exit ───────────────────────────────────────────────
 _cleanup() {
+    local exit_code=$?
     echo "stopped" > "$CURRENT_PHASE_FILE"
     sleep 2
     kill "$HEARTBEAT_PID" 2>/dev/null || true
@@ -60,6 +61,10 @@ _cleanup() {
         --region "$S3_REGION" --no-cli-pager 2>/dev/null || true
     aws s3 rm "s3://${S3_BUCKET}/heartbeat/${INSTANCE_ID}.json" \
         --region "$S3_REGION" --no-cli-pager 2>/dev/null || true
+    # Always shut down — ensures the instance terminates even if the script
+    # exits abnormally (set -e crash, circuit breaker, etc.) instead of
+    # staying alive and burning cost with no worker running.
+    shutdown -h now 2>/dev/null || true
 }
 trap _cleanup EXIT
 
