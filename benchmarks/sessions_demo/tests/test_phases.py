@@ -11,7 +11,9 @@ from collections.abc import Generator
 
 import pytest
 
-from benchmarks.sessions_demo.cache import _derive_msg_kind
+from typing import Any
+
+from benchmarks.sessions_demo.cache import _compute_event_costs, _message_kind, model_family_from_id
 from benchmarks.sessions_demo.constants import (
     CHUNK_MAX_CHARS,
     CHUNK_MIN_CHARS,
@@ -197,33 +199,58 @@ def test_is_stale_true_when_table_missing() -> None:
 # ── Constants sanity checks ───────────────────────────────────────
 
 
-# ── _derive_msg_kind ─────────────────────────────────────────────
+# ── _message_kind ────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
-    "event_type,role,is_meta,first_block,content,expected",
+    "event_type,is_meta,content,expected",
     [
-        ("user", "user", False, "string", "hello", "human"),
-        ("user", "user", False, "text", None, "user_text"),
-        ("user", "user", True, "string", "injected", "meta"),
-        ("user", "user", False, "tool_result", None, "tool_result"),
-        ("user", "user", False, "string", "<task-notification>\n<task-id>x</task-id>", "task_notification"),
-        ("assistant", "assistant", False, "tool_use", None, "tool_use"),
-        ("assistant", "assistant", False, "text", None, "assistant_text"),
-        ("assistant", "assistant", False, "thinking", None, "thinking"),
-        ("progress", None, False, None, None, "other"),
-        ("system", None, False, None, None, "other"),
+        ("user", False, "hello", "human"),
+        ("user", False, [{"type": "text", "text": "hi"}], "user_text"),
+        ("user", True, "injected", "meta"),
+        ("user", False, [{"type": "tool_result", "content": "ok"}], "tool_result"),
+        ("user", False, "<task-notification>\n<task-id>x</task-id>", "task_notification"),
+        ("assistant", False, [{"type": "tool_use", "name": "Bash"}], "tool_use"),
+        ("assistant", False, [{"type": "text", "text": "answer"}], "assistant_text"),
+        ("assistant", False, [{"type": "thinking", "thinking": "pondering"}], "thinking"),
+        ("progress", False, None, "other"),
+        ("system", False, None, "other"),
     ],
 )
-def test_derive_msg_kind(
-    event_type: str,
-    role: str | None,
-    is_meta: bool,
-    first_block: str | None,
-    content: str | None,
-    expected: str,
-) -> None:
-    assert _derive_msg_kind(event_type, role, is_meta, first_block, content) == expected
+def test_message_kind(event_type: str, is_meta: bool, content: Any, expected: str) -> None:
+    assert _message_kind(event_type, is_meta, content) == expected
+
+
+# ── Cost helpers ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "model_id,expected",
+    [
+        ("claude-opus-4-6", "opus"),
+        ("claude-sonnet-4-6", "sonnet"),
+        ("claude-haiku-4-5-20251001", "haiku"),
+        ("gpt-4o", "unknown"),
+        (None, "unknown"),
+    ],
+)
+def test_model_family_from_id(model_id: str | None, expected: str) -> None:
+    assert model_family_from_id(model_id) == expected
+
+
+def test_compute_event_costs_sonnet_matches_formula() -> None:
+    # sonnet: input=3.0, output=15.0, cache_read=0.3, cache_write=3.75 per Mtok
+    rate, billable, cost = _compute_event_costs("claude-sonnet-4-6", 1000, 500, 2000, 400)
+    # billable = 1000 + 500*5 + 2000*0.1 + 400*1.25 = 1000 + 2500 + 200 + 500 = 4200
+    assert rate == 3.0
+    assert billable == pytest.approx(4200.0)
+    # cost = 4200 * 3.0 / 1e6 = 0.0126
+    assert cost == pytest.approx(0.0126, rel=1e-6)
+
+
+def test_compute_event_costs_unknown_model_returns_zero() -> None:
+    assert _compute_event_costs(None, 1000, 500, 2000, 400) == (0.0, 0.0, 0.0)
+    assert _compute_event_costs("gpt-4o", 1000, 500, 2000, 400) == (0.0, 0.0, 0.0)
 
 
 # ── Constants sanity checks ───────────────────────────────────────
