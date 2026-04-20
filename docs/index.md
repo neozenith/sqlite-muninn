@@ -17,6 +17,11 @@ _Odin fears losing Memory more than Thought._
 
 This project aims to build **agentic memory** and **knowledge graph** primitives for sqlite as a native C extension. It is an advanced collection of knowledge graph primitives like Vector Similarity Search, HNSW Indexes, Graph database, Community Detection, Node2Vec capabilities and loading GGUF models via llama.cpp integration.
 
+| Package Index | Published Version | Downloads | 
+|---|---|---|
+| PyPI | [![PyPI](https://img.shields.io/pypi/v/sqlite-muninn.svg)](https://pypi.org/project/sqlite-muninn/) | [![PyPI Downloads](https://img.shields.io/pypi/dm/sqlite-muninn.svg)](https://pypi.org/project/sqlite-muninn/) |
+| npm | [![npm](https://img.shields.io/npm/v/sqlite-muninn.svg)](https://www.npmjs.com/package/sqlite-muninn) | [![npm Downloads](https://img.shields.io/npm/dm/sqlite-muninn.svg)](https://www.npmjs.com/package/sqlite-muninn) |
+
 ## Features
 
 - **HNSW Vector Index** &mdash; O(log N) approximate nearest neighbor search with incremental insert/delete
