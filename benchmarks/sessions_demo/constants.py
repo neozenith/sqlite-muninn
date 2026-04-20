@@ -40,7 +40,7 @@ GGUF_EMBEDDING_DIM = 768
 # ── Schema version ───────────────────────────────────────────────
 # Bump this when the schema changes to trigger a rebuild.
 
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "10"
 
 # ── Chunking parameters ──────────────────────────────────────────
 # Chunk size is constrained by the smallest model window in the pipeline.

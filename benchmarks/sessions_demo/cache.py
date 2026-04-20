@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -166,6 +167,44 @@ CREATE INDEX IF NOT EXISTS idx_event_edges_forward ON event_edges(project_id, se
 CREATE INDEX IF NOT EXISTS idx_event_edges_reverse ON event_edges(project_id, session_id, parent_event_uuid);
 CREATE INDEX IF NOT EXISTS idx_event_edges_source_file ON event_edges(source_file_id);
 
+-- =====================================================================
+-- event_calls — raw fact table for tool/skill/subagent/cli/rule calls
+-- =====================================================================
+-- One row per observed "call" inside an event. An assistant message may
+-- carry N parallel tool_use blocks, a Bash command may invoke several
+-- CLI heads, and a user message may inject many <system-reminder> rule
+-- blocks — each contributes its own row.
+--
+-- call_type discriminator:
+--   'tool'        - generic tool_use (Read, Edit, Grep, Write, ...). Bash
+--                   also emits one 'tool' row plus N 'cli' rows.
+--   'skill'       - tool_use with name=="Skill"; call_name = input.skill
+--   'subagent'    - tool_use with name=="Agent"; call_name = input.subagent_type
+--   'cli'         - command head parsed from Bash input.command
+--   'rule'        - .claude/rules/... path parsed from <system-reminder> text
+--   'make_target' - target arg(s) parsed from `make <target> ...` segments
+--
+-- timestamp/project_id/session_id are denormalized off `events` so
+-- dashboard-style time/project filters don't need a join.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS event_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    ord INTEGER NOT NULL DEFAULT 0,
+    call_type TEXT NOT NULL CHECK (
+        call_type IN ('tool', 'skill', 'subagent', 'cli', 'rule', 'make_target')
+    ),
+    call_name TEXT NOT NULL,
+    timestamp TEXT,
+    project_id TEXT NOT NULL,
+    session_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_event_calls_event ON event_calls(event_id);
+CREATE INDEX IF NOT EXISTS idx_event_calls_type_name ON event_calls(call_type, call_name);
+CREATE INDEX IF NOT EXISTS idx_event_calls_timestamp ON event_calls(timestamp);
+CREATE INDEX IF NOT EXISTS idx_event_calls_project_session
+    ON event_calls(project_id, session_id);
+
 CREATE INDEX IF NOT EXISTS idx_source_files_project_session ON source_files(project_id, session_id);
 
 -- =====================================================================
@@ -278,6 +317,7 @@ class CacheManager:
         tables_to_clear = [
             "agg",
             "event_edges",
+            "event_calls",  # FK → events (must precede `events`)
             "events",
             "sessions",
             "projects",
@@ -314,6 +354,12 @@ class CacheManager:
         except sqlite3.OperationalError:
             pass
 
+        call_count = 0
+        try:
+            call_count = cursor.execute("SELECT COUNT(*) FROM event_calls").fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+
         created_at = cursor.execute("SELECT value FROM cache_metadata WHERE key = 'created_at'").fetchone()
         last_update = cursor.execute("SELECT value FROM cache_metadata WHERE key = 'last_update_at'").fetchone()
 
@@ -328,6 +374,7 @@ class CacheManager:
             "sessions": session_count,
             "events": event_count,
             "event_edges": edge_count,
+            "event_calls": call_count,
             "created_at": created_at[0] if created_at else None,
             "last_update_at": last_update[0] if last_update else None,
         }
@@ -528,6 +575,9 @@ class CacheManager:
                     event["raw_json"],
                 ),
             )
+            # Capture the rowid so the event_calls insert below can
+            # reference each event's primary key without a second lookup.
+            event["_db_id"] = cursor.lastrowid
 
         # Insert event edges for parent-child relationships
         for event in events_data:
@@ -543,6 +593,30 @@ class CacheManager:
                         event["uuid"],
                         event["parent_uuid"],
                         source_file_id,
+                    ),
+                )
+
+        # Fact-table rows for tool/skill/subagent/cli/rule calls. The calls
+        # list was attached during _parse_event_for_cache so we're just
+        # fanning out the already-parsed content-block signals here.
+        for event in events_data:
+            event_db_id = event.get("_db_id")
+            if not event_db_id:
+                continue
+            for ord_, call_type, call_name in event.get("_calls", ()):
+                cursor.execute(
+                    """INSERT INTO event_calls
+                       (event_id, ord, call_type, call_name,
+                        timestamp, project_id, session_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        event_db_id,
+                        ord_,
+                        call_type,
+                        call_name,
+                        event["timestamp"],
+                        project_id,
+                        detected_session_id,
                     ),
                 )
 
@@ -997,6 +1071,211 @@ def _message_kind(event_type: str, is_meta: bool, content: Any) -> str:
     return "other"
 
 
+# ── event_calls fact-table extraction ──────────────────────────────
+# Kept verbatim in sync with
+# .claude/skills/introspect/scripts/introspect_sessions.py — this module
+# is self-contained, so the helpers are duplicated rather than imported.
+
+_SYSTEM_REMINDER_RE = re.compile(
+    r"<system-reminder>(.*?)</system-reminder>",
+    re.DOTALL,
+)
+_RULE_PATH_RE = re.compile(r"Contents of\s+(/[^\s:'\"]+)")
+_SHELL_SPLIT_RE = re.compile(r"\|\||&&|;|\|")
+_CLI_WRAPPERS: frozenset[str] = frozenset({
+    "sudo", "time", "nohup", "exec", "xargs", "env", "command",
+})
+_SHELL_KEYWORDS_UNWRAP: frozenset[str] = frozenset({
+    "if", "elif", "then", "else", "do", "while", "until",
+})
+_SHELL_SEGMENT_REJECT: frozenset[str] = frozenset({
+    "for", "case", "in", "done", "fi", "esac",
+})
+_MAKE_FLAGS_WITH_ARG: frozenset[str] = frozenset({
+    "-C", "-f", "-I", "-j", "-l", "-o", "-W",
+})
+
+
+def _is_env_assignment(token: str) -> bool:
+    """True for tokens of the form ``NAME=value`` (valid env var assignment)."""
+    if "=" not in token or token.startswith("-") or token.startswith("="):
+        return False
+    name, _, _ = token.partition("=")
+    if not name:
+        return False
+    if not (name[0].isalpha() or name[0] == "_"):
+        return False
+    return all(c.isalnum() or c == "_" for c in name)
+
+
+def _segment_head_and_rest(tokens: list[str]) -> tuple[str, list[str]] | None:
+    """Skip env-var assignments and wrappers, return ``(head, rest)``."""
+    i = 0
+    while i < len(tokens) and _is_env_assignment(tokens[i]):
+        i += 1
+    # Reject bash control-structure segments (`for ... in ...`, `done`, `fi`).
+    if i < len(tokens) and tokens[i] in _SHELL_SEGMENT_REJECT:
+        return None
+    # Unwrap keywords that introduce a real command: `do cmd`, `then cmd`.
+    while i < len(tokens) and tokens[i] in _SHELL_KEYWORDS_UNWRAP:
+        i += 1
+    if i < len(tokens) and tokens[i] in _SHELL_SEGMENT_REJECT:
+        return None
+    while i < len(tokens) and tokens[i] in _CLI_WRAPPERS:
+        i += 1
+        while i < len(tokens) and tokens[i].startswith("-"):
+            i += 1
+        while i < len(tokens) and _is_env_assignment(tokens[i]):
+            i += 1
+    if i >= len(tokens):
+        return None
+    raw = tokens[i].lstrip("(")
+    raw = raw.rsplit("/", 1)[-1]
+    raw = raw.rstrip("();&")
+    if not raw:
+        return None
+    # Reject pure-punctuation heads (bare quotes, semicolons) that
+    # survived tokenisation of multi-line heredocs or `sh -c "..."` args.
+    if not any(c.isalnum() for c in raw):
+        return None
+    return raw, tokens[i + 1:]
+
+
+def _parse_cli_segments(command: str) -> list[tuple[str, list[str]]]:
+    """Parse a shell command into ``(head, post_head_tokens)`` segments."""
+    if not command:
+        return []
+    out: list[tuple[str, list[str]]] = []
+    for segment in _SHELL_SPLIT_RE.split(command):
+        tokens = segment.strip().split()
+        result = _segment_head_and_rest(tokens)
+        if result is not None:
+            out.append(result)
+    return out
+
+
+def _parse_cli_heads(command: str) -> list[str]:
+    """Return the program-name head(s) of each sub-command in a shell string."""
+    return [head for head, _rest in _parse_cli_segments(command)]
+
+
+def _is_shell_redirection(tok: str) -> bool:
+    """True for shell redirection / control tokens like ``2>&1``, ``&``, ``>log``."""
+    if not tok:
+        return False
+    first = tok[0]
+    if first in "<>&":
+        return True
+    if first.isdigit() and len(tok) > 1 and tok[1] in "<>":
+        return True
+    return False
+
+
+def _parse_make_targets(tokens_after_make: list[str]) -> list[str]:
+    """Extract target names from tokens appearing after ``make``."""
+    targets: list[str] = []
+    i = 0
+    while i < len(tokens_after_make):
+        tok = tokens_after_make[i]
+        if tok.startswith("--"):
+            i += 1
+            continue
+        if tok in _MAKE_FLAGS_WITH_ARG:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        if _is_env_assignment(tok):
+            i += 1
+            continue
+        if _is_shell_redirection(tok):
+            i += 1
+            continue
+        targets.append(tok)
+        i += 1
+    return targets
+
+
+def _extract_rule_paths(text: str) -> list[str]:
+    """Return every rule-file path cited in <system-reminder> blocks in ``text``."""
+    paths: list[str] = []
+    for reminder in _SYSTEM_REMINDER_RE.findall(text):
+        for match in _RULE_PATH_RE.finditer(reminder):
+            paths.append(match.group(1))
+    return paths
+
+
+def _extract_tool_use_calls(idx: int, block: dict[str, Any]) -> list[tuple[int, str, str]]:
+    """Rows for a single tool_use content block (tool/skill/subagent/cli)."""
+    name = block.get("name") or ""
+    raw_input = block.get("input")
+    inp: dict[str, Any] = raw_input if isinstance(raw_input, dict) else {}
+    rows: list[tuple[int, str, str]] = []
+
+    if name == "Skill":
+        skill_val = inp.get("skill")
+        skill = skill_val.strip() if isinstance(skill_val, str) else ""
+        if skill:
+            rows.append((idx, "skill", skill))
+        else:
+            rows.append((idx, "tool", name))
+        return rows
+
+    if name == "Agent":
+        subagent_val = inp.get("subagent_type")
+        subagent = subagent_val.strip() if isinstance(subagent_val, str) else ""
+        if subagent:
+            rows.append((idx, "subagent", subagent))
+        else:
+            rows.append((idx, "tool", name))
+        return rows
+
+    if name:
+        rows.append((idx, "tool", name))
+
+    if name == "Bash":
+        command_val = inp.get("command")
+        command = command_val if isinstance(command_val, str) else ""
+        # One 'cli' row per segment head; additionally emit 'make_target'
+        # rows when the head is `make` so we can slice "what targets does
+        # this project build most" separately from "how often was make
+        # invoked at all".
+        for head, rest in _parse_cli_segments(command):
+            rows.append((idx, "cli", head))
+            if head == "make":
+                for target in _parse_make_targets(rest):
+                    rows.append((idx, "make_target", target))
+
+    return rows
+
+
+def _extract_calls(raw: dict[str, Any]) -> list[tuple[int, str, str]]:
+    """Return (ord, call_type, call_name) rows for an event's signals.
+
+    Six discriminators — tool, skill, subagent, cli, rule, make_target —
+    produced from message.content[] tool_use blocks and embedded
+    <system-reminder> text.
+    """
+    calls: list[tuple[int, str, str]] = []
+    message = raw.get("message") if isinstance(raw, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return calls
+
+    for idx, block in enumerate(content):
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "tool_use":
+            calls.extend(_extract_tool_use_calls(idx, block))
+        elif block_type == "text":
+            text = block.get("text") or ""
+            for path in _extract_rule_paths(text):
+                calls.append((idx, "rule", path))
+    return calls
+
+
 def _parse_event_for_cache(
     raw: dict[str, Any],
     project_id: str,
@@ -1087,4 +1366,8 @@ def _parse_event_for_cache(
         # payload is the JSONL file on disk (source_files.filepath + line_number).
         # Storing a duplicate copy costs 2+ GB and leaks thinking-block signatures.
         "raw_json": "",
+        # Fact-table rows for tool/skill/subagent/cli/rule calls. Parsed
+        # once here so ingest_file() can fan them out to event_calls
+        # after the event row's primary key is known.
+        "_calls": _extract_calls(raw),
     }
