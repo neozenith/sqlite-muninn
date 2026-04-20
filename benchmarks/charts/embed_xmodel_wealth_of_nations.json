@@ -53,10 +53,12 @@
       "mode": "lines+markers",
       "name": "lembed + sqlite-vec-brute / MiniLM",
       "x": [
-        100
+        100,
+        500
       ],
       "y": [
-        2.529
+        2.529,
+        16.95
       ],
       "marker": {
         "color": "hsl(50, 85%, 58%)",

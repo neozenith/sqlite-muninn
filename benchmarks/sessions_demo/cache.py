@@ -634,9 +634,9 @@ class CacheManager:
     # ------------------------------------------------------------------
 
     _AGG_BUCKET_EXPRS: dict[str, str] = {
-        "hourly":  "strftime('%Y-%m-%dT%H:00:00', timestamp)",
-        "daily":   "date(timestamp)",
-        "weekly":  "date(timestamp, 'weekday 0', '-6 days')",
+        "hourly": "strftime('%Y-%m-%dT%H:00:00', timestamp)",
+        "daily": "date(timestamp)",
+        "weekly": "date(timestamp, 'weekday 0', '-6 days')",
         "monthly": "strftime('%Y-%m-01', timestamp)",
     }
 

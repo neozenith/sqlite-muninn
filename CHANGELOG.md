@@ -67,6 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prime auto-suspends ASG scaling, resumes after AMI creation
 - Add diagnose subcommand to runner.py
 
+### Miscellaneous
+
+- Update llama.cpp submodule to latest
+
 ### Other
 
 - Update plan docs
@@ -99,6 +103,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Address ci fixes
 - Remove unneeded examples
 - Consolidate aggregate tables
+- Add packaging badges. remove cruft docs plans
+- Update docs
 
 ### Refactor
 

@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Generator
+from typing import Any
 
 import pytest
-
-from typing import Any
 
 from benchmarks.sessions_demo.cache import _compute_event_costs, _message_kind, model_family_from_id
 from benchmarks.sessions_demo.constants import (
