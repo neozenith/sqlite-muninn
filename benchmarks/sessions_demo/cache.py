@@ -1082,18 +1082,49 @@ _SYSTEM_REMINDER_RE = re.compile(
 )
 _RULE_PATH_RE = re.compile(r"Contents of\s+(/[^\s:'\"]+)")
 _SHELL_SPLIT_RE = re.compile(r"\|\||&&|;|\|")
-_CLI_WRAPPERS: frozenset[str] = frozenset({
-    "sudo", "time", "nohup", "exec", "xargs", "env", "command",
-})
-_SHELL_KEYWORDS_UNWRAP: frozenset[str] = frozenset({
-    "if", "elif", "then", "else", "do", "while", "until",
-})
-_SHELL_SEGMENT_REJECT: frozenset[str] = frozenset({
-    "for", "case", "in", "done", "fi", "esac",
-})
-_MAKE_FLAGS_WITH_ARG: frozenset[str] = frozenset({
-    "-C", "-f", "-I", "-j", "-l", "-o", "-W",
-})
+_CLI_WRAPPERS: frozenset[str] = frozenset(
+    {
+        "sudo",
+        "time",
+        "nohup",
+        "exec",
+        "xargs",
+        "env",
+        "command",
+    }
+)
+_SHELL_KEYWORDS_UNWRAP: frozenset[str] = frozenset(
+    {
+        "if",
+        "elif",
+        "then",
+        "else",
+        "do",
+        "while",
+        "until",
+    }
+)
+_SHELL_SEGMENT_REJECT: frozenset[str] = frozenset(
+    {
+        "for",
+        "case",
+        "in",
+        "done",
+        "fi",
+        "esac",
+    }
+)
+_MAKE_FLAGS_WITH_ARG: frozenset[str] = frozenset(
+    {
+        "-C",
+        "-f",
+        "-I",
+        "-j",
+        "-l",
+        "-o",
+        "-W",
+    }
+)
 
 
 def _is_env_assignment(token: str) -> bool:
@@ -1138,7 +1169,7 @@ def _segment_head_and_rest(tokens: list[str]) -> tuple[str, list[str]] | None:
     # survived tokenisation of multi-line heredocs or `sh -c "..."` args.
     if not any(c.isalnum() for c in raw):
         return None
-    return raw, tokens[i + 1:]
+    return raw, tokens[i + 1 :]
 
 
 def _parse_cli_segments(command: str) -> list[tuple[str, list[str]]]:
