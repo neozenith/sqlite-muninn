@@ -9,12 +9,30 @@ over the demos manifest plus whatever per-database queries we add over time.
 
 ## Current Scope
 
-- **Backend** (`server/`): `GET /api/health`, `GET /api/databases`, `GET /api/databases/{id}`
-- **Frontend** (`frontend/src/`):
-  - `/` — lists all databases from the manifest
-  - `/:databaseId/` — database detail page (single-database context)
-- **Demo assets**: `viz/frontend/public/demos/manifest.json` is the source of
-  truth. Adding a new DB is a manifest edit, not a code change.
+**Backend** (`server/`):
+- `GET /api/health`
+- `GET /api/databases` — list manifest entries
+- `GET /api/databases/{id}` — one manifest entry
+- `GET /api/databases/{id}/tables` — discover which embed/kg tables exist
+- `GET /api/databases/{id}/embed/{table_id}` — 3D UMAP points
+  (`table_id ∈ {chunks, entities}`)
+- `GET /api/databases/{id}/kg/{table_id}?resolution=X&top_n=N` — KG payload
+  with nodes + edges + communities (`table_id ∈ {base, er}`).
+  Default `top_n=500` — full KG can exceed 6K nodes which makes Cytoscape
+  fcose layout unusable; the `total_node_count` / `total_edge_count` fields
+  expose the full size for UI banners.
+
+**Frontend** (`frontend/src/`):
+- `/` — list all databases from the manifest
+- `/:databaseId/` — database detail + links to per-database viz tables
+- `/:databaseId/embed/:tableId/` — Deck.GL 3D UMAP scatter (tableId=chunks|entities)
+- `/:databaseId/kg/:tableId/` — Cytoscape with compound community parents
+  (tableId=base|er)
+
+**Demo assets**: `viz/frontend/public/demos/manifest.json` is the source of
+truth. Adding a new DB is a manifest edit, not a code change. Per-database
+`*.db` files contain the HNSW shadow tables, UMAP coords, Leiden
+communities, and entity resolution clusters.
 
 ## Build & Dev
 
@@ -74,23 +92,48 @@ lexicographically sorted by slug.
 ### Slug naming convention
 
 ```
-S{section_id}_{SECTION_SLUG}-D{database_id}_{DATABASE_SLUG}.png
+S{section_id}_{SECTION_SLUG}[-D{db_id}_{DB_SLUG}][-T{table_id}_{TABLE_SLUG}].png
 ```
 
-- `S{id}` — two-digit zero-padded section ID. `00_HOME` for `/`,
-  `01_DATABASE` for `/:databaseId/`.
-- `D{id}` — two-digit zero-padded database ID, or `NA` for routes that don't
-  take a database. Database slugs come from `manifest.json` (`id` field,
-  uppercased).
+- `S{id}` — two-digit zero-padded section ID. Current sections:
+  - `00_HOME` (`/`) — no DB, no table
+  - `01_DATABASE` (`/:databaseId/`) — DB only
+  - `02_EMBED` (`/:databaseId/embed/:tableId/`) — DB + table (chunks/entities)
+  - `03_KG` (`/:databaseId/kg/:tableId/`) — DB + table (base/er)
+- `D{id}` — two-digit zero-padded database index (or `NA`). Database slugs
+  come from `manifest.json` (`id` field, uppercased).
+- `T{id}` — two-digit zero-padded table index (or omitted). Table slugs:
+  `CHUNKS`/`ENTITIES` for embed, `BASE`/`ER` for kg.
 
 Examples:
-
-- `S00_HOME-DNA.png` — homepage, no database in URL
+- `S00_HOME-DNA.png` — homepage
 - `S01_DATABASE-D00_3300_MINILM.png` — `/3300_MiniLM/`
-- `S01_DATABASE-D01_3300_NOMICEMBED.png` — `/3300_NomicEmbed/`
+- `S02_EMBED-D00_3300_MINILM-T00_CHUNKS.png` — `/3300_MiniLM/embed/chunks/`
+- `S03_KG-D03_39653_NOMICEMBED-T01_ER.png` — `/39653_NomicEmbed/kg/er/`
 
 Zero-padding + uppercase keeps `ls e2e-screenshots/` in the order a human
-would expect: all S00 screenshots together, then all S01 grouped by database.
+would expect: all S00 first, then all S01 grouped by DB, then S02 grouped
+by DB + embed table, then S03 grouped by DB + kg table.
+
+When a new axis appears (filter, tab), extend the slug schema alphabetically:
+`S-D-T-F-V`. Never reorder existing axes — that breaks screenshot diff
+comparisons across commits.
+
+### Canvas-ready testids for async viz pages
+
+Deck.GL and Cytoscape mount asynchronously. E2E waits on dedicated testids
+that expose the data population as attributes so tests can assert both
+"rendered" and "rendered with expected data":
+
+| Page | `data-testid` | Attributes |
+|------|---------------|-----------|
+| EmbedPage | `embed-canvas-ready` | `data-point-count` |
+| KGPage | `kg-canvas-ready` | `data-node-count`, `data-edge-count`, `data-community-count` |
+
+Ready semantics: "Cytoscape mounted + initial grid layout landed" rather
+than "fcose layout converged". On the full 5K-6K-node KG, fcose can take
+minutes — running it as a background refinement after the initial paint
+keeps E2E fast and the UI interactive during refinement.
 
 ### Sitemap as data
 

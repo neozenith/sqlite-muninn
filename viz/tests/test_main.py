@@ -1,5 +1,6 @@
 """HTTP-level tests for the FastAPI app."""
 
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -87,3 +88,112 @@ def test_get_database_with_slash_in_id_is_not_matched(client: TestClient) -> Non
     """FastAPI's path resolver shouldn't match `/databases/a/b` to /databases/{id}."""
     response = client.get("/api/databases/3300_MiniLM/extra")
     assert response.status_code == 404
+
+
+# ── Tables discovery, embed, kg (real demo DB integration) ──────────────
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEMOS_DIR = PROJECT_ROOT / "viz" / "frontend" / "public" / "demos"
+SAMPLE_DB_ID = "3300_MiniLM"
+
+HAS_DEMO = (DEMOS_DIR / f"{SAMPLE_DB_ID}.db").exists()
+
+
+@pytest.fixture
+def real_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
+    """TestClient pointed at the real demos directory (needs the muninn extension)."""
+    monkeypatch.setenv("MUNINN_DEMOS_DIR", str(DEMOS_DIR))
+    app.dependency_overrides[get_demos_dir] = lambda: DEMOS_DIR
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_tables_discovery(real_client: TestClient) -> None:
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/tables")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["database_id"] == SAMPLE_DB_ID
+    assert set(body["embed_tables"]) == {"chunks", "entities"}
+    assert set(body["kg_tables"]) == {"base", "er"}
+    assert 0.25 in body["resolutions"]
+
+
+def test_tables_discovery_missing_db_is_404(real_client: TestClient) -> None:
+    response = real_client.get("/api/databases/not_a_real_db/tables")
+    assert response.status_code == 404
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_embed_endpoint_chunks(real_client: TestClient) -> None:
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/embed/chunks")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["table_id"] == "chunks"
+    assert body["count"] > 0
+    first = body["points"][0]
+    assert set(first.keys()) >= {"id", "x", "y", "z", "label", "category"}
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_embed_endpoint_entities(real_client: TestClient) -> None:
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/embed/entities")
+    assert response.status_code == 200
+    assert response.json()["count"] > 0
+
+
+def test_embed_endpoint_invalid_table_400(real_client: TestClient) -> None:
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/embed/bogus")
+    assert response.status_code == 400
+
+
+def test_embed_endpoint_unknown_db_404(real_client: TestClient) -> None:
+    response = real_client.get("/api/databases/not_a_real_db/embed/chunks")
+    assert response.status_code == 404
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_kg_endpoint_base(real_client: TestClient) -> None:
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["table_id"] == "base"
+    assert body["resolution"] == 0.25
+    assert body["node_count"] > 0
+    assert body["edge_count"] > 0
+    assert body["community_count"] > 0
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_kg_endpoint_er(real_client: TestClient) -> None:
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/er")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["table_id"] == "er"
+    assert body["node_count"] > 0
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_kg_endpoint_resolution_override(real_client: TestClient) -> None:
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base?resolution=1.0")
+    assert response.status_code == 200
+    assert response.json()["resolution"] == 1.0
+
+
+def test_kg_endpoint_invalid_table_400(real_client: TestClient) -> None:
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/bogus")
+    assert response.status_code == 400
+
+
+def test_kg_endpoint_unknown_db_404(real_client: TestClient) -> None:
+    response = real_client.get("/api/databases/not_a_real_db/kg/base")
+    assert response.status_code == 404
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_kg_endpoint_invalid_resolution_400(real_client: TestClient) -> None:
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base?resolution=42.0")
+    assert response.status_code == 400

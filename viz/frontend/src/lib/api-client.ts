@@ -20,6 +20,67 @@ export interface HealthResponse {
   status: string
 }
 
+/** Which viz tables are available for a specific database. */
+export interface TablesResponse {
+  database_id: string
+  embed_tables: string[]
+  kg_tables: string[]
+  resolutions: number[]
+}
+
+/** A single point in the 3D UMAP space. */
+export interface EmbedPoint {
+  id: number
+  x: number
+  y: number
+  z: number
+  label: string
+  category: string | null
+}
+
+export interface EmbedPayload {
+  table_id: string
+  count: number
+  points: EmbedPoint[]
+}
+
+export interface KGNode {
+  id: string
+  label: string
+  entity_type: string | null
+  community_id: number | null
+  mention_count: number | null
+}
+
+export interface KGEdge {
+  source: string
+  target: string
+  rel_type: string | null
+  weight: number | null
+}
+
+export interface KGCommunity {
+  id: number
+  label: string | null
+  member_count: number
+  node_ids: string[]
+}
+
+export interface KGPayload {
+  table_id: string
+  resolution: number
+  node_count: number
+  edge_count: number
+  community_count: number
+  /** Total nodes in the DB before top-N filtering (>= node_count). */
+  total_node_count: number
+  /** Total edges in the DB before top-N filtering (>= edge_count). */
+  total_edge_count: number
+  nodes: KGNode[]
+  edges: KGEdge[]
+  communities: KGCommunity[]
+}
+
 /**
  * Thrown on any non-2xx response. `status` is the HTTP code, `body` is the
  * response body (usually `{"detail": "..."}` from FastAPI).
@@ -64,4 +125,38 @@ export async function fetchDatabases(): Promise<DatabaseInfo[]> {
  */
 export async function fetchDatabase(id: string): Promise<DatabaseInfo> {
   return getJson<DatabaseInfo>(`/databases/${encodeURIComponent(id)}`)
+}
+
+/** GET /api/databases/:id/tables — which viz tables exist for this database. */
+export async function fetchTables(id: string): Promise<TablesResponse> {
+  return getJson<TablesResponse>(`/databases/${encodeURIComponent(id)}/tables`)
+}
+
+/**
+ * GET /api/databases/:id/embed/:table_id — 3D UMAP points for Deck.GL.
+ * `tableId` is one of {'chunks', 'entities'}.
+ */
+export async function fetchEmbed(
+  databaseId: string,
+  tableId: string,
+): Promise<EmbedPayload> {
+  return getJson<EmbedPayload>(
+    `/databases/${encodeURIComponent(databaseId)}/embed/${encodeURIComponent(tableId)}`,
+  )
+}
+
+/**
+ * GET /api/databases/:id/kg/:table_id — KG payload for Cytoscape.
+ * `tableId` is one of {'base', 'er'}. Optional `resolution` picks a Leiden
+ * resolution from the ones the DB was built with.
+ */
+export async function fetchKG(
+  databaseId: string,
+  tableId: string,
+  resolution?: number,
+): Promise<KGPayload> {
+  const query = resolution !== undefined ? `?resolution=${resolution}` : ''
+  return getJson<KGPayload>(
+    `/databases/${encodeURIComponent(databaseId)}/kg/${encodeURIComponent(tableId)}${query}`,
+  )
 }

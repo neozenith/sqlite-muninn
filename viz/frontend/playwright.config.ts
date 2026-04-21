@@ -34,7 +34,21 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        // WebGL args for Deck.GL to initialize in headless Chromium.
+        // `use-gl=angle` + `angle=swiftshader` gives us a working software
+        // rasterizer; `ignore-gpu-blocklist` skips the sandbox-based refusal
+        // that headless chrome otherwise applies on Linux CI.
+        launchOptions: {
+          args: [
+            '--enable-webgl',
+            '--use-gl=angle',
+            '--use-angle=swiftshader',
+            '--ignore-gpu-blocklist',
+          ],
+        },
+      },
     },
   ],
 

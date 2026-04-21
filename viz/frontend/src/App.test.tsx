@@ -47,7 +47,19 @@ describe('App', () => {
   })
 
   test('database route renders the detail page', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(SAMPLE_DBS[0]))
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/tables')) {
+        return Promise.resolve(
+          jsonResponse({
+            database_id: '3300_MiniLM',
+            embed_tables: ['chunks'],
+            kg_tables: ['base'],
+            resolutions: [0.25],
+          }),
+        )
+      }
+      return Promise.resolve(jsonResponse(SAMPLE_DBS[0]))
+    })
     render(
       <MemoryRouter initialEntries={['/3300_MiniLM/']}>
         <App />

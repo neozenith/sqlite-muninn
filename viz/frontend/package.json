@@ -16,8 +16,15 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@deck.gl/core": "^9.3.1",
+    "@deck.gl/layers": "^9.3.1",
+    "@deck.gl/react": "^9.3.1",
     "@tailwindcss/vite": "^4.1.18",
+    "cytoscape": "^3.33.2",
+    "cytoscape-fcose": "^2.2.0",
+    "deck.gl": "^9.3.1",
     "react": "^19.2.0",
+    "react-cytoscapejs": "^2.0.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.0",
     "tailwindcss": "^4.1.18"
@@ -27,6 +34,7 @@
     "@playwright/test": "^1.58.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@types/cytoscape": "^3.21.9",
     "@types/node": "^24.10.13",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",

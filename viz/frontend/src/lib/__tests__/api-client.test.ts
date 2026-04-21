@@ -2,9 +2,15 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
   ApiError,
   type DatabaseInfo,
+  type EmbedPayload,
+  type KGPayload,
+  type TablesResponse,
   fetchDatabase,
   fetchDatabases,
+  fetchEmbed,
   fetchHealth,
+  fetchKG,
+  fetchTables,
 } from '../api-client'
 
 const SAMPLE_DB: DatabaseInfo = {
@@ -121,6 +127,125 @@ describe('api-client', () => {
       expect(err).toBeInstanceOf(ApiError)
       expect((err as ApiError).status).toBe(500)
       expect((err as ApiError).body).toBe('')
+    })
+  })
+
+  describe('fetchTables', () => {
+    test('returns the discovery payload', async () => {
+      const body: TablesResponse = {
+        database_id: '3300_MiniLM',
+        embed_tables: ['chunks', 'entities'],
+        kg_tables: ['base', 'er'],
+        resolutions: [0.25, 1.0, 3.0],
+      }
+      fetchMock.mockResolvedValueOnce(makeResponse(body))
+      const result = await fetchTables('3300_MiniLM')
+      expect(result).toEqual(body)
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/3300_MiniLM/tables')
+    })
+
+    test('encodes the database id', async () => {
+      fetchMock.mockResolvedValueOnce(
+        makeResponse({
+          database_id: 'weird/id',
+          embed_tables: [],
+          kg_tables: [],
+          resolutions: [],
+        }),
+      )
+      await fetchTables('weird/id')
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/weird%2Fid/tables')
+    })
+
+    test('propagates ApiError on 404', async () => {
+      fetchMock.mockResolvedValueOnce(makeResponse({ detail: 'nope' }, { status: 404 }))
+      await expect(fetchTables('x')).rejects.toBeInstanceOf(ApiError)
+    })
+  })
+
+  describe('fetchEmbed', () => {
+    test('returns the embed payload for a valid table', async () => {
+      const body: EmbedPayload = {
+        table_id: 'chunks',
+        count: 2,
+        points: [
+          { id: 1, x: 0.1, y: 0.2, z: 0.3, label: 'chunk 1', category: null },
+          { id: 2, x: 1.1, y: 1.2, z: 1.3, label: 'chunk 2', category: null },
+        ],
+      }
+      fetchMock.mockResolvedValueOnce(makeResponse(body))
+      const result = await fetchEmbed('3300_MiniLM', 'chunks')
+      expect(result.count).toBe(2)
+      expect(result.points[0].x).toBe(0.1)
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/3300_MiniLM/embed/chunks')
+    })
+
+    test('throws ApiError on 400 (invalid table)', async () => {
+      fetchMock.mockResolvedValueOnce(
+        makeResponse({ detail: 'invalid table' }, { status: 400 }),
+      )
+      await expect(fetchEmbed('3300_MiniLM', 'bogus')).rejects.toMatchObject({ status: 400 })
+    })
+
+    test('URL-encodes both ids', async () => {
+      fetchMock.mockResolvedValueOnce(
+        makeResponse({ table_id: 'x', count: 0, points: [] }),
+      )
+      await fetchEmbed('weird/db', 'weird/table')
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/databases/weird%2Fdb/embed/weird%2Ftable',
+      )
+    })
+  })
+
+  describe('fetchKG', () => {
+    test('returns the KG payload without resolution query', async () => {
+      const body: KGPayload = {
+        table_id: 'base',
+        resolution: 0.25,
+        node_count: 1,
+        edge_count: 0,
+        community_count: 1,
+        total_node_count: 1,
+        total_edge_count: 0,
+        nodes: [
+          { id: 'a', label: 'a', entity_type: null, community_id: 0, mention_count: 1 },
+        ],
+        edges: [],
+        communities: [{ id: 0, label: null, member_count: 1, node_ids: ['a'] }],
+      }
+      fetchMock.mockResolvedValueOnce(makeResponse(body))
+      const result = await fetchKG('3300_MiniLM', 'base')
+      expect(result.resolution).toBe(0.25)
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/3300_MiniLM/kg/base')
+    })
+
+    test('appends the resolution query string when provided', async () => {
+      fetchMock.mockResolvedValueOnce(
+        makeResponse({
+          table_id: 'base',
+          resolution: 1.0,
+          node_count: 0,
+          edge_count: 0,
+          community_count: 0,
+          total_node_count: 0,
+          total_edge_count: 0,
+          nodes: [],
+          edges: [],
+          communities: [],
+        }),
+      )
+      await fetchKG('3300_MiniLM', 'base', 1.0)
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/databases/3300_MiniLM/kg/base?resolution=1',
+      )
+    })
+
+    test('throws ApiError on 422 (missing tables)', async () => {
+      fetchMock.mockResolvedValueOnce(
+        makeResponse({ detail: 'nodes table missing' }, { status: 422 }),
+      )
+      await expect(fetchKG('x', 'base')).rejects.toMatchObject({ status: 422 })
     })
   })
 })

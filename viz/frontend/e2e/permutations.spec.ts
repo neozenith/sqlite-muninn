@@ -1,5 +1,5 @@
 /**
- * Permutation coverage — one test per (section × database) tuple.
+ * Permutation coverage — one test per (section × database × table) tuple.
  *
  * Every test follows the same checklist:
  *   1. Navigate to the URL
@@ -9,8 +9,7 @@
  *   5. Assert zero console errors (after noise filtering)
  *
  * The whole body is wrapped in try/finally so {slug}.log and
- * {slug}.network.json are flushed even when the test fails — post-mortem
- * telemetry is most valuable exactly when the test didn't pass.
+ * {slug}.network.json are flushed even when the test fails.
  *
  * See viz/CLAUDE.md § "E2E Testing Pattern" for the full spec.
  */
@@ -20,18 +19,22 @@ import { allPermutations, permutationLabel, screenshotSlug } from './helpers/sit
 import { waitForPageLoad } from './helpers/wait'
 
 for (const permutation of allPermutations()) {
-  const { section, database } = permutation
+  const { section, database, table } = permutation
+  const slug = screenshotSlug(section, database, table)
+  const label = permutationLabel(permutation)
 
-  test(permutationLabel(permutation), async ({ page }) => {
+  test(label, async ({ page }) => {
+    // fcose layout on a 6K-node KG can take ~30-60s — per-section override.
+    test.setTimeout(Math.max(90000, section.loadTimeoutMs + 30000))
+
     const io = collectTestIO(page)
-    const slug = screenshotSlug(section, database)
 
     try {
-      await page.goto(section.pathFor(database))
+      await page.goto(section.pathFor(database, table))
       await waitForPageLoad(page)
 
-      await expect(page.getByTestId(section.loadedTestId(database))).toBeVisible({
-        timeout: 10000,
+      await expect(page.getByTestId(section.loadedTestId)).toHaveCount(1, {
+        timeout: section.loadTimeoutMs,
       })
 
       await page.screenshot({ path: `${io.outputDir}/${slug}.png`, fullPage: true })
