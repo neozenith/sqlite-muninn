@@ -509,14 +509,15 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for Trusted Publishing
-        # Pin to npm 11 (not @latest) — `npm install -g npm@latest` has intermittently
-        # shipped broken installs missing bundled deps (e.g. promise-retry). Trusted
-        # Publishing support landed in 11.5.x, so the 11.x major line is safe.
-        run: npm install -g npm@11
+        # Node 24 ships an npm that's new enough for Trusted Publishing (npm 11.5.1+).
+        # Avoid `npm install -g npm@...` — see actions/runner-images#13883 where the
+        # Node 22.22.2 toolcache shipped a broken npm whose self-upgrade crashed on a
+        # missing `promise-retry`. Node 24's bundled npm sidesteps that class of bug.
+        run: npm --version
 
       - name: Generate npm sub-packages
         run: python3 scripts/generate_build.py npm
