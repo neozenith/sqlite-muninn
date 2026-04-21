@@ -27,7 +27,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.22
         with:
           key: ubuntu-22.04
           max-size: 200M
@@ -73,7 +73,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.22
         with:
           key: ubuntu-22.04-arm
           max-size: 200M
@@ -164,7 +164,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.22
         with:
           key: macos-arm64
           max-size: 200M
@@ -194,7 +194,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.22
         with:
           key: macos-x86_64
           max-size: 200M
@@ -297,7 +297,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.22
         with:
           key: wasm
           max-size: 200M
