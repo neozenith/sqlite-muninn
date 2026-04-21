@@ -22,7 +22,7 @@ compatibility: >
   `pip install sqlite-rembed` (API embeddings).
 metadata:
   author: joshpeak
-  version: "0.3.1"
+  version: "0.3.2"
   repository: https://github.com/user/sqlite-muninn
 allowed-tools: Bash(sqlite3:*), Bash(python:*), Bash(node:*)
 ---

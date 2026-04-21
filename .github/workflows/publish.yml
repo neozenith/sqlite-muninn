@@ -2,23 +2,41 @@ name: Publish
 
 on:
   release:
-    types: [published]
-
-
+    types: [created]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # ── Guard: enforce draft-only release flow ──────────────
+  # Immutable releases (enabled for supply-chain integrity) blocks asset
+  # upload once a release is published. We sidestep this by uploading only
+  # while the release is still a draft. A non-draft release fails fast here
+  # with a clear error message before wasting compute on builds.
+  precheck:
+    runs-on: ubuntu-latest
+    name: Verify release is a draft
+    steps:
+      - name: Fail if release is not a draft
+        if: github.event.release.draft != true
+        run: |
+          echo "::error::Release '${{ github.event.release.tag_name }}' is NOT a draft."
+          echo "::error::Asset upload fails against a published release (immutable)."
+          echo "::error::Delete this release, draft a new one using 'Save draft' (NOT 'Publish'),"
+          echo "::error::wait for this workflow to attach the assets, then click 'Publish release'."
+          exit 1
+
   # ── Linux x86_64 ─────────────────────────────────────────
   linux-x64:
+    needs: precheck
     runs-on: ubuntu-22.04
     name: Build (linux-x86_64)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.target_commitish }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -59,12 +77,14 @@ jobs:
 
   # ── Linux ARM64 ──────────────────────────────────────────
   linux-arm64:
+    needs: precheck
     runs-on: ubuntu-22.04-arm
     name: Build (linux-arm64)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.target_commitish }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -105,12 +125,14 @@ jobs:
 
   # ── Windows x86_64 ──────────────────────────────────────
   windows-x64:
+    needs: precheck
     runs-on: windows-2022
     name: Build (windows-x86_64)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.target_commitish }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -150,12 +172,14 @@ jobs:
 
   # ── macOS arm64 ───────────────────────────────────────
   build-macos-arm64:
+    needs: precheck
     runs-on: macos-15
     name: Build (macos-arm64)
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.target_commitish }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -180,12 +204,14 @@ jobs:
 
   # ── macOS x86_64 ─────────────────────────────────────
   build-macos-x86_64:
+    needs: precheck
     runs-on: macos-15
     name: Build (macos-x86_64)
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.target_commitish }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -217,6 +243,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.target_commitish }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -260,12 +287,14 @@ jobs:
 
   # ── Amalgamation ─────────────────────────────────────────
   amalgamation:
+    needs: precheck
     runs-on: ubuntu-22.04
     name: Amalgamation
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.target_commitish }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -283,12 +312,14 @@ jobs:
 
   # ── WASM Build ───────────────────────────────────────────
   wasm-build:
+    needs: precheck
     runs-on: ubuntu-22.04
     name: WASM Build
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.release.target_commitish }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -321,7 +352,6 @@ jobs:
     needs: [linux-x64, linux-arm64, windows-x64, build-macos-universal]
     runs-on: ubuntu-latest
     name: Publish to PyPI
-    if: github.event_name == 'release'
     environment: pypi
     permissions:
       id-token: write
@@ -331,9 +361,9 @@ jobs:
           pattern: wheel-*
           merge-multiple: true
           path: dist/
-  
+
       - uses: astral-sh/setup-uv@v7
-  
+
       - name: Publish to PyPI
         run: uv publish dist/*.whl
 
@@ -341,23 +371,27 @@ jobs:
     needs: [linux-x64, linux-arm64, windows-x64, build-macos-universal, wasm-build]
     runs-on: ubuntu-latest
     name: Publish to NPM
-    if: github.event_name == 'release'
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v6
-  
+        with:
+          ref: ${{ github.event.release.target_commitish }}
+
       - uses: actions/download-artifact@v7
-  
+
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
           registry-url: https://registry.npmjs.org
-  
+
       - name: Upgrade npm for Trusted Publishing
-        run: npm install -g npm@latest
-  
+        # Pin to npm 11 (not @latest) — `npm install -g npm@latest` has intermittently
+        # shipped broken installs missing bundled deps (e.g. promise-retry). Trusted
+        # Publishing support landed in 11.5.x, so the 11.x major line is safe.
+        run: npm install -g npm@11
+
       - name: Determine npm dist-tag
         id: npm-tag
         run: |
@@ -371,10 +405,10 @@ jobs:
           else
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
-  
+
       - name: Generate npm sub-packages
         run: python3 scripts/generate_build.py npm
-  
+
       - name: Copy binaries into platform packages
         run: |
           cp linux-x86_64/muninn.so    dist/nodejs/platforms/linux-x64/muninn.so
@@ -382,34 +416,34 @@ jobs:
           cp windows-x86_64/muninn.dll dist/nodejs/platforms/win32-x64/muninn.dll
           cp macos-universal/muninn.dylib dist/nodejs/platforms/darwin-arm64/muninn.dylib
           cp macos-universal/muninn.dylib dist/nodejs/platforms/darwin-x64/muninn.dylib
-  
+
       - name: Publish darwin-arm64
         run: npm publish dist/nodejs/platforms/darwin-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-  
+
       - name: Publish darwin-x64
         run: npm publish dist/nodejs/platforms/darwin-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-  
+
       - name: Publish linux-x64
         run: npm publish dist/nodejs/platforms/linux-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-  
+
       - name: Publish linux-arm64
         run: npm publish dist/nodejs/platforms/linux-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-  
+
       - name: Publish win32-x64
         run: npm publish dist/nodejs/platforms/win32-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-  
+
       - name: Install main package dependencies
         working-directory: npm
         run: npm install
-  
+
       - name: Publish main package
         run: npm publish ./npm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
-  
+
       - name: Copy WASM artifacts into package
         run: |
           cp wasm/muninn_sqlite3.js dist/nodejs/platforms/wasm/muninn_sqlite3.js
           cp wasm/muninn_sqlite3.wasm dist/nodejs/platforms/wasm/muninn_sqlite3.wasm
-  
+
       - name: Publish WASM package
         run: npm publish dist/nodejs/platforms/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
 
@@ -417,24 +451,30 @@ jobs:
     needs: [linux-x64, linux-arm64, windows-x64, build-macos-universal, amalgamation, wasm-build]
     runs-on: ubuntu-latest
     name: Upload Release Assets
-    if: github.event_name == 'release'
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
-  
+        with:
+          ref: ${{ github.event.release.target_commitish }}
+
       - uses: actions/download-artifact@v7
-  
+
       - name: Rename artifacts for unique asset names
         run: |
           mv linux-x86_64/muninn.so muninn-linux-x86_64.so
           mv linux-arm64/muninn.so muninn-linux-arm64.so
           mv macos-universal/muninn.dylib muninn-macos-universal.dylib
           mv windows-x86_64/muninn.dll muninn-windows-x86_64.dll
-  
-      - name: Upload to GitHub Release
+
+      # Upload to the DRAFT release. Draft releases are mutable, so this
+      # succeeds; once the user clicks "Publish release" in the UI, the
+      # release flips to immutable with these assets baked in.
+      - name: Upload to GitHub Release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.release.tag_name }} \
+          gh release upload "${{ github.event.release.tag_name }}" \
             muninn-linux-x86_64.so \
             muninn-linux-arm64.so \
             muninn-macos-universal.dylib \
@@ -442,5 +482,3 @@ jobs:
             amalgamation/muninn-amalgamation.tar.gz \
             wasm/muninn_sqlite3.js \
             wasm/muninn_sqlite3.wasm
-        env:
-          GH_TOKEN: ${{ github.token }}
