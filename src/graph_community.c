@@ -333,7 +333,7 @@ static int renumber_communities(int *community, int N) {
  * Run the full Leiden algorithm.
  * Returns community assignment in community[] (0-indexed, contiguous).
  */
-static double run_leiden(const GraphData *g, int *community, double resolution, const char *direction) {
+double run_leiden(const GraphData *g, int *community, double resolution, const char *direction) {
     int N = g->node_count;
     if (N == 0)
         return 0.0;

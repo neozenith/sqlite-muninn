@@ -313,13 +313,19 @@ class EmbedTreatment(Treatment):
         if self._actual_n < self._n:
             log.warning("  Doc texts has %d items, need %d — using available", len(all_doc_texts), self._n)
 
+        # Character truncation limit: max_tokens * 4 chars is a safe budget for English text
+        # (WordPiece averages ~4 chars/token). This prevents muninn_embed() from rejecting
+        # texts that exceed the model's context window.
+        max_tokens = EMBEDDING_MODELS[self._model_name].get("max_tokens", 512)
+        max_chars = max_tokens * 4
+
         if self._actual_n < len(all_doc_texts):
             indices = rng.choice(len(all_doc_texts), size=self._actual_n, replace=False)
             self._doc_indices = sorted(indices.tolist())
-            self._doc_texts = [all_doc_texts[i] for i in self._doc_indices]
+            self._doc_texts = [all_doc_texts[i][:max_chars] for i in self._doc_indices]
         else:
             self._doc_indices = list(range(self._actual_n))
-            self._doc_texts = all_doc_texts[: self._actual_n]
+            self._doc_texts = [t[:max_chars] for t in all_doc_texts[: self._actual_n]]
 
         # Load and sample query texts
         all_query_texts = _load_query_texts(self._dataset, doc_texts=all_doc_texts)
@@ -329,7 +335,7 @@ class EmbedTreatment(Treatment):
 
         query_indices = rng.choice(len(all_query_texts), size=self._n_queries, replace=False)
         self._query_indices = sorted(query_indices.tolist())
-        self._query_texts = [all_query_texts[i] for i in self._query_indices]
+        self._query_texts = [all_query_texts[i][:max_chars] for i in self._query_indices]
 
         return {
             "n_doc_texts": self._actual_n,

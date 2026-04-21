@@ -67,7 +67,7 @@ vendor/llama.cpp/build-wasm/
 
 # Project-local
 .claude/
-CLAUDE.md
+
 tmp/
 docs/logo/
 .playwright-cli/
@@ -80,6 +80,9 @@ npm/README.md
 benchmarks/refactored_outputs/
 docs/benchmarks/refactored_output/
 .env
+benchmarks/infra/config.yml
+cdk.out/
+cdk.context.json
 
 .hf_cache/
 wasm/assets/

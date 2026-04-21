@@ -24,6 +24,7 @@
 #define LLAMA_CHAT_H
 
 #include "sqlite3ext.h"
+#include "llama_common.h"
 
 /*
  * Register all GGUF chat functions and the muninn_chat_models
@@ -33,5 +34,11 @@ int chat_register_functions(sqlite3 *db);
 
 /* Exposed for direct testing — pure string operations, no side effects */
 const char *strip_think_block(const char *text);
+
+/* Exposed for llama_label_groups.c and er.c — chat generation internals */
+char *format_chat_messages(MuninnModelEntry *me, const char *system_msg, const char *user_msg, int inject_skip_think,
+                           int *out_len);
+int chat_generate(MuninnModelEntry *me, const char *prompt, const char *grammar_gbnf, int max_tokens, char **out_text,
+                  int *out_len, char errbuf[], int errbuf_sz);
 
 #endif /* LLAMA_CHAT_H */

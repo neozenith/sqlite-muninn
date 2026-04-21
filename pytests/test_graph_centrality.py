@@ -1,7 +1,7 @@
 """
 Integration tests for graph centrality table-valued functions.
 
-Tests graph_degree, graph_betweenness, and graph_closeness on synthetic graphs.
+Tests graph_degree, graph_node_betweenness, and graph_closeness on synthetic graphs.
 """
 
 
@@ -186,7 +186,7 @@ class TestGraphBetweenness:
         """In a line A-B-C-D-E, C should have highest betweenness."""
         create_line_graph_bidir(conn)
         results = conn.execute(
-            "SELECT node, centrality FROM graph_betweenness"
+            "SELECT node, centrality FROM graph_node_betweenness"
             " WHERE edge_table = 'bidir_edges'"
             "   AND src_col = 'src'"
             "   AND dst_col = 'dst'"
@@ -213,7 +213,7 @@ class TestGraphBetweenness:
         """In a star graph, the center has all the betweenness."""
         create_star_graph(conn)
         results = conn.execute(
-            "SELECT node, centrality FROM graph_betweenness"
+            "SELECT node, centrality FROM graph_node_betweenness"
             " WHERE edge_table = 'star_edges'"
             "   AND src_col = 'src'"
             "   AND dst_col = 'dst'"
@@ -230,7 +230,7 @@ class TestGraphBetweenness:
         """Normalized betweenness should be between 0 and 1."""
         create_line_graph_bidir(conn)
         results = conn.execute(
-            "SELECT node, centrality FROM graph_betweenness"
+            "SELECT node, centrality FROM graph_node_betweenness"
             " WHERE edge_table = 'bidir_edges'"
             "   AND src_col = 'src'"
             "   AND dst_col = 'dst'"
@@ -245,7 +245,7 @@ class TestGraphBetweenness:
         """Weighted betweenness uses Dijkstra for SSSP."""
         create_weighted_triangle(conn)
         results = conn.execute(
-            "SELECT node, centrality FROM graph_betweenness"
+            "SELECT node, centrality FROM graph_node_betweenness"
             " WHERE edge_table = 'wtri'"
             "   AND src_col = 'src'"
             "   AND dst_col = 'dst'"
@@ -268,7 +268,7 @@ class TestGraphBetweenness:
         """Betweenness with temporal filtering."""
         create_temporal_graph(conn)
         results = conn.execute(
-            "SELECT node, centrality FROM graph_betweenness"
+            "SELECT node, centrality FROM graph_node_betweenness"
             " WHERE edge_table = 'temp_edges'"
             "   AND src_col = 'src'"
             "   AND dst_col = 'dst'"

@@ -53,10 +53,12 @@
       "mode": "lines+markers",
       "name": "lembed + sqlite-vec-brute / MiniLM",
       "x": [
-        100
+        100,
+        500
       ],
       "y": [
-        0.641
+        0.641,
+        0.89
       ],
       "marker": {
         "color": "hsl(50, 85%, 58%)",
@@ -149,10 +151,12 @@
       "mode": "lines+markers",
       "name": "muninn-embed + muninn-hnsw / MiniLM",
       "x": [
-        100
+        100,
+        500
       ],
       "y": [
-        0.654
+        0.654,
+        0.907
       ],
       "marker": {
         "color": "hsl(270, 85%, 58%)",
@@ -197,10 +201,14 @@
       "mode": "lines+markers",
       "name": "muninn-embed + sqlite-vec-brute / MiniLM",
       "x": [
-        100
+        100,
+        500,
+        1000
       ],
       "y": [
-        0.633
+        0.633,
+        0.902,
+        0.944
       ],
       "marker": {
         "color": "hsl(240, 85%, 58%)",

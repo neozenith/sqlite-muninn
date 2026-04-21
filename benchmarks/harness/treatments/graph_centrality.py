@@ -70,12 +70,26 @@ class GraphCentralityTreatment(Treatment):
         op = self._operation
         tvf_map = {
             "degree": "graph_degree",
-            "betweenness": "graph_betweenness",
+            "betweenness": "graph_node_betweenness",
+            "edge_betweenness": "graph_edge_betweenness",
             "closeness": "graph_closeness",
         }
         tvf = tvf_map[op]
 
-        direction_clause = " AND direction = 'both'" if op in ("betweenness", "closeness") else ""
+        direction_clause = " AND direction = 'both'" if op in ("betweenness", "edge_betweenness", "closeness") else ""
+
+        if op == "edge_betweenness":
+            t0 = time.perf_counter()
+            rows = conn.execute(
+                f"SELECT src, dst, centrality FROM {tvf}"
+                f" WHERE edge_table = 'bench_edges' AND src_col = 'src' AND dst_col = 'dst'"
+                f"{direction_clause}",
+            ).fetchall()
+            elapsed = (time.perf_counter() - t0) * 1000
+            return {
+                "query_time_ms": round(elapsed, 3),
+                "edges_computed": len(rows),
+            }
 
         t0 = time.perf_counter()
         rows = conn.execute(

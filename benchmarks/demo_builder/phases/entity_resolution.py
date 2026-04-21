@@ -1,12 +1,21 @@
-"""Phase 6: Entity Resolution (HNSW blocking + Jaro-Winkler + Leiden)."""
+"""Phase: Entity Resolution via muninn_extract_er().
+
+Uses the C function that implements the full ER pipeline:
+  HNSW blocking → JW+cosine scoring → Leiden clustering → edge betweenness cleanup.
+
+The C function expects an `entities` table with (entity_id, name, source) and
+an HNSW virtual table. We create a temp mapping table to bridge the demo_builder's
+schema (entity_vec_map with entity names as IDs, entity_type as source) to the
+C function's expected format.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from typing import TYPE_CHECKING
 
-from benchmarks.demo_builder.common import jaro_winkler
 from benchmarks.demo_builder.phases.base import Phase
 
 if TYPE_CHECKING:
@@ -16,9 +25,22 @@ log = logging.getLogger(__name__)
 
 
 class PhaseEntityResolution(Phase):
-    """Resolve entity synonyms using HNSW blocking, string similarity, and Leiden clustering."""
+    """Resolve entity synonyms using muninn_extract_er() C function."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        k: int = 10,
+        dist_threshold: float = 0.15,
+        jw_weight: float = 0.3,
+        borderline_delta: float = 0.0,
+        edge_betweenness_threshold: float | None = None,
+    ) -> None:
+        self._k = k
+        self._dist = dist_threshold
+        self._jw = jw_weight
+        self._delta = borderline_delta
+        self._eb_threshold = edge_betweenness_threshold
         self._entity_name_to_type: dict[str, str] = {}
         self._entity_name_to_count: dict[str, int] = {}
 
@@ -27,12 +49,10 @@ class PhaseEntityResolution(Phase):
         return "entity_resolution"
 
     def is_stale(self, conn: sqlite3.Connection) -> bool:
-        """Return True if entity_resolution output is missing or stale."""
         try:
             node_count: int = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
             if node_count == 0:
                 return True
-            # Stale if there are entity names not covered by any cluster.
             distinct_names: int = conn.execute("SELECT count(DISTINCT name) FROM entities").fetchone()[0]
             cluster_count: int = conn.execute("SELECT count(*) FROM entity_clusters").fetchone()[0]
             return cluster_count < distinct_names
@@ -62,133 +82,104 @@ class PhaseEntityResolution(Phase):
         entity_name_to_type = self._entity_name_to_type
         entity_name_to_count = self._entity_name_to_count
 
-        # ── HNSW blocking: find candidate match pairs ─────────────────
-        entity_names_ordered = conn.execute("SELECT name FROM entity_vec_map ORDER BY rowid").fetchall()
-        entity_names_ordered = [r[0] for r in entity_names_ordered]
+        # ── Bridge schema: create temp entities table for C function ──
+        # The C function expects: entities(entity_id TEXT, name TEXT, source TEXT)
+        # Demo builder has: entity_vec_map(name) with entities_vec HNSW index
+        # The C function's type guard in 'diff_type' mode skips pairs where
+        # entity_type differs (person ≠ location). We populate the 'source'
+        # column with entity_type so the C function can filter on it.
 
-        # Build name -> rowid mapping
-        name_to_rowid = {}
-        for row in conn.execute("SELECT rowid, name FROM entity_vec_map"):
-            name_to_rowid[row[1]] = row[0]
-
-        k_neighbors = 10
-        candidate_pairs: list[tuple[str, str, float]] = []
-
-        log.info("  HNSW blocking: finding %d nearest neighbors per entity...", k_neighbors)
-        for ent_name in entity_names_ordered:
-            rowid = name_to_rowid[ent_name]
-            vec = conn.execute("SELECT vector FROM entities_vec WHERE rowid = ?", (rowid,)).fetchone()[0]
-
-            # KNN search
-            neighbors = conn.execute(
-                "SELECT rowid, distance FROM entities_vec WHERE vector MATCH ? AND k = ?",
-                (vec, k_neighbors + 1),
-            ).fetchall()
-
-            for neighbor_rowid, distance in neighbors:
-                if neighbor_rowid == rowid:
-                    continue
-                if distance > 0.4:
-                    continue
-                neighbor_name = entity_names_ordered[neighbor_rowid - 1]
-                pair = tuple(sorted([ent_name, neighbor_name]))
-                candidate_pairs.append((pair[0], pair[1], distance))
-
-        # Deduplicate candidate pairs
-        seen_pairs: set[tuple[str, str]] = set()
-        unique_pairs: list[tuple[str, str, float]] = []
-        for n1, n2, dist in candidate_pairs:
-            key = (n1, n2)
-            if key not in seen_pairs:
-                seen_pairs.add(key)
-                unique_pairs.append((n1, n2, dist))
-
-        log.info("  Found %d candidate pairs from HNSW blocking", len(unique_pairs))
-
-        # ── Matching cascade: score each candidate pair ───────────────
-        match_edges: list[tuple[str, str, float]] = []
-
-        for n1, n2, cosine_dist in unique_pairs:
-            cosine_sim = 1.0 - cosine_dist
-
-            # Exact match
-            if n1 == n2:
-                match_edges.append((n1, n2, 1.0))
-                continue
-
-            # Case-insensitive exact
-            if n1.lower() == n2.lower():
-                match_edges.append((n1, n2, 0.9))
-                continue
-
-            # Jaro-Winkler on lowercased names
-            jw = jaro_winkler(n1.lower(), n2.lower())
-
-            # Combined score: 0.4 * Jaro-Winkler + 0.6 * cosine similarity
-            combined = 0.4 * jw + 0.6 * cosine_sim
-
-            if combined > 0.5:
-                match_edges.append((n1, n2, combined))
-
-        log.info("  %d match pairs above threshold 0.5", len(match_edges))
-
-        # ── Leiden clustering on match pairs ──────────────────────────
-        # Drop output tables before rebuilding — entity_resolution is a global
-        # clustering pass that cannot be incrementalised. Always runs from scratch.
+        # ── Drop output tables before rebuilding ─────────────────────
         conn.execute("DROP TABLE IF EXISTS _match_edges")
         conn.execute("DROP TABLE IF EXISTS entity_clusters")
         conn.execute("DROP TABLE IF EXISTS nodes")
         conn.execute("DROP TABLE IF EXISTS edges")
-        conn.execute("CREATE TABLE _match_edges (src TEXT NOT NULL, dst TEXT NOT NULL, weight REAL DEFAULT 1.0)")
-        conn.executemany(
-            "INSERT INTO _match_edges (src, dst, weight) VALUES (?, ?, ?)",
-            match_edges,
-        )
 
-        # Also insert reverse edges (Leiden expects undirected)
-        conn.executemany(
-            "INSERT INTO _match_edges (src, dst, weight) VALUES (?, ?, ?)",
-            [(n2, n1, w) for n1, n2, w in match_edges],
-        )
+        # ── Call muninn_extract_er() ─────────────────────────────────
+        # Note: the C function reads from the "entities" table by default.
+        # We need to temporarily rename our temp table.
+        # Actually, the C function hardcodes "entities" as the table name.
+        # Our _er_entities is a temp table. Let's create a view instead.
+        conn.execute("DROP VIEW IF EXISTS temp._er_ent_view")
 
-        # Run Leiden if we have match edges
+        # Simplest: the C function reads from "entities" table.
+        # But demo_builder's entities table has different columns.
+        # Solution: use a temp table named exactly "entities" with the right schema.
+        # Problem: "entities" already exists with NER data.
+        # Better solution: rename the entities table temporarily.
+
+        # Actually, the cleanest approach: modify the temp table to be named
+        # correctly. The C function reads "entities" — let's shadow it with a temp.
+        # SQLite temp tables shadow main tables of the same name.
+        conn.execute("DROP TABLE IF EXISTS temp.entities")
+        conn.execute("""
+            CREATE TEMP TABLE entities(entity_id TEXT, name TEXT, source TEXT)
+        """)
+        # Join entity_vec_map with main entities table to get entity_type.
+        # entity_type goes into the 'source' column — the C function's
+        # 'diff_type' guard skips pairs where source values differ.
+        conn.execute("""
+            INSERT INTO temp.entities(entity_id, name, source)
+            SELECT m.name, m.name, COALESCE(e.entity_type, '')
+            FROM entity_vec_map m
+            LEFT JOIN (
+                SELECT name, entity_type FROM main.entities GROUP BY name
+            ) e ON e.name = m.name
+        """)
+
+        result_json = conn.execute(
+            "SELECT muninn_extract_er(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "entities_vec",  # HNSW table
+                "name",  # name column
+                self._k,
+                self._dist,
+                self._jw,
+                self._delta,
+                None,  # chat_model (no LLM for now)
+                self._eb_threshold,
+                "diff_type",  # KG mode: skip pairs where entity_type differs
+            ),
+        ).fetchone()[0]
+
+        # Drop the temp shadow — restore access to main entities table
+        conn.execute("DROP TABLE IF EXISTS temp.entities")
+        conn.execute("DROP TABLE IF EXISTS _er_entities")
+
+        # ── Parse cluster JSON into entity_to_canonical ──────────────
+        clusters = json.loads(result_json)["clusters"]
+
+        # Group entities by cluster_id
+        communities: dict[int, list[str]] = {}
+        for entity_name, cluster_id in clusters.items():
+            communities.setdefault(cluster_id, []).append(entity_name)
+
+        # Pick canonical = highest mention-count member per cluster
         entity_to_canonical: dict[str, str] = {}
+        for _comm_id, members in communities.items():
+            canonical = max(members, key=lambda n: entity_name_to_count.get(n, 0))
+            for member in members:
+                entity_to_canonical[member] = canonical
 
-        if match_edges:
-            leiden_results = conn.execute(
-                "SELECT node, community_id FROM graph_leiden"
-                " WHERE edge_table = '_match_edges'"
-                "   AND src_col = 'src'"
-                "   AND dst_col = 'dst'"
-                "   AND weight_col = 'weight'"
-            ).fetchall()
-
-            # Group by community
-            communities: dict[int, list[str]] = {}
-            for node, comm_id in leiden_results:
-                communities.setdefault(comm_id, []).append(node)
-
-            # For each community, pick canonical = highest mention-count member
-            for _comm_id, members in communities.items():
-                canonical = max(members, key=lambda n: entity_name_to_count.get(n, 0))
-                for member in members:
-                    entity_to_canonical[member] = canonical
-
-            log.info("  Leiden found %d communities from %d matched entities", len(communities), len(leiden_results))
-
-        # Entities not in any match pair are their own canonical form
+        # Entities not in any cluster are their own canonical
         for ent_name in entity_name_to_type:
             if ent_name not in entity_to_canonical:
                 entity_to_canonical[ent_name] = ent_name
 
-        # ── Populate entity_clusters table (fresh: was dropped above) ──
+        log.info(
+            "  muninn_extract_er: %d entities → %d clusters",
+            len(entity_to_canonical),
+            len(communities),
+        )
+
+        # ── Populate entity_clusters table ───────────────────────────
         conn.execute("CREATE TABLE entity_clusters (name TEXT PRIMARY KEY, canonical TEXT NOT NULL)")
         conn.executemany(
             "INSERT INTO entity_clusters (name, canonical) VALUES (?, ?)",
             entity_to_canonical.items(),
         )
 
-        # ── Build clean graph: nodes + edges ──────────────────────────
+        # ── Build clean graph: nodes + edges ─────────────────────────
         conn.execute("""
             CREATE TABLE nodes (
                 node_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,20 +189,15 @@ class PhaseEntityResolution(Phase):
             )
         """)
 
-        # Aggregate canonical entities
         canonical_stats: dict[str, dict[str, str | int]] = {}
         for ent_name, etype, count in conn.execute(
             "SELECT name, entity_type, count(*) FROM entities GROUP BY name ORDER BY name"
         ).fetchall():
             canonical = entity_to_canonical[ent_name]
             if canonical not in canonical_stats:
-                canonical_stats[canonical] = {
-                    "entity_type": etype,
-                    "mention_count": 0,
-                }
+                canonical_stats[canonical] = {"entity_type": etype, "mention_count": 0}
             canonical_stats[canonical]["mention_count"] += count
 
-        # Insert nodes (sorted for deterministic node_ids)
         for canonical in sorted(canonical_stats):
             stats = canonical_stats[canonical]
             conn.execute(
@@ -222,7 +208,7 @@ class PhaseEntityResolution(Phase):
         num_nodes = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
         log.info("  Built nodes table: %d canonical entities", num_nodes)
 
-        # ── Coalesce relations into edges ─────────────────────────────
+        # ── Coalesce relations into edges ────────────────────────────
         conn.execute("""
             CREATE TABLE edges (
                 src TEXT NOT NULL,
@@ -233,7 +219,6 @@ class PhaseEntityResolution(Phase):
             )
         """)
 
-        # Aggregate relations using canonical names
         raw_relations = conn.execute("SELECT src, dst, rel_type, weight FROM relations").fetchall()
 
         edge_agg: dict[tuple[str, str, str], float] = {}
@@ -258,3 +243,5 @@ class PhaseEntityResolution(Phase):
 
     def teardown(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         conn.execute("DROP TABLE IF EXISTS _match_edges")
+        conn.execute("DROP TABLE IF EXISTS _er_entities")
+        conn.execute("DROP TABLE IF EXISTS temp.entities")

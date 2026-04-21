@@ -45,6 +45,13 @@ HNSW_M = 16
 HNSW_EF_CONSTRUCTION = 200
 HNSW_EF_SEARCH = 64
 
+# HNSW parameter sweep axes for VSS benchmarks.
+# Only applied to HNSW engines (muninn-hnsw, vectorlite-hnsw).
+# Non-HNSW engines ignore these and get a single (default, default, default) entry.
+HNSW_M_VALUES: list[int] = [8, 16, 32, 64]
+HNSW_EF_CONSTRUCTION_VALUES: list[int] = [100, 200]
+HNSW_EF_SEARCH_VALUES: list[int] = [10, 50, 100, 200, 400]
+
 # Memory budget per-dimension max N (safe for 8GB total)
 MAX_N_BY_DIM: dict[int, int] = {
     32: 500_000,
@@ -66,6 +73,7 @@ EMBEDDING_MODELS: dict[str, dict[str, Any]] = {
         "params": "22M",
         "doc_prefix": "",
         "query_prefix": "",
+        "max_tokens": 512,
     },
     "NomicEmbed": {
         "gguf_filename": "nomic-embed-text-v1.5.Q8_0.gguf",
@@ -73,6 +81,7 @@ EMBEDDING_MODELS: dict[str, dict[str, Any]] = {
         "params": "137M",
         "doc_prefix": "search_document: ",
         "query_prefix": "search_query: ",
+        "max_tokens": 8192,
     },
     "BGE-Large": {
         "gguf_filename": "bge-large-en-v1.5-q8_0.gguf",
@@ -81,6 +90,7 @@ EMBEDDING_MODELS: dict[str, dict[str, Any]] = {
         "doc_prefix": "",
         "query_prefix": "Represent this sentence for searching relevant passages: ",
         "embed_enabled": False,  # Too slow for live-embed benchmarks (335M hangs)
+        "max_tokens": 512,
     },
 }
 
@@ -247,7 +257,7 @@ GRAPH_MODELS: list[dict[str, Any]] = [
 ]
 
 GRAPH_TRAVERSAL_OPERATIONS: list[str] = ["bfs", "dfs", "shortest_path", "components", "pagerank"]
-GRAPH_CENTRALITY_OPERATIONS: list[str] = ["degree", "betweenness", "closeness"]
+GRAPH_CENTRALITY_OPERATIONS: list[str] = ["degree", "betweenness", "edge_betweenness", "closeness"]
 
 # (graph_model, n_nodes, avg_degree) tuples — largest tier
 GRAPH_CONFIGS_TRAVERSAL: list[tuple[str, int, int]] = [

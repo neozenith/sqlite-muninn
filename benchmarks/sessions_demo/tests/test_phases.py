@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Generator
+from typing import Any
 
 import pytest
 
+from benchmarks.sessions_demo.cache import _compute_event_costs, _message_kind, model_family_from_id
 from benchmarks.sessions_demo.constants import (
     CHUNK_MAX_CHARS,
     CHUNK_MIN_CHARS,
@@ -74,8 +76,7 @@ def test_split_preserves_offsets() -> None:
 def test_type_filter_human_alias() -> None:
     phase = PhaseChunks(message_types=["human"])
     sql, params = phase._type_filter()
-    assert "event_type = 'user'" in sql
-    assert "is_meta = 0" in sql
+    assert "msg_kind = 'human'" in sql
     assert params == []
 
 
@@ -98,7 +99,7 @@ def test_type_filter_multiple_types() -> None:
 
 def test_default_phases_count() -> None:
     phases = default_phases()
-    assert len(phases) == 11
+    assert len(phases) == 13
 
 
 def test_default_phases_names_match_constants() -> None:
@@ -120,7 +121,7 @@ def test_default_phases_are_callable() -> None:
 
 def test_default_phases_legacy_models() -> None:
     phases = default_phases(legacy_models=True)
-    assert len(phases) == 11
+    assert len(phases) == 13
     names = [p.name for p in phases]
     assert names == PHASE_NAMES
 
@@ -149,8 +150,7 @@ def conn_with_events() -> Generator[sqlite3.Connection, None, None]:
         CREATE TABLE events (
             id INTEGER PRIMARY KEY,
             event_type TEXT,
-            is_meta INTEGER DEFAULT 0,
-            first_content_block_type TEXT,
+            msg_kind TEXT,
             message_content TEXT
         )
     """)
@@ -169,8 +169,7 @@ def conn_with_events() -> Generator[sqlite3.Connection, None, None]:
 
 def test_is_stale_true_when_no_events_chunked(conn_with_events: sqlite3.Connection) -> None:
     conn_with_events.execute(
-        "INSERT INTO events(id, event_type, is_meta, first_content_block_type, message_content)"
-        " VALUES (1, 'user', 0, 'string', 'hello world')"
+        "INSERT INTO events(id, event_type, msg_kind, message_content) VALUES (1, 'user', 'human', 'hello world')"
     )
     conn_with_events.commit()
     phase = PhaseChunks(message_types=["human"])
@@ -179,8 +178,7 @@ def test_is_stale_true_when_no_events_chunked(conn_with_events: sqlite3.Connecti
 
 def test_is_stale_false_when_all_events_chunked(conn_with_events: sqlite3.Connection) -> None:
     conn_with_events.execute(
-        "INSERT INTO events(id, event_type, is_meta, first_content_block_type, message_content)"
-        " VALUES (1, 'user', 0, 'string', 'hello world')"
+        "INSERT INTO events(id, event_type, msg_kind, message_content) VALUES (1, 'user', 'human', 'hello world')"
     )
     conn_with_events.execute(
         "INSERT INTO event_message_chunks(event_id, text, chunk_offset) VALUES (1, 'hello world', 0)"
@@ -195,6 +193,63 @@ def test_is_stale_true_when_table_missing() -> None:
     phase = PhaseChunks(message_types=["human"])
     assert phase.is_stale(conn) is True
     conn.close()
+
+
+# ── Constants sanity checks ───────────────────────────────────────
+
+
+# ── _message_kind ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "event_type,is_meta,content,expected",
+    [
+        ("user", False, "hello", "human"),
+        ("user", False, [{"type": "text", "text": "hi"}], "user_text"),
+        ("user", True, "injected", "meta"),
+        ("user", False, [{"type": "tool_result", "content": "ok"}], "tool_result"),
+        ("user", False, "<task-notification>\n<task-id>x</task-id>", "task_notification"),
+        ("assistant", False, [{"type": "tool_use", "name": "Bash"}], "tool_use"),
+        ("assistant", False, [{"type": "text", "text": "answer"}], "assistant_text"),
+        ("assistant", False, [{"type": "thinking", "thinking": "pondering"}], "thinking"),
+        ("progress", False, None, "other"),
+        ("system", False, None, "other"),
+    ],
+)
+def test_message_kind(event_type: str, is_meta: bool, content: Any, expected: str) -> None:
+    assert _message_kind(event_type, is_meta, content) == expected
+
+
+# ── Cost helpers ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "model_id,expected",
+    [
+        ("claude-opus-4-6", "opus"),
+        ("claude-sonnet-4-6", "sonnet"),
+        ("claude-haiku-4-5-20251001", "haiku"),
+        ("gpt-4o", "unknown"),
+        (None, "unknown"),
+    ],
+)
+def test_model_family_from_id(model_id: str | None, expected: str) -> None:
+    assert model_family_from_id(model_id) == expected
+
+
+def test_compute_event_costs_sonnet_matches_formula() -> None:
+    # sonnet: input=3.0, output=15.0, cache_read=0.3, cache_write=3.75 per Mtok
+    rate, billable, cost = _compute_event_costs("claude-sonnet-4-6", 1000, 500, 2000, 400)
+    # billable = 1000 + 500*5 + 2000*0.1 + 400*1.25 = 1000 + 2500 + 200 + 500 = 4200
+    assert rate == 3.0
+    assert billable == pytest.approx(4200.0)
+    # cost = 4200 * 3.0 / 1e6 = 0.0126
+    assert cost == pytest.approx(0.0126, rel=1e-6)
+
+
+def test_compute_event_costs_unknown_model_returns_zero() -> None:
+    assert _compute_event_costs(None, 1000, 500, 2000, 400) == (0.0, 0.0, 0.0)
+    assert _compute_event_costs("gpt-4o", 1000, 500, 2000, 400) == (0.0, 0.0, 0.0)
 
 
 # ── Constants sanity checks ───────────────────────────────────────

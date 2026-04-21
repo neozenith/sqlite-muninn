@@ -255,7 +255,8 @@ class GraphVtTreatment(Treatment):
         """Return SQL for running a graph algorithm against a table."""
         tvf_map = {
             "degree": "graph_degree",
-            "betweenness": "graph_betweenness",
+            "betweenness": "graph_node_betweenness",
+            "edge_betweenness": "graph_edge_betweenness",
             "closeness": "graph_closeness",
             "leiden": "graph_leiden",
         }

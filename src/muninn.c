@@ -4,7 +4,7 @@
  * Registers all modules and functions with SQLite:
  * - hnsw_index virtual table (HNSW vector index)
  * - graph_bfs, graph_dfs, graph_shortest_path, graph_components, graph_pagerank TVFs
- * - graph_degree, graph_betweenness, graph_closeness centrality TVFs
+ * - graph_degree, graph_node_betweenness, graph_edge_betweenness, graph_closeness centrality TVFs
  * - graph_leiden community detection TVF
  * - graph_adjacency virtual table (persistent CSR adjacency cache)
  * - graph_select TVF (dbt-style node selection)
@@ -14,6 +14,8 @@
  * - muninn_models eponymous virtual table (embed model lifecycle)
  * - muninn_chat, muninn_chat_model, muninn_extract_entities, muninn_extract_relations, muninn_summarize
  * - muninn_chat_models eponymous virtual table (chat model lifecycle)
+ * - muninn_label_groups TVF (LLM-powered group labelling)
+ * - muninn_extract_er() scalar function (entity resolution pipeline)
  */
 #include "sqlite3ext.h"
 SQLITE_EXTENSION_INIT1
@@ -30,6 +32,8 @@ SQLITE_EXTENSION_INIT1
 #include "llama_common.h"
 #include "llama_embed.h"
 #include "llama_chat.h"
+#include "llama_label_groups.h"
+#include "llama_er.h"
 #endif
 
 #ifdef _WIN32
@@ -97,6 +101,18 @@ int sqlite3_muninn_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines
     rc = chat_register_functions(db);
     if (rc != SQLITE_OK) {
         *pzErrMsg = sqlite3_mprintf("muninn: failed to register chat functions");
+        return rc;
+    }
+
+    rc = llama_label_groups_register_module(db);
+    if (rc != SQLITE_OK) {
+        *pzErrMsg = sqlite3_mprintf("muninn: failed to register llama_label_groups module");
+        return rc;
+    }
+
+    rc = llama_er_register_functions(db);
+    if (rc != SQLITE_OK) {
+        *pzErrMsg = sqlite3_mprintf("muninn: failed to register llama_er functions");
         return rc;
     }
 #endif

@@ -199,7 +199,7 @@ build-wasm-full: $(WASM_SQLITE_SRC) $(LLAMA_WASM_LIBS) ## Build full WASM (with 
 # TEST
 ######################################################################
 
-test: build/test_runner                        ## Run C unit tests + coverage
+test-c: build/test_runner                        ## Run C unit tests + coverage
 	./build/test_runner
 	@GCOVR=$$(command -v gcovr 2>/dev/null || echo .venv/bin/gcovr); \
 	if [ -x "$$GCOVR" ]; then \
@@ -219,12 +219,12 @@ build/test_runner: $(TEST_SRC) $(TEST_LINK_SRC) $(VENDOR_SRC) $(LLAMA_LIBS)
 		$(TEST_SRC) $(TEST_LINK_SRC) $(VENDOR_SRC) $(LLAMA_LIBS) $(LDFLAGS_TEST)
 
 test-python: build/muninn$(EXT)                ## Run Python integration tests + coverage
-	.venv/bin/python -m pytest pytests/ -v
+	uv run -m pytest pytests/ -v
 
 test-js:                                       ## Run TypeScript tests + coverage
 	npm --prefix npm test
 
-test-all: test test-python test-js docs-build  ## Run all tests
+test: test-c test-python test-js docs-build  ## Run all tests
 
 ######################################################################
 # CODE QUALITY
@@ -241,9 +241,9 @@ init-python: .venv/.init-python                       ## Set up Python virtual e
 	CMAKE_ARGS="-DGGML_NATIVE=OFF -DGGML_METAL=ON" uv sync --all-groups
 	@touch $@
 
-format-python: .venv/.init-python                       ## Format Python code with ruff
-	.venv/bin/ruff check --fix-only .
-	.venv/bin/ruff format .
+format-python:                                 ## Format Python code with ruff
+	uv run ruff check --fix-only .
+	uv run ruff format .
 
 format-js:                                     ## Format TypeScript code with biome
 	npm --prefix npm run format
@@ -258,23 +258,23 @@ lint-c:                                        ## Lint C code with clang-format 
 		echo "clang-format not installed — skipping C lint"; \
 	fi
 
-lint-python: .venv/.init-python                       ## Lint Python code with ruff
-	.venv/bin/ruff check .
-	.venv/bin/ruff format --check .
+lint-python:                                   ## Lint Python code with ruff
+	uv run ruff check .
+	uv run ruff format --check .
 
 lint-js:                                       ## Lint TypeScript code with biome
 	npm --prefix npm run lint
 
 typecheck: typecheck-python typecheck-js format       ## Type-check all code
 
-typecheck-python: .venv/.init-python                       ## Type-check Python with mypy
-	.venv/bin/mypy sqlite_muninn/
+typecheck-python:                              ## Type-check Python with mypy
+	uv run mypy sqlite_muninn/
 
 typecheck-js:                                  ## Type-check TypeScript with tsc
 	npm --prefix npm run typecheck
 
 ######################################################################
-# PACKAGING
+# PACKAGING / DISTRIBUTION BUILDS
 ######################################################################
 
 amalgamation: dist/muninn.c dist/muninn.h      ## Create single-file amalgamation
@@ -284,37 +284,11 @@ dist/muninn.c dist/muninn.h: $(SRC) $(HEADERS)
 
 version-stamp:                                 ## Stamp VERSION into skill files + package.json
 	uv run scripts/generate_build.py version
+	npm --prefix ./npm audit --audit-level high
 	npm --prefix ./npm install # update package-lock.json with new version
 
 generate-windows:                              ## Generate build_windows.bat from centralised config
 	uv run scripts/generate_build.py windows
-
-######################################################################
-# EXAMPLES
-######################################################################
-
-# examples-colab-jupytext:                       ## Generate Colab notebooks + enforce README badges
-# 	uv run scripts/generate_build.py examples
-
-# examples-colab-check:                          ## Check notebooks + README badges are up to date
-# 	uv run scripts/generate_build.py examples --status
-
-# EXAMPLES_FAST := semantic_search social_network transit_routes research_papers movie_recommendations
-# EXAMPLES_GGUF := text_embeddings llm_chat llm_summarize llm_tokenize llm_extract
-
-# examples-test: examples-test-fast examples-test-gguf  ## Run all example notebooks as tests
-
-# examples-test-fast: examples-colab-jupytext build/muninn$(EXT)  ## Run fast examples (no model downloads)
-# 	uv run pytest --no-cov --nbmake $(foreach e,$(EXAMPLES_FAST),examples/$(e)/$(e).ipynb)
-
-# examples-test-gguf: examples-colab-jupytext build/muninn$(EXT)  ## Run GGUF examples (downloads models)
-# 	uv run pytest --no-cov --nbmake --nbmake-timeout=600 $(foreach e,$(EXAMPLES_GGUF),examples/$(e)/$(e).ipynb)
-
-# examples-test-colab: examples-colab-jupytext        ## E2E test: verify Colab badge links load in browser
-# 	uv run examples/e2e_colab.py
-
-# examples-test-colab-code: examples-colab-jupytext    ## E2E test: verify Colab links + check _IN_COLAB code present
-# 	uv run examples/e2e_colab.py --check-code
 
 dist: dist-extension dist-python dist-nodejs dist-wasm amalgamation changelog ## Build all distributable artifacts into dist/
 	@echo ""
@@ -332,6 +306,7 @@ dist-python: version-stamp build/muninn$(EXT)  ## Build Python wheel into dist/p
 
 dist-nodejs: version-stamp                       ## Pack npm tarball into dist/nodejs/
 	@mkdir -p dist/nodejs/
+	uv run scripts/generate_build.py npm
 	npm pack --pack-destination dist/nodejs npm/
 
 dist-wasm: build-wasm-full                         ## Build WASM module into dist/ (requires emcc)
@@ -363,7 +338,7 @@ uninstall:                                     ## Remove installed files
 	rm -f $(DESTDIR)$(PREFIX)/include/muninn.h
 
 test-install: build/muninn$(EXT)               ## Run install integration tests (pip + npm)
-	.venv/bin/python -m pytest pytests/test_install.py -v -m integration --no-cov
+	uv run pytest pytests/test_install.py -v -m integration --override-ini="addopts="
 
 ######################################################################
 # DOCUMENTATION
@@ -385,7 +360,7 @@ docs-clean:                                    ## Clean documentation build
 # CI
 ######################################################################
 
-ci: lint typecheck test test-python test-js docs-build    ## Full CI pipeline
+ci: lint typecheck test test-python test-js docs-build    ## Full CI pipeline for main sqlite-muninn package
 
 ci-benchmarks-harness:                         ## CI for benchmarks/harness
 	$(MAKE) -C benchmarks/harness ci
@@ -411,6 +386,10 @@ viz-clean:
 clean: docs-clean llama-clean viz-clean          ## Clean build artifacts
 	rm -rf dist/
 	rm -rf build/
+	rm -rf tmp/
+	rm -rf npm/node_modules/
+	rm -rf npm/dist/
+	rm -rf npm/coverage/
 	rm -rf *.egg-info
 	rm -rf .coverage
 	rm -f *.gcda *.gcno src/*.gcda src/*.gcno test/*.gcda test/*.gcno

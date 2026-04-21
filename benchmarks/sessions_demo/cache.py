@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,8 +80,9 @@ CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT,
     parent_uuid TEXT,
-    fqn_id TEXT,  -- {project_id}::{session_id}::{uuid} for global uniqueness
+    prompt_id TEXT,  -- joins subagent first events to parent tool_result/tool_use chain
     event_type TEXT NOT NULL,
+    msg_kind TEXT,  -- derived: human|user_text|assistant_text|tool_use|tool_result|thinking|meta|task_notification
     timestamp TEXT,
     timestamp_local TEXT,
     session_id TEXT,
@@ -89,8 +91,6 @@ CREATE TABLE IF NOT EXISTS events (
     agent_id TEXT,
     agent_slug TEXT,
     message_role TEXT,
-    is_meta INTEGER NOT NULL DEFAULT 0,  -- raw_json.isMeta: system-injected wrappers
-    first_content_block_type TEXT,       -- 'string' | 'text' | 'tool_use' | 'tool_result' | 'thinking' | NULL
     message_content TEXT,  -- Plain text for FTS
     message_content_json TEXT,  -- Original JSON structure
     model_id TEXT,
@@ -99,23 +99,33 @@ CREATE TABLE IF NOT EXISTS events (
     cache_read_tokens INTEGER DEFAULT 0,
     cache_creation_tokens INTEGER DEFAULT 0,
     cache_5m_tokens INTEGER DEFAULT 0,
+    token_rate REAL DEFAULT 0.0,         -- input $/Mtok for this event's model
+    billable_tokens REAL DEFAULT 0.0,    -- weighted input-equivalent token count
+    total_cost_usd REAL DEFAULT 0.0,     -- pre-computed at ingest
     source_file_id INTEGER NOT NULL REFERENCES source_files(id) ON DELETE CASCADE,
     line_number INTEGER NOT NULL,
-    raw_json TEXT NOT NULL
+    raw_json TEXT NOT NULL               -- intentionally empty; source-of-truth is the JSONL file
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_uuid ON events(uuid);
 CREATE INDEX IF NOT EXISTS idx_events_parent_uuid ON events(parent_uuid);
+CREATE INDEX IF NOT EXISTS idx_events_prompt_id ON events(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+CREATE INDEX IF NOT EXISTS idx_events_msg_kind ON events(msg_kind);
 CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_source_file ON events(source_file_id);
 CREATE INDEX IF NOT EXISTS idx_events_project_session ON events(project_id, session_id);
 CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(session_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_events_session_uuid ON events(session_id, uuid);
-CREATE INDEX IF NOT EXISTS idx_events_human ON events(event_type, is_meta, first_content_block_type);
-CREATE INDEX IF NOT EXISTS idx_events_fqn_id ON events(fqn_id);
+
+-- Covering index for analytical GROUP BY queries
+CREATE INDEX IF NOT EXISTS idx_events_covering ON events(
+    timestamp, project_id, session_id, model_id,
+    input_tokens, output_tokens,
+    cache_read_tokens, cache_creation_tokens, total_cost_usd
+);
 
 -- FTS5 virtual table for full-text search on message content
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
@@ -151,17 +161,82 @@ CREATE TABLE IF NOT EXISTS event_edges (
     session_id TEXT NOT NULL,
     event_uuid TEXT NOT NULL,
     parent_event_uuid TEXT NOT NULL,
-    fqn_src TEXT NOT NULL,  -- {project_id}::{session_id}::{parent_event_uuid}
-    fqn_dst TEXT NOT NULL,  -- {project_id}::{session_id}::{event_uuid}
     source_file_id INTEGER NOT NULL REFERENCES source_files(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_event_edges_forward ON event_edges(project_id, session_id, event_uuid);
 CREATE INDEX IF NOT EXISTS idx_event_edges_reverse ON event_edges(project_id, session_id, parent_event_uuid);
 CREATE INDEX IF NOT EXISTS idx_event_edges_source_file ON event_edges(source_file_id);
-CREATE INDEX IF NOT EXISTS idx_event_edges_fqn_src ON event_edges(fqn_src);
-CREATE INDEX IF NOT EXISTS idx_event_edges_fqn_dst ON event_edges(fqn_dst);
+
+-- =====================================================================
+-- event_calls — raw fact table for tool/skill/subagent/cli/rule calls
+-- =====================================================================
+-- One row per observed "call" inside an event. An assistant message may
+-- carry N parallel tool_use blocks, a Bash command may invoke several
+-- CLI heads, and a user message may inject many <system-reminder> rule
+-- blocks — each contributes its own row.
+--
+-- call_type discriminator:
+--   'tool'        - generic tool_use (Read, Edit, Grep, Write, ...). Bash
+--                   also emits one 'tool' row plus N 'cli' rows.
+--   'skill'       - tool_use with name=="Skill"; call_name = input.skill
+--   'subagent'    - tool_use with name=="Agent"; call_name = input.subagent_type
+--   'cli'         - command head parsed from Bash input.command
+--   'rule'        - .claude/rules/... path parsed from <system-reminder> text
+--   'make_target' - target arg(s) parsed from `make <target> ...` segments
+--
+-- timestamp/project_id/session_id are denormalized off `events` so
+-- dashboard-style time/project filters don't need a join.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS event_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    ord INTEGER NOT NULL DEFAULT 0,
+    call_type TEXT NOT NULL CHECK (
+        call_type IN ('tool', 'skill', 'subagent', 'cli', 'rule', 'make_target')
+    ),
+    call_name TEXT NOT NULL,
+    timestamp TEXT,
+    project_id TEXT NOT NULL,
+    session_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_event_calls_event ON event_calls(event_id);
+CREATE INDEX IF NOT EXISTS idx_event_calls_type_name ON event_calls(call_type, call_name);
+CREATE INDEX IF NOT EXISTS idx_event_calls_timestamp ON event_calls(timestamp);
+CREATE INDEX IF NOT EXISTS idx_event_calls_project_session
+    ON event_calls(project_id, session_id);
 
 CREATE INDEX IF NOT EXISTS idx_source_files_project_session ON source_files(project_id, session_id);
+
+-- =====================================================================
+-- Dimensional aggregation table (star schema)
+-- =====================================================================
+-- Pre-aggregated measures at multiple time granularities in a single
+-- table, discriminated by the `granularity` column. Maintained
+-- incrementally via refresh_aggregates_for_range() after each ingest.
+-- Grain: (granularity, time_bucket, project_id, session_id, model_id).
+-- session_id / model_id use '' sentinel for NULL (SQLite PK treats
+-- NULLs as non-equal which would break uniqueness).
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS agg (
+    granularity TEXT NOT NULL,  -- 'hourly', 'daily', 'weekly', 'monthly'
+    time_bucket TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',
+    event_count INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost_usd REAL NOT NULL DEFAULT 0.0,
+    billable_tokens REAL NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (granularity, time_bucket, project_id, session_id, model_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_granularity_time
+    ON agg(granularity, time_bucket);
+CREATE INDEX IF NOT EXISTS idx_agg_granularity_project_time
+    ON agg(granularity, project_id, time_bucket);
 """
 
 
@@ -205,7 +280,14 @@ class CacheManager:
                     wal.unlink()
 
     def init_schema(self) -> None:
-        """Initialize database schema."""
+        """Initialize database schema.
+
+        If the DB already exists with a stale schema version, destroys it
+        first to avoid CREATE INDEX failures on missing columns.
+        """
+        if self.db_path.exists() and self.needs_rebuild():
+            log.info("Schema version mismatch — destroying stale database")
+            self.destroy()
         log.info("Initializing cache schema...")
         self.conn.executescript(SCHEMA_SQL)
         self.conn.execute(
@@ -233,7 +315,9 @@ class CacheManager:
         """Clear all cached data. Safe to call even if tables don't exist."""
         log.info("Clearing cache...")
         tables_to_clear = [
+            "agg",
             "event_edges",
+            "event_calls",  # FK → events (must precede `events`)
             "events",
             "sessions",
             "projects",
@@ -270,6 +354,12 @@ class CacheManager:
         except sqlite3.OperationalError:
             pass
 
+        call_count = 0
+        try:
+            call_count = cursor.execute("SELECT COUNT(*) FROM event_calls").fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
+
         created_at = cursor.execute("SELECT value FROM cache_metadata WHERE key = 'created_at'").fetchone()
         last_update = cursor.execute("SELECT value FROM cache_metadata WHERE key = 'last_update_at'").fetchone()
 
@@ -284,6 +374,7 @@ class CacheManager:
             "sessions": session_count,
             "events": event_count,
             "event_edges": edge_count,
+            "event_calls": call_count,
             "created_at": created_at[0] if created_at else None,
             "last_update_at": last_update[0] if last_update else None,
         }
@@ -441,24 +532,25 @@ class CacheManager:
         source_file_id = cursor.lastrowid
 
         # Insert events
-        sid = detected_session_id or ""
         for event in events_data:
-            fqn_id = f"{project_id}::{sid}::{event['uuid']}" if event["uuid"] else None
             cursor.execute(
                 """INSERT INTO events
-                   (uuid, parent_uuid, fqn_id, event_type, timestamp, timestamp_local,
+                   (uuid, parent_uuid, prompt_id, event_type, msg_kind,
+                    timestamp, timestamp_local,
                     session_id, project_id, is_sidechain, agent_id, agent_slug,
-                    message_role, is_meta, first_content_block_type,
+                    message_role,
                     message_content, message_content_json, model_id,
                     input_tokens, output_tokens, cache_read_tokens,
                     cache_creation_tokens, cache_5m_tokens,
+                    token_rate, billable_tokens, total_cost_usd,
                     source_file_id, line_number, raw_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     event["uuid"],
                     event["parent_uuid"],
-                    fqn_id,
+                    event["prompt_id"],
                     event["event_type"],
+                    event["msg_kind"],
                     event["timestamp"],
                     event["timestamp_local"],
                     detected_session_id,
@@ -467,8 +559,6 @@ class CacheManager:
                     event["agent_id"],
                     event["agent_slug"],
                     event["message_role"],
-                    event["is_meta"],
-                    event["first_content_block_type"],
                     event["message_content"],
                     event["message_content_json"],
                     event["model_id"],
@@ -477,30 +567,56 @@ class CacheManager:
                     event["cache_read_tokens"],
                     event["cache_creation_tokens"],
                     event["cache_5m_tokens"],
+                    event["token_rate"],
+                    event["billable_tokens"],
+                    event["total_cost_usd"],
                     source_file_id,
                     event["line_number"],
                     event["raw_json"],
                 ),
             )
+            # Capture the rowid so the event_calls insert below can
+            # reference each event's primary key without a second lookup.
+            event["_db_id"] = cursor.lastrowid
 
         # Insert event edges for parent-child relationships
         for event in events_data:
             if event["uuid"] and event["parent_uuid"]:
-                fqn_src = f"{project_id}::{sid}::{event['parent_uuid']}"
-                fqn_dst = f"{project_id}::{sid}::{event['uuid']}"
                 cursor.execute(
                     """INSERT INTO event_edges
                        (project_id, session_id, event_uuid, parent_event_uuid,
-                        fqn_src, fqn_dst, source_file_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        source_file_id)
+                       VALUES (?, ?, ?, ?, ?)""",
                     (
                         project_id,
                         detected_session_id,
                         event["uuid"],
                         event["parent_uuid"],
-                        fqn_src,
-                        fqn_dst,
                         source_file_id,
+                    ),
+                )
+
+        # Fact-table rows for tool/skill/subagent/cli/rule calls. The calls
+        # list was attached during _parse_event_for_cache so we're just
+        # fanning out the already-parsed content-block signals here.
+        for event in events_data:
+            event_db_id = event.get("_db_id")
+            if not event_db_id:
+                continue
+            for ord_, call_type, call_name in event.get("_calls", ()):
+                cursor.execute(
+                    """INSERT INTO event_calls
+                       (event_id, ord, call_type, call_name,
+                        timestamp, project_id, session_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        event_db_id,
+                        ord_,
+                        call_type,
+                        call_name,
+                        event["timestamp"],
+                        project_id,
+                        detected_session_id,
                     ),
                 )
 
@@ -587,6 +703,143 @@ class CacheManager:
         self.conn.commit()
         log.info("Aggregate tables rebuilt")
 
+    # ------------------------------------------------------------------
+    # Dimensional aggregates (agg_{hourly,daily,weekly,monthly})
+    # ------------------------------------------------------------------
+
+    _AGG_BUCKET_EXPRS: dict[str, str] = {
+        "hourly": "strftime('%Y-%m-%dT%H:00:00', timestamp)",
+        "daily": "date(timestamp)",
+        "weekly": "date(timestamp, 'weekday 0', '-6 days')",
+        "monthly": "strftime('%Y-%m-01', timestamp)",
+    }
+
+    def refresh_aggregates_for_range(
+        self,
+        start_bucket: str | None = None,
+        end_bucket: str | None = None,
+    ) -> dict[str, int]:
+        """Refresh the agg table for all granularities in a time range (or fully)."""
+        cursor = self.conn.cursor()
+        counts: dict[str, int] = {}
+        for granularity, bucket_expr in self._AGG_BUCKET_EXPRS.items():
+            if start_bucket is None or end_bucket is None:
+                cursor.execute("DELETE FROM agg WHERE granularity = ?", (granularity,))
+                range_clause = ""
+                range_params: tuple[str, ...] = ()
+            else:
+                cursor.execute(
+                    "DELETE FROM agg WHERE granularity = ? AND time_bucket >= ? AND time_bucket <= ?",
+                    (granularity, start_bucket, end_bucket),
+                )
+                range_clause = f"AND {bucket_expr} BETWEEN ? AND ?"
+                range_params = (start_bucket, end_bucket)
+
+            cursor.execute(
+                f"""
+                INSERT INTO agg (
+                    granularity, time_bucket, project_id, session_id, model_id,
+                    event_count,
+                    input_tokens, output_tokens,
+                    cache_read_tokens, cache_creation_tokens,
+                    total_cost_usd, billable_tokens
+                )
+                SELECT
+                    '{granularity}',
+                    {bucket_expr} AS time_bucket,
+                    project_id,
+                    COALESCE(session_id, ''),
+                    COALESCE(model_id, ''),
+                    COUNT(*),
+                    COALESCE(SUM(input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(cache_read_tokens), 0),
+                    COALESCE(SUM(cache_creation_tokens), 0),
+                    COALESCE(SUM(total_cost_usd), 0.0),
+                    COALESCE(SUM(billable_tokens), 0.0)
+                FROM events
+                WHERE timestamp IS NOT NULL
+                  {range_clause}
+                GROUP BY {bucket_expr}, project_id,
+                         COALESCE(session_id, ''), COALESCE(model_id, '')
+                """,  # noqa: S608
+                range_params,
+            )
+            counts[granularity] = cursor.rowcount
+        self.conn.commit()
+        return counts
+
+    def build_cross_agent_edges(self, session_id: str, project_id: str) -> int:
+        """Bridge subagent-first events to parent tool_use events via prompt_id.
+
+        Subagent JSONL first events have ``parentUuid=null``. Claude Code writes
+        the same ``promptId`` onto both (a) the subagent's first user event and
+        (b) the parent session's ``tool_result`` event, and the tool_result's
+        ``parentUuid`` points at the ``tool_use`` that spawned the agent. We
+        walk that chain and materialize a synthetic edge so graph traversal
+        reaches across the main-session / subagent file boundary.
+
+        Returns the number of new bridge edges inserted.
+        """
+        cursor = self.conn.cursor()
+
+        subagent_starts = cursor.execute(
+            """
+            SELECT e.uuid, e.prompt_id, e.agent_id, e.source_file_id
+            FROM events e
+            WHERE e.session_id = ?
+              AND e.parent_uuid IS NULL
+              AND e.agent_id IS NOT NULL
+              AND e.is_sidechain = 1
+              AND e.prompt_id IS NOT NULL
+            """,
+            (session_id,),
+        ).fetchall()
+
+        created = 0
+        for start in subagent_starts:
+            exists = cursor.execute(
+                "SELECT 1 FROM event_edges WHERE session_id = ? AND event_uuid = ?",
+                (session_id, start["uuid"]),
+            ).fetchone()
+            if exists:
+                continue
+
+            parent_tool_use = cursor.execute(
+                """
+                SELECT tool_result.parent_uuid AS tool_use_uuid
+                FROM events tool_result
+                WHERE tool_result.session_id = ?
+                  AND tool_result.agent_id IS NULL
+                  AND tool_result.msg_kind = 'tool_result'
+                  AND tool_result.prompt_id = ?
+                  AND tool_result.parent_uuid IS NOT NULL
+                LIMIT 1
+                """,
+                (session_id, start["prompt_id"]),
+            ).fetchone()
+
+            if parent_tool_use and parent_tool_use["tool_use_uuid"]:
+                cursor.execute(
+                    """
+                    INSERT INTO event_edges
+                        (project_id, session_id, event_uuid, parent_event_uuid, source_file_id)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        project_id,
+                        session_id,
+                        start["uuid"],
+                        parent_tool_use["tool_use_uuid"],
+                        start["source_file_id"],
+                    ),
+                )
+                created += 1
+
+        if created:
+            self.conn.commit()
+        return created
+
     def update(self, projects_path: Path | None = None) -> dict[str, Any]:
         """Perform incremental update of the cache. Returns counts."""
         if projects_path is None:
@@ -604,15 +857,50 @@ class CacheManager:
             log.info("Cache is up to date")
             return {"files_updated": 0, "events_added": 0}
 
+        # Ingest files, tracking which sessions were touched so we can scope
+        # the bridge-edge build and the dimensional aggregate refresh.
         total_events = 0
+        affected_sessions: dict[str, str] = {}  # session_id -> project_id
         for file_info in files_to_update:
             events_added = self.ingest_file(file_info)
             total_events += events_added
             log.debug("  %s: %d events (%s)", file_info["filepath"], events_added, file_info.get("reason", "new"))
+            sid = file_info.get("session_id")
+            if sid:
+                affected_sessions[sid] = file_info["project_id"]
 
         self.conn.commit()
 
+        # Build cross-agent bridge edges for every touched session
+        total_bridges = 0
+        for sid, pid in affected_sessions.items():
+            total_bridges += self.build_cross_agent_edges(sid, pid)
+        if total_bridges:
+            log.info("Created %d cross-agent bridge edges", total_bridges)
+
+        # Rebuild projects+sessions roll-ups (cheap)
         self.rebuild_aggregates()
+
+        # Dimensional agg_* tables: full rebuild when empty, otherwise
+        # incremental by the timestamp window of ingested sessions.
+        agg_empty = self.conn.execute("SELECT COUNT(*) FROM agg").fetchone()[0] == 0
+        if agg_empty:
+            log.info("Dimensional aggregates empty — doing full cold rebuild")
+            self.refresh_aggregates_for_range()
+        elif affected_sessions:
+            session_ids = list(affected_sessions.keys())
+            placeholders = ",".join("?" * len(session_ids))
+            row = self.conn.execute(
+                f"""
+                SELECT MIN(timestamp), MAX(timestamp)
+                FROM events
+                WHERE timestamp IS NOT NULL
+                  AND session_id IN ({placeholders})
+                """,  # noqa: S608
+                tuple(session_ids),
+            ).fetchone()
+            if row and row[0]:
+                self.refresh_aggregates_for_range(str(row[0]), str(row[1]))
 
         self.conn.execute(
             "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",
@@ -622,6 +910,77 @@ class CacheManager:
 
         log.info("Updated %d files, %d events", len(files_to_update), total_events)
         return {"files_updated": len(files_to_update), "events_added": total_events}
+
+
+# ── Pricing / cost helpers ────────────────────────────────────────
+#
+# Costs are computed at ingestion time and stored directly on each event so
+# downstream queries (and the agg_* dimensional tables) can SUM them without
+# per-row CASE expressions. All model families share the same relative
+# multipliers (output 5×, cache_read 0.1×, cache_write 1.25×), so token_rate
+# alone is sufficient to reconstruct a family's full price shape.
+
+PRICING: dict[str, dict[str, float]] = {
+    "opus": {
+        "input": 15.0,
+        "output": 75.0,
+        "cache_read_multiplier": 0.1,
+        "cache_write_multiplier": 1.25,
+    },
+    "sonnet": {
+        "input": 3.0,
+        "output": 15.0,
+        "cache_read_multiplier": 0.1,
+        "cache_write_multiplier": 1.25,
+    },
+    "haiku": {
+        "input": 1.0,
+        "output": 5.0,
+        "cache_read_multiplier": 0.1,
+        "cache_write_multiplier": 1.25,
+    },
+}
+
+
+def model_family_from_id(model_id: str | None) -> str:
+    """Extract model family (opus/sonnet/haiku) from a full model ID string."""
+    if model_id is None:
+        return "unknown"
+    model_lower = model_id.lower()
+    for family in ("opus", "sonnet", "haiku"):
+        if family in model_lower:
+            return family
+    return "unknown"
+
+
+def _compute_event_costs(
+    model_id: str | None,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    cache_creation_tokens: int,
+) -> tuple[float, float, float]:
+    """Compute (token_rate, billable_tokens, total_cost_usd) for an event.
+
+    Returns (0.0, 0.0, 0.0) for unknown models so the row still inserts cleanly.
+    """
+    family = model_family_from_id(model_id)
+    pricing = PRICING.get(family)
+    if pricing is None:
+        return 0.0, 0.0, 0.0
+
+    token_rate = pricing["input"]
+    output_mult = pricing["output"] / pricing["input"]  # always 5.0
+    cache_read_mult = pricing["cache_read_multiplier"]  # always 0.1
+    cache_write_mult = pricing["cache_write_multiplier"]  # always 1.25
+
+    billable = (
+        input_tokens
+        + output_tokens * output_mult
+        + cache_read_tokens * cache_read_mult
+        + cache_creation_tokens * cache_write_mult
+    )
+    return token_rate, round(billable, 4), round(billable * token_rate / 1_000_000, 8)
 
 
 # ── Event parsing helpers (module-level functions) ────────────────
@@ -678,6 +1037,276 @@ def _extract_text_content(content: Any) -> str:
     return ""
 
 
+def _message_kind(event_type: str, is_meta: bool, content: Any) -> str:
+    """Classify an event into one of 9 fine-grained message kinds.
+
+    Kinds:
+        human              — user, not meta, string content (actual typed prompts)
+        task_notification  — user, not meta, string starting with <task-notification>
+        tool_result        — user, not meta, tool_result list
+        user_text          — user, not meta, text/other list
+        meta               — user, isMeta=true (system-injected context)
+        assistant_text     — assistant, text list
+        thinking           — assistant, thinking list
+        tool_use           — assistant, tool_use list
+        other              — progress / system / queue-operation / etc.
+    """
+    fct = _first_content_block_type(content)
+    if event_type == "user":
+        if is_meta:
+            return "meta"
+        if fct == "string":
+            if isinstance(content, str) and content.lstrip().startswith("<task-notification>"):
+                return "task_notification"
+            return "human"
+        if fct == "tool_result":
+            return "tool_result"
+        return "user_text"
+    if event_type == "assistant":
+        if fct == "thinking":
+            return "thinking"
+        if fct == "tool_use":
+            return "tool_use"
+        return "assistant_text"
+    return "other"
+
+
+# ── event_calls fact-table extraction ──────────────────────────────
+# Kept verbatim in sync with
+# .claude/skills/introspect/scripts/introspect_sessions.py — this module
+# is self-contained, so the helpers are duplicated rather than imported.
+
+_SYSTEM_REMINDER_RE = re.compile(
+    r"<system-reminder>(.*?)</system-reminder>",
+    re.DOTALL,
+)
+_RULE_PATH_RE = re.compile(r"Contents of\s+(/[^\s:'\"]+)")
+_SHELL_SPLIT_RE = re.compile(r"\|\||&&|;|\|")
+_CLI_WRAPPERS: frozenset[str] = frozenset(
+    {
+        "sudo",
+        "time",
+        "nohup",
+        "exec",
+        "xargs",
+        "env",
+        "command",
+    }
+)
+_SHELL_KEYWORDS_UNWRAP: frozenset[str] = frozenset(
+    {
+        "if",
+        "elif",
+        "then",
+        "else",
+        "do",
+        "while",
+        "until",
+    }
+)
+_SHELL_SEGMENT_REJECT: frozenset[str] = frozenset(
+    {
+        "for",
+        "case",
+        "in",
+        "done",
+        "fi",
+        "esac",
+    }
+)
+_MAKE_FLAGS_WITH_ARG: frozenset[str] = frozenset(
+    {
+        "-C",
+        "-f",
+        "-I",
+        "-j",
+        "-l",
+        "-o",
+        "-W",
+    }
+)
+
+
+def _is_env_assignment(token: str) -> bool:
+    """True for tokens of the form ``NAME=value`` (valid env var assignment)."""
+    if "=" not in token or token.startswith("-") or token.startswith("="):
+        return False
+    name, _, _ = token.partition("=")
+    if not name:
+        return False
+    if not (name[0].isalpha() or name[0] == "_"):
+        return False
+    return all(c.isalnum() or c == "_" for c in name)
+
+
+def _segment_head_and_rest(tokens: list[str]) -> tuple[str, list[str]] | None:
+    """Skip env-var assignments and wrappers, return ``(head, rest)``."""
+    i = 0
+    while i < len(tokens) and _is_env_assignment(tokens[i]):
+        i += 1
+    # Reject bash control-structure segments (`for ... in ...`, `done`, `fi`).
+    if i < len(tokens) and tokens[i] in _SHELL_SEGMENT_REJECT:
+        return None
+    # Unwrap keywords that introduce a real command: `do cmd`, `then cmd`.
+    while i < len(tokens) and tokens[i] in _SHELL_KEYWORDS_UNWRAP:
+        i += 1
+    if i < len(tokens) and tokens[i] in _SHELL_SEGMENT_REJECT:
+        return None
+    while i < len(tokens) and tokens[i] in _CLI_WRAPPERS:
+        i += 1
+        while i < len(tokens) and tokens[i].startswith("-"):
+            i += 1
+        while i < len(tokens) and _is_env_assignment(tokens[i]):
+            i += 1
+    if i >= len(tokens):
+        return None
+    raw = tokens[i].lstrip("(")
+    raw = raw.rsplit("/", 1)[-1]
+    raw = raw.rstrip("();&")
+    if not raw:
+        return None
+    # Reject pure-punctuation heads (bare quotes, semicolons) that
+    # survived tokenisation of multi-line heredocs or `sh -c "..."` args.
+    if not any(c.isalnum() for c in raw):
+        return None
+    return raw, tokens[i + 1 :]
+
+
+def _parse_cli_segments(command: str) -> list[tuple[str, list[str]]]:
+    """Parse a shell command into ``(head, post_head_tokens)`` segments."""
+    if not command:
+        return []
+    out: list[tuple[str, list[str]]] = []
+    for segment in _SHELL_SPLIT_RE.split(command):
+        tokens = segment.strip().split()
+        result = _segment_head_and_rest(tokens)
+        if result is not None:
+            out.append(result)
+    return out
+
+
+def _parse_cli_heads(command: str) -> list[str]:
+    """Return the program-name head(s) of each sub-command in a shell string."""
+    return [head for head, _rest in _parse_cli_segments(command)]
+
+
+def _is_shell_redirection(tok: str) -> bool:
+    """True for shell redirection / control tokens like ``2>&1``, ``&``, ``>log``."""
+    if not tok:
+        return False
+    first = tok[0]
+    if first in "<>&":
+        return True
+    if first.isdigit() and len(tok) > 1 and tok[1] in "<>":
+        return True
+    return False
+
+
+def _parse_make_targets(tokens_after_make: list[str]) -> list[str]:
+    """Extract target names from tokens appearing after ``make``."""
+    targets: list[str] = []
+    i = 0
+    while i < len(tokens_after_make):
+        tok = tokens_after_make[i]
+        if tok.startswith("--"):
+            i += 1
+            continue
+        if tok in _MAKE_FLAGS_WITH_ARG:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        if _is_env_assignment(tok):
+            i += 1
+            continue
+        if _is_shell_redirection(tok):
+            i += 1
+            continue
+        targets.append(tok)
+        i += 1
+    return targets
+
+
+def _extract_rule_paths(text: str) -> list[str]:
+    """Return every rule-file path cited in <system-reminder> blocks in ``text``."""
+    paths: list[str] = []
+    for reminder in _SYSTEM_REMINDER_RE.findall(text):
+        for match in _RULE_PATH_RE.finditer(reminder):
+            paths.append(match.group(1))
+    return paths
+
+
+def _extract_tool_use_calls(idx: int, block: dict[str, Any]) -> list[tuple[int, str, str]]:
+    """Rows for a single tool_use content block (tool/skill/subagent/cli)."""
+    name = block.get("name") or ""
+    raw_input = block.get("input")
+    inp: dict[str, Any] = raw_input if isinstance(raw_input, dict) else {}
+    rows: list[tuple[int, str, str]] = []
+
+    if name == "Skill":
+        skill_val = inp.get("skill")
+        skill = skill_val.strip() if isinstance(skill_val, str) else ""
+        if skill:
+            rows.append((idx, "skill", skill))
+        else:
+            rows.append((idx, "tool", name))
+        return rows
+
+    if name == "Agent":
+        subagent_val = inp.get("subagent_type")
+        subagent = subagent_val.strip() if isinstance(subagent_val, str) else ""
+        if subagent:
+            rows.append((idx, "subagent", subagent))
+        else:
+            rows.append((idx, "tool", name))
+        return rows
+
+    if name:
+        rows.append((idx, "tool", name))
+
+    if name == "Bash":
+        command_val = inp.get("command")
+        command = command_val if isinstance(command_val, str) else ""
+        # One 'cli' row per segment head; additionally emit 'make_target'
+        # rows when the head is `make` so we can slice "what targets does
+        # this project build most" separately from "how often was make
+        # invoked at all".
+        for head, rest in _parse_cli_segments(command):
+            rows.append((idx, "cli", head))
+            if head == "make":
+                for target in _parse_make_targets(rest):
+                    rows.append((idx, "make_target", target))
+
+    return rows
+
+
+def _extract_calls(raw: dict[str, Any]) -> list[tuple[int, str, str]]:
+    """Return (ord, call_type, call_name) rows for an event's signals.
+
+    Six discriminators — tool, skill, subagent, cli, rule, make_target —
+    produced from message.content[] tool_use blocks and embedded
+    <system-reminder> text.
+    """
+    calls: list[tuple[int, str, str]] = []
+    message = raw.get("message") if isinstance(raw, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return calls
+
+    for idx, block in enumerate(content):
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "tool_use":
+            calls.extend(_extract_tool_use_calls(idx, block))
+        elif block_type == "text":
+            text = block.get("text") or ""
+            for path in _extract_rule_paths(text):
+                calls.append((idx, "rule", path))
+    return calls
+
+
 def _parse_event_for_cache(
     raw: dict[str, Any],
     project_id: str,
@@ -694,18 +1323,28 @@ def _parse_event_for_cache(
     timestamp = raw.get("timestamp")
     uuid = raw.get("uuid")
     parent_uuid = raw.get("parentUuid")
+    prompt_id = raw.get("promptId")
     is_sidechain = raw.get("isSidechain", False)
     agent_id = raw.get("agentId")
     agent_slug = raw.get("slug")
 
-    is_meta = 1 if raw.get("isMeta") else 0
+    is_meta = bool(raw.get("isMeta"))
 
     message = raw.get("message", {}) or {}
     message_role = message.get("role") if isinstance(message, dict) else None
     message_content_raw = message.get("content") if isinstance(message, dict) else None
     model_id = message.get("model") if isinstance(message, dict) else None
 
-    first_block_type = _first_content_block_type(message_content_raw)
+    # Sanitize: drop `signature` from thinking blocks (large base64 token, useless for analytics)
+    if isinstance(message_content_raw, list):
+        message_content_raw = [
+            {k: v for k, v in block.items() if k != "signature"}
+            if isinstance(block, dict) and block.get("type") == "thinking" and "signature" in block
+            else block
+            for block in message_content_raw
+        ]
+
+    msg_kind = _message_kind(event_type, is_meta, message_content_raw)
     message_content_text = _extract_text_content(message_content_raw)
 
     usage = message.get("usage", {}) if isinstance(message, dict) else {}
@@ -715,6 +1354,11 @@ def _parse_event_for_cache(
     cache_creation_tokens = usage.get("cache_creation_input_tokens", 0) or 0
     cache_creation = usage.get("cache_creation", {}) or {}
     cache_5m_tokens = cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
+
+    # Pre-compute cost fields at ingest so agg_* rollups are a plain SUM().
+    token_rate, billable_tokens, total_cost_usd = _compute_event_costs(
+        model_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
+    )
 
     timestamp_local = None
     if timestamp:
@@ -728,15 +1372,15 @@ def _parse_event_for_cache(
     return {
         "uuid": uuid,
         "parent_uuid": parent_uuid,
+        "prompt_id": prompt_id,
         "event_type": event_type,
+        "msg_kind": msg_kind,
         "timestamp": timestamp,
         "timestamp_local": timestamp_local,
         "is_sidechain": 1 if is_sidechain else 0,
         "agent_id": agent_id,
         "agent_slug": agent_slug,
         "message_role": message_role,
-        "is_meta": is_meta,
-        "first_content_block_type": first_block_type,
         "message_content": message_content_text,
         "message_content_json": json.dumps(message_content_raw) if message_content_raw else None,
         "model_id": model_id,
@@ -745,6 +1389,16 @@ def _parse_event_for_cache(
         "cache_read_tokens": cache_read_tokens,
         "cache_creation_tokens": cache_creation_tokens,
         "cache_5m_tokens": cache_5m_tokens,
+        "token_rate": token_rate,
+        "billable_tokens": billable_tokens,
+        "total_cost_usd": total_cost_usd,
         "line_number": line_number,
-        "raw_json": json.dumps(raw),
+        # raw_json intentionally empty — the source-of-truth for the raw
+        # payload is the JSONL file on disk (source_files.filepath + line_number).
+        # Storing a duplicate copy costs 2+ GB and leaks thinking-block signatures.
+        "raw_json": "",
+        # Fact-table rows for tool/skill/subagent/cli/rule calls. Parsed
+        # once here so ingest_file() can fan them out to event_calls
+        # after the event row's primary key is known.
+        "_calls": _extract_calls(raw),
     }

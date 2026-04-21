@@ -17,16 +17,21 @@ _Odin fears losing Memory more than Thought._
 
 This project aims to build **agentic memory** and **knowledge graph** primitives for sqlite as a native C extension. It is an advanced collection of knowledge graph primitives like Vector Similarity Search, HNSW Indexes, Graph database, Community Detection, Node2Vec capabilities and loading GGUF models via llama.cpp integration.
 
+| Package Index | Published Version | Downloads | 
+|---|---|---|
+| PyPI | [![PyPI](https://img.shields.io/pypi/v/sqlite-muninn.svg)](https://pypi.org/project/sqlite-muninn/) | [![PyPI Downloads](https://img.shields.io/pypi/dm/sqlite-muninn.svg)](https://pypi.org/project/sqlite-muninn/) |
+| npm | [![npm](https://img.shields.io/npm/v/sqlite-muninn.svg)](https://www.npmjs.com/package/sqlite-muninn) | [![npm Downloads](https://img.shields.io/npm/dm/sqlite-muninn.svg)](https://www.npmjs.com/package/sqlite-muninn) |
+
 ## Features
 
-- **HNSW Vector Index** &mdash; O(log N) approximate nearest neighbor search with incremental insert/delete
-- **Graph Traversal** &mdash; BFS, DFS, shortest path, connected components, PageRank on any edge table, dbt syntax graph node selection.
+- **HNSW Vector Index** - O(log N) approximate nearest neighbor search with incremental insert/delete
+- **Graph Traversal** - BFS, DFS, shortest path, connected components, PageRank on any edge table, dbt syntax graph node selection.
 - **`llama.cpp` native models**; Load and use GGUF LLM models natively in sqlite.
-- **Centrality Measures** &mdash; Degree, betweenness (Brandes), and closeness centrality with weighted/temporal support
-- **Community Detection** &mdash; Leiden algorithm for discovering graph communities with modularity scoring
-- **Node2Vec** &mdash; Learn structural node embeddings from graph topology, store in HNSW for similarity search
-- **Zero dependencies** &mdash; compiles to a single `.dylib`/`.so`/`.dll`
-- **SIMD accelerated** &mdash; ARM NEON and x86 SSE distance functions
+- **Centrality Measures** - Degree, betweenness (Brandes), and closeness centrality with weighted/temporal support
+- **Community Detection** - Leiden algorithm for discovering graph communities with modularity scoring
+- **Node2Vec** - Learn structural node embeddings from graph topology, store in HNSW for similarity search
+- **Zero dependencies** - compiles to a single `.dylib`/`.so`/`.dll`
+- **SIMD accelerated** - ARM NEON and x86 SSE distance functions
 
 ## Quick Start
 

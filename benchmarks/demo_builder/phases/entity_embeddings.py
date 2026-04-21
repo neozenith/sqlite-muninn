@@ -1,4 +1,7 @@
-"""Phase 6: Entity Embeddings.
+"""Phase 6: Entity Embeddings via muninn GGUF.
+
+Embeds unique entity names using muninn_embed() (llama.cpp GGUF inference)
+and inserts into the entities_vec HNSW index.
 
 Incremental: only embeds entity names not yet present in entity_vec_map.
 """
@@ -9,12 +12,7 @@ import logging
 import sqlite3
 from typing import TYPE_CHECKING
 
-import numpy as np
-from huggingface_hub import snapshot_download
-from sentence_transformers import SentenceTransformer
-
-from benchmarks.demo_builder.common import pack_vector
-from benchmarks.demo_builder.constants import EMBEDDING_MODELS
+from benchmarks.demo_builder.constants import EMBEDDING_MODELS, GGUF_MODELS_DIR
 from benchmarks.demo_builder.phases.base import Phase
 
 if TYPE_CHECKING:
@@ -24,11 +22,10 @@ log = logging.getLogger(__name__)
 
 
 class PhaseEntityEmbeddings(Phase):
-    """Embed unique entity names and insert into HNSW index."""
+    """Embed unique entity names via muninn_embed() GGUF and insert into HNSW index."""
 
     def __init__(self, model_name: str) -> None:
         self._model_name = model_name
-        self._st_model: SentenceTransformer | None = None
 
     @property
     def name(self) -> str:
@@ -57,6 +54,18 @@ class PhaseEntityEmbeddings(Phase):
     def setup(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
         model_info = EMBEDDING_MODELS[self._model_name]
         dim = model_info["dim"]
+        gguf_name = model_info["gguf_name"]
+        gguf_path = str(GGUF_MODELS_DIR / model_info["gguf_file"])
+
+        # Register the GGUF embedding model if not already registered by a prior phase.
+        existing = conn.execute("SELECT 1 FROM temp.muninn_models WHERE name = ?", (gguf_name,)).fetchone()
+        if not existing:
+            conn.execute(
+                """INSERT INTO temp.muninn_models(name, model)
+                   SELECT ?, muninn_embed_model(?)""",
+                (gguf_name, gguf_path),
+            )
+            log.info("  Registered GGUF model: %s → %s", gguf_name, gguf_path)
 
         # IF NOT EXISTS: preserve existing embeddings on incremental re-runs.
         conn.execute(
@@ -66,17 +75,9 @@ class PhaseEntityEmbeddings(Phase):
         )
         conn.execute("CREATE TABLE IF NOT EXISTS entity_vec_map (rowid INTEGER PRIMARY KEY, name TEXT NOT NULL)")
 
-        log.info("  Loading SentenceTransformer %s...", model_info["st_name"])
-        st_kwargs: dict[str, bool] = {}
-        if model_info.get("trust_remote_code"):
-            st_kwargs["trust_remote_code"] = True
-        path = snapshot_download(model_info["st_name"], local_files_only=True)
-        self._st_model = SentenceTransformer(path, **st_kwargs)
-
     def run(self, conn: sqlite3.Connection, ctx: PhaseContext) -> None:
-        assert self._st_model is not None, "setup() must be called before run()"
-
         model_info = EMBEDDING_MODELS[self._model_name]
+        gguf_name = model_info["gguf_name"]
 
         # ── Find entity names not yet embedded ───────────────────────
         new_names = conn.execute("""
@@ -89,23 +90,24 @@ class PhaseEntityEmbeddings(Phase):
         if not new_names_list:
             log.info("  All entity names already embedded")
         else:
-            log.info("  Encoding %d new entity names with %s...", len(new_names_list), model_info["st_name"])
-            new_vectors = self._st_model.encode(new_names_list, show_progress_bar=True, normalize_embeddings=True)
-            new_vectors = new_vectors.astype(np.float32)
+            log.info("  Embedding %d new entity names with %s (GGUF)...", len(new_names_list), gguf_name)
 
-            # Assign rowids sequentially from max existing + 1.
             max_rowid = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM entity_vec_map").fetchone()[0]
-            for i, (ent_name, vec) in enumerate(zip(new_names_list, new_vectors, strict=True)):
+            embedded = 0
+            for i, ent_name in enumerate(new_names_list):
                 rowid = max_rowid + i + 1
-                conn.execute(
-                    "INSERT INTO entities_vec (rowid, vector) VALUES (?, ?)",
-                    (rowid, pack_vector(vec)),
-                )
-                conn.execute(
-                    "INSERT INTO entity_vec_map (rowid, name) VALUES (?, ?)",
-                    (rowid, ent_name),
-                )
-            log.info("  Inserted %d new entity embeddings", len(new_names_list))
+                result = conn.execute("SELECT muninn_embed(?, ?)", (gguf_name, ent_name)).fetchone()
+                if result and result[0]:
+                    conn.execute(
+                        "INSERT INTO entities_vec (rowid, vector) VALUES (?, ?)",
+                        (rowid, result[0]),
+                    )
+                    conn.execute(
+                        "INSERT INTO entity_vec_map (rowid, name) VALUES (?, ?)",
+                        (rowid, ent_name),
+                    )
+                    embedded += 1
+            log.info("  Inserted %d new entity embeddings", embedded)
 
         ctx.num_unique_entities = conn.execute("SELECT count(*) FROM entity_vec_map").fetchone()[0]
         log.info("  Total entity embeddings: %d", ctx.num_unique_entities)

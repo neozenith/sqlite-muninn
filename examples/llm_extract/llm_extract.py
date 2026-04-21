@@ -96,6 +96,18 @@ MODELS = [
         "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
         2.5,
     ),
+    GgufModel(
+        "Gemma-4-E2B",
+        "gemma-4-E2B-it-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf",
+        3.11,
+    ),
+    GgufModel(
+        "Gemma-4-E4B",
+        "gemma-4-E4B-it-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+        4.98,
+    ),
 ]
 
 

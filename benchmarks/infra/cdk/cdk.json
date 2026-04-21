@@ -1,0 +1,8 @@
+{
+  "app": "uv run --group cdk python benchmarks/infra/cdk/app.py",
+  "context": {
+    "s3_bucket": "muninn-benchmarks-389956346255",
+    "s3_region": "us-west-2",
+    "ec2_region": "ap-southeast-2"
+  }
+}

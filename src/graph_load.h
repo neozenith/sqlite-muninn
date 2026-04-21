@@ -60,6 +60,22 @@ int graph_data_find(const GraphData *g, const char *id);
 /* Look up or insert a node. Returns its index. Auto-resizes hash map at 70% load. */
 int graph_data_find_or_add(GraphData *g, const char *id);
 
+/* Add a single edge to an adjacency list. */
+void adj_add(GraphAdjList *adj, int target, double weight);
+
+/*
+ * Add a weighted edge between two nodes (by index).
+ * Adds to out[src] and optionally in[dst]. Increments edge_count.
+ */
+static inline void graph_data_add_edge(GraphData *g, int src_idx, int dst_idx, double weight, int add_forward,
+                                       int add_reverse) {
+    if (add_forward)
+        adj_add(&g->out[src_idx], dst_idx, weight);
+    if (add_reverse)
+        adj_add(&g->in[dst_idx], src_idx, weight);
+    g->edge_count++;
+}
+
 /*
  * Load a graph from a SQLite table according to the given configuration.
  * Validates identifiers via id_validate(). Builds both forward (out) and

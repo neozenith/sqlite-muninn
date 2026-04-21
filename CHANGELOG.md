@@ -8,6 +8,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- Em dash in SG description + IpProtocol parameter name
+- Prime-only mode skips benchmarks when limit=0, max_workers from context
+- Extend AMI waiter timeout to 30 minutes
+- Scaling policy uses visible+inflight messages, 10min cooldown before scale-in
+- Cloud-init clean before shutdown so AMI-launched instances re-run user-data
+- Systemd service replaces cloud-init for worker boot execution
+- Npm lock sync, exclude KG categories, add benchmarks/infra/CLAUDE.md
+- WCAG AA compliant color palette for dashboard
+- Radio button text color + default time range to 3d
+- Fix cache init on sessions_demo
+- Prep sync from S3, circuit breaker, systemd timeout=infinity
+- --limit 0 should pass limit=0, not skip the limit filter
+- Radio buttons and inputs persist across 15s auto-refresh
+- Enable ASG group metrics for CloudWatch (GroupInServiceInstances etc)
+- Install + configure CloudWatch agent for /muninn/benchmarks logs
+- Upload no-op worker script during prime to prevent SQS polling
+- Prime monitor treats shutting-down as normal stop transition
+- Remove duplicate cmd_run that was embedded inside cmd_prime
+- Fix sessions_demo embedding process to be consistent
+- CloudWatch agent + SSM install moved outside cmake cold-start check
+- Node2vec_train() arg mismatch — remove weight col, fix order, use neg_samples/lr_init
+- Truncate embed texts to model's max_tokens context window
+- Stop uploading SQLite DBs to S3, clean up local DBs after each benchmark
+- Add sqlite-lembed to benchmark dep group so workers can run lembed treatments
+- Update llama.cpp to support Gemma4 models
+- Defer llama_cpp import — remove vectors from prep/__init__.py
+- Always shutdown in worker EXIT trap, not just at normal exit
+- Increase EBS from 20→40 GiB; add disk usage report after sync phases
+- Add HHMM to AMI name to prevent same-day re-prime collision
+- VSS OOM + add disk report to prime user_data.sh
+
+### Documentation
+
+- Add benchmarks/infra/README.md with full architecture and usage guide
+- Replace ASCII diagrams with Mermaid in benchmarks/infra/README.md
+- Cloud-enabled manifest pattern — gap analysis + agent-facing rule
+- Benchmark run resume notes — OOM fix + resumption checklist
+- Update resume_benchmarks.md with session 2 state
+
+### Features
+
+- Add benchmarks/infra/ — config-driven EC2 benchmark runner
+- CDK infrastructure for per-branch benchmark pipelines
+- Add prime and submit subcommands to runner.py
+- Add Plotly Dash monitoring dashboard for benchmark deployments
+- Add time-series line chart to dashboard (queue depth + workers over time)
+- CloudWatch-backed time-series chart + ASG scaling events table
+- Time range selector for dashboard chart (1h/3h/12h/1d/3d/7d)
+- Added muninn_label_groups Address issue with community and cluster naming stalling filling up on thinking tokens and not ending.
+- HNSW parameter sweep for VSS benchmarks (M, ef_construction, ef_search)
+- Dashboard improvements — spot pricing, log viewer, metric fix, port 8060
+- Dashboard — dual ASG series, cumulative spend, uptime/cost columns
+- --port CLI arg for dashboard
+- On-demand pricing comparison in dashboard workers table
+- Split queue and workers into separate line charts
+- Multi-select instance dropdown for CloudWatch logs viewer
+- Prime auto-suspends ASG scaling, resumes after AMI creation
+- Add diagnose subcommand to runner.py
+
+### Miscellaneous
+
+- Update llama.cpp submodule to latest
+
+### Other
+
+- Update plan docs
+- Refined plan
+- Feat/benchmarks cloud support (#21)
+
+* tidy quality gates on er spec and remove google colab make targets since it is WIP
+
+* benchmarks: benchmarks harness adding cloud awareness to be able to delegate jobs to cloud compute
+
+* benchmark: fix missing check to rely on .jsonl files instead of actual sqlite files (which get stupid big)
+- ER Example
+- Add learnings for ER example to drop pairwise usage as an option and focus on the cluster style LLM comparrison grammar
+- Wip erv2
+- Wip erv2
+- Updated default values for string only er to improve ER before LLM borderline cases
+- ER analysis of Fp/Fn cases as well as cross comparing embedding models
+- Revised er pipeline
+- Improving stage timing granularity
+- Version control claude.md files
+- Updated charts for ER Example analysis
+- Add graph edge betweenness pruning of ERs
+- Add graph edge betweenness to benchmarks harness
+- Fast C implementation of ER pipeline
+- Escape JSON strings for entity results
+- Updates to session_demo
+- Ensure GHA ci workflow uses only makefile targets
+- Address ci formatting and linting issues
+- Disable claude code on GHA from burning quota for now
+- Address ci fixes
+- Remove unneeded examples
+- Consolidate aggregate tables
+- Add packaging badges. remove cruft docs plans
+- Update docs
+
+### Refactor
+
+- Refactor sessions_demo builder to decouple from demo_builder
+
+## [0.3.0-alpha.2] - 2026-03-26
+
+### Bug Fixes
+
+- Update Claude GHA permissions and action versions (#10)
+
+### Other
+
+- Increment version for another alpha release
+
+## [0.3.0-alpha.1] - 2026-03-26
+
+### Bug Fixes
+
 - Address CI memory leak not unloading models. Address CI build issues needing to propagate from main build to windows build script.
 - Demo db builder fully functional
 - Remove FTS5Adapter from kg benchmarks
@@ -16,49 +132,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored viz demo
 - Notebook kernel CWD is examples/{name}/, not project root
 - Add --cache-bust flag to Colab E2E test script
-- Use POSIX paths in generate_build.py for Windows compatibility
-- Add no_working_dir_found to gcovr ignore list
-- Link system libraries in Windows build script
-- Use llvm-cov for gcovr when building with clang
-- Set static CRT for Windows llama.cpp build
-- Make pysqlite3 a hard dev dependency, no fallback
-- Sort pysqlite3 imports to satisfy ruff I001
-- Revert the claude code review to was is on main so it is not adding failure noise to this PR
-- Remove unnecessary matrix strategy on C sanitiser
+- Github Action CI Issues (#4)
 
 ### CI
 
 - Set concurrency groups to cancel in flight builds when a newer commit is available and set timeouts to cap jobs that are hanging in CMake.
 - Refactor sources and build targets into one centralised spot
 - Refactor wasm build pipeline and rebuild the kg-demo database for wasm/ and viz/
-- Add setup-uv to all jobs that invoke make
-- Move setup-uv before make in package-install job
-- Add ccache for llama.cpp builds, upgrade setup-uv and actions/cache
-- Bump macOS build timeout to 30 min for cold-cache llama.cpp
-- Fix WASM build to use root Makefile target
-- Disable ccache for sanitize job to preserve coverage data
-- Fix pysqlite3 on macOS and install llvm for sanitize coverage
-- Focus on macOS build — comment out 8 passing jobs
-- Use uv sync for macOS Python deps, drop pysqlite3
-- Use Homebrew Python on macOS for sqlite3 extension loading
-- Use Homebrew python@3.13 on macOS (3.14 exceeds requires-python)
-- Use --no-binary-package flag for uv sync
-- Uncomment all jobs for full CI run
-- Bump macOS Universal Binary timeout and break down steps
-- Share ccache key between macOS jobs
-- Bump macOS Universal Binary timeout to 25 min
-- Upgrade GitHub Actions to Node.js 24 runtime
-- Fix publish.yml build jobs, block publish jobs temporarily
-- Bump macOS Universal timeout to 20 min for cold-cache rebuilds
-- Bump macOS timeouts for larger llama.cpp b8495 build
-- Deduplicate macOS builds, fix caches (F1-F5)
-- Bump macOS arm64 timeout to 25 min for cold-cache b8495
-- Bump macOS arm64 timeout to 30 min
-- Bump macOS arm64 to 35 min (build ~28 min + cache upload ~5 min)
-- Split build matrix into individual jobs, add needs: [quality]
-- Split publish.yml build matrix into individual jobs
-- Switch WASM from build-wasm-lite to build-wasm (full with llama.cpp)
-- Set ccache max-size: 200M to prevent restore/save timeout
 
 ### Documentation
 
@@ -93,12 +173,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add 3-environment path resolution for Colab + E2E test script
 - Updated suport of supervised and unsupervised NER, RE
 
-### Miscellaneous
-
-- Update llama.cpp submodule to b8495
-- Update llama.cpp submodule to b8496
-- Update llama.cpp submodule to b8508
-
 ### Other
 
 - Update dev tooling script for logo image processing to spit out full sequential step explanation.
@@ -111,20 +185,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated plan docs
 - Use qwen3.5 in example
 - Address CI issues
-- Triggering CI on a new branch
-- Uncomment publish now so it can test reusing the caches from ci.yml
-- Prepare for publishing alpha release
-- Prepare for publishing alpha release
 
 ### Refactor
 
 - Refactor benchmarks cli usage docs, add updated plannign docs for next phases.
-- Remove pysqlite3 fallback, use stdlib sqlite3 directly
-
-### Testing
-
-- Add package API tests and install package in CI
-- Temporarily disable publish.yml from automated triggers to only manual workflow_dispatch
 
 ## [0.2.0] - 2026-02-18
 
