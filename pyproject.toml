@@ -18,22 +18,12 @@ classifiers = [
     "Topic :: Database",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = [
-    "boto3>=1.42.76",
-    "einops>=0.8.2",
-    "gguf>=0.18.0",
-    "gliner>=0.2.25",
-    "gliner2>=1.2.4",
-    "glirel>=1.2.1",
-    "huggingface-hub>=1.4.1",
-    "loguru>=0.7.3",
-    "numpy>=2.3.5",
-    "playwright>=1.58.0",
-    "pyyaml>=6.0.3",
-    "sentence-transformers>=5.2.2",
-    "spacy>=3.8.11",
-    "umap-learn>=0.5.11",
-]
+# sqlite_muninn is a thin stdlib-only loader around the C extension
+# (uses sqlite3, pathlib, importlib.metadata). End users of the PyPI
+# package should NOT pull in our benchmark/demo ML stack. Anything
+# needed by scripts/, benchmarks/, or demo_builder/ lives in the
+# [dependency-groups] below, NEVER here.
+dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/user/sqlite-muninn"
@@ -56,6 +46,7 @@ benchmark = [
     "umap-learn>=0.5.7",
     "plotly>=6.5.2",
     "jinja2>=3.1.0",
+    "pyyaml>=6.0.3",
     # Competitors / peers depending how you look at it
     "apsw",
     "sqliteai-vector>=0.9.70",
@@ -66,6 +57,8 @@ benchmark = [
     "datasets>=4.5.0",
     "sentence-transformers>=5.2.2",
     "einops",  # required by nomic-embed-text-v1.5 (trust_remote_code model)
+    "gguf>=0.18.0",
+    "huggingface-hub>=1.4.1",
     "gliner",
     "glirel",
     "loguru",
@@ -79,6 +72,8 @@ benchmark = [
     "gliner2>=1.2.4",
     "dash>=4.1.0",
     "sqlite-lembed",
+    # AWS dispatch for remote benchmark runs (task_runner, S3 mirror)
+    "boto3>=1.42.76",
 ]
 docs = [
     "mkdocs>=1.6.0",
@@ -97,6 +92,7 @@ dev = [
     "mypy>=1.19.1",
     "nbmake>=1.5.5",
     "pip>=26.0.1",
+    "playwright>=1.58.0",
     "pysqlite3>=0.6.0",
     "pytest>=8.0",
     "pytest-cov>=7.0.0",
