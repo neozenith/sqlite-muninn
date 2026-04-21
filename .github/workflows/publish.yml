@@ -1,42 +1,115 @@
 name: Publish
 
 on:
-  release:
-    types: [created]
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
-  # ── Guard: enforce draft-only release flow ──────────────
-  # Immutable releases (enabled for supply-chain integrity) blocks asset
-  # upload once a release is published. We sidestep this by uploading only
-  # while the release is still a draft. A non-draft release fails fast here
-  # with a clear error message before wasting compute on builds.
-  precheck:
+  # ── Resolve version from VERSION on main, create DRAFT release ─────────
+  # The workflow is the sole owner of the release lifecycle:
+  #   1. read VERSION (on main)
+  #   2. resolve main → SHA (pin all downstream jobs to this SHA)
+  #   3. fail fast if tag or release already exists
+  #   4. create draft release + tag at that SHA via `gh release create`
+  # Every subsequent job uses `needs.prepare.outputs.sha` to check out the
+  # exact commit — this avoids drift if someone merges to main mid-run.
+  prepare:
     runs-on: ubuntu-latest
-    name: Verify release is a draft
+    name: Prepare draft release
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      sha: ${{ steps.meta.outputs.sha }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      npm_tag: ${{ steps.meta.outputs.npm_tag }}
     steps:
-      - name: Fail if release is not a draft
-        if: github.event.release.draft != true
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve version, SHA, prerelease flag
+        id: meta
         run: |
-          echo "::error::Release '${{ github.event.release.tag_name }}' is NOT a draft."
-          echo "::error::Asset upload fails against a published release (immutable)."
-          echo "::error::Delete this release, draft a new one using 'Save draft' (NOT 'Publish'),"
-          echo "::error::wait for this workflow to attach the assets, then click 'Publish release'."
-          exit 1
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          TAG="v$VERSION"
+          SHA=$(git rev-parse HEAD)
+
+          if echo "$VERSION" | grep -q "alpha"; then
+            IS_PRERELEASE=true
+            NPM_TAG=alpha
+          elif echo "$VERSION" | grep -q "beta"; then
+            IS_PRERELEASE=true
+            NPM_TAG=beta
+          elif echo "$VERSION" | grep -q "rc"; then
+            IS_PRERELEASE=true
+            NPM_TAG=rc
+          else
+            IS_PRERELEASE=false
+            NPM_TAG=latest
+          fi
+
+          {
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+            echo "sha=$SHA"
+            echo "is_prerelease=$IS_PRERELEASE"
+            echo "npm_tag=$NPM_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "::notice::Preparing $TAG at $SHA (prerelease=$IS_PRERELEASE, npm_tag=$NPM_TAG)"
+
+      - name: Fail fast if tag or release already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "::error::Release '$TAG' already exists."
+            echo "::error::Delete it first:  gh release delete $TAG --cleanup-tag --yes"
+            exit 1
+          fi
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "$TAG"; then
+            echo "::error::Tag '$TAG' already exists on origin but no release found."
+            echo "::error::Delete the tag first:  git push origin :refs/tags/$TAG"
+            exit 1
+          fi
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          IS_PRERELEASE: ${{ steps.meta.outputs.is_prerelease }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          # shellcheck disable=SC2086
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --target "$SHA" \
+            --title "$TAG" \
+            --draft \
+            --generate-notes \
+            $PRERELEASE_FLAG
 
   # ── Linux x86_64 ─────────────────────────────────────────
   linux-x64:
-    needs: precheck
+    needs: prepare
     runs-on: ubuntu-22.04
     name: Build (linux-x86_64)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -77,14 +150,14 @@ jobs:
 
   # ── Linux ARM64 ──────────────────────────────────────────
   linux-arm64:
-    needs: precheck
+    needs: prepare
     runs-on: ubuntu-22.04-arm
     name: Build (linux-arm64)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -125,14 +198,14 @@ jobs:
 
   # ── Windows x86_64 ──────────────────────────────────────
   windows-x64:
-    needs: precheck
+    needs: prepare
     runs-on: windows-2022
     name: Build (windows-x86_64)
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -172,14 +245,14 @@ jobs:
 
   # ── macOS arm64 ───────────────────────────────────────
   build-macos-arm64:
-    needs: precheck
+    needs: prepare
     runs-on: macos-15
     name: Build (macos-arm64)
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -204,14 +277,14 @@ jobs:
 
   # ── macOS x86_64 ─────────────────────────────────────
   build-macos-x86_64:
-    needs: precheck
+    needs: prepare
     runs-on: macos-15
     name: Build (macos-x86_64)
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -236,14 +309,14 @@ jobs:
 
   # ── macOS Universal Binary (lipo + wheel) ────────────
   build-macos-universal:
-    needs: [build-macos-arm64, build-macos-x86_64]
+    needs: [prepare, build-macos-arm64, build-macos-x86_64]
     runs-on: macos-15
     name: Build (macos-universal)
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -287,14 +360,14 @@ jobs:
 
   # ── Amalgamation ─────────────────────────────────────────
   amalgamation:
-    needs: precheck
+    needs: prepare
     runs-on: ubuntu-22.04
     name: Amalgamation
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -312,14 +385,14 @@ jobs:
 
   # ── WASM Build ───────────────────────────────────────────
   wasm-build:
-    needs: precheck
+    needs: prepare
     runs-on: ubuntu-22.04
     name: WASM Build
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ needs.prepare.outputs.sha }}
           submodules: recursive
 
       - uses: astral-sh/setup-uv@v7
@@ -347,9 +420,55 @@ jobs:
             build/wasm/muninn_sqlite3.js
             build/wasm/muninn_sqlite3.wasm
 
+  # ── Upload build artifacts to the DRAFT release ─────────
+  # Draft releases are mutable, so asset upload succeeds here. The draft is
+  # flipped to published at the very end by `finalize-release`.
+  upload-release:
+    needs:
+      - prepare
+      - linux-x64
+      - linux-arm64
+      - windows-x64
+      - build-macos-universal
+      - amalgamation
+      - wasm-build
+    runs-on: ubuntu-latest
+    name: Upload release assets
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
 
+      - name: Rename artifacts for unique asset names
+        run: |
+          mv linux-x86_64/muninn.so muninn-linux-x86_64.so
+          mv linux-arm64/muninn.so muninn-linux-arm64.so
+          mv macos-universal/muninn.dylib muninn-macos-universal.dylib
+          mv windows-x86_64/muninn.dll muninn-windows-x86_64.dll
+
+      - name: Upload to GitHub Release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release upload "$TAG" \
+            --repo "${{ github.repository }}" \
+            muninn-linux-x86_64.so \
+            muninn-linux-arm64.so \
+            muninn-macos-universal.dylib \
+            muninn-windows-x86_64.dll \
+            amalgamation/muninn-amalgamation.tar.gz \
+            wasm/muninn_sqlite3.js \
+            wasm/muninn_sqlite3.wasm
+
+  # ── Publish to PyPI ─────────────────────────────────────
   publish-pypi:
-    needs: [linux-x64, linux-arm64, windows-x64, build-macos-universal]
+    needs:
+      - prepare
+      - linux-x64
+      - linux-arm64
+      - windows-x64
+      - build-macos-universal
     runs-on: ubuntu-latest
     name: Publish to PyPI
     environment: pypi
@@ -367,8 +486,15 @@ jobs:
       - name: Publish to PyPI
         run: uv publish dist/*.whl
 
+  # ── Publish to NPM ──────────────────────────────────────
   publish-npm:
-    needs: [linux-x64, linux-arm64, windows-x64, build-macos-universal, wasm-build]
+    needs:
+      - prepare
+      - linux-x64
+      - linux-arm64
+      - windows-x64
+      - build-macos-universal
+      - wasm-build
     runs-on: ubuntu-latest
     name: Publish to NPM
     permissions:
@@ -377,7 +503,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.target_commitish }}
+          ref: ${{ needs.prepare.outputs.sha }}
 
       - uses: actions/download-artifact@v7
 
@@ -392,20 +518,6 @@ jobs:
         # Publishing support landed in 11.5.x, so the 11.x major line is safe.
         run: npm install -g npm@11
 
-      - name: Determine npm dist-tag
-        id: npm-tag
-        run: |
-          VERSION=$(cat VERSION)
-          if echo "$VERSION" | grep -q "alpha"; then
-            echo "tag=alpha" >> "$GITHUB_OUTPUT"
-          elif echo "$VERSION" | grep -q "beta"; then
-            echo "tag=beta" >> "$GITHUB_OUTPUT"
-          elif echo "$VERSION" | grep -q "rc"; then
-            echo "tag=rc" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Generate npm sub-packages
         run: python3 scripts/generate_build.py npm
 
@@ -418,26 +530,26 @@ jobs:
           cp macos-universal/muninn.dylib dist/nodejs/platforms/darwin-x64/muninn.dylib
 
       - name: Publish darwin-arm64
-        run: npm publish dist/nodejs/platforms/darwin-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/darwin-arm64 --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       - name: Publish darwin-x64
-        run: npm publish dist/nodejs/platforms/darwin-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/darwin-x64 --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       - name: Publish linux-x64
-        run: npm publish dist/nodejs/platforms/linux-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/linux-x64 --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       - name: Publish linux-arm64
-        run: npm publish dist/nodejs/platforms/linux-arm64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/linux-arm64 --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       - name: Publish win32-x64
-        run: npm publish dist/nodejs/platforms/win32-x64 --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/win32-x64 --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       - name: Install main package dependencies
         working-directory: npm
         run: npm install
 
       - name: Publish main package
-        run: npm publish ./npm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish ./npm --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
       - name: Copy WASM artifacts into package
         run: |
@@ -445,40 +557,29 @@ jobs:
           cp wasm/muninn_sqlite3.wasm dist/nodejs/platforms/wasm/muninn_sqlite3.wasm
 
       - name: Publish WASM package
-        run: npm publish dist/nodejs/platforms/wasm --provenance --access public --tag ${{ steps.npm-tag.outputs.tag }}
+        run: npm publish dist/nodejs/platforms/wasm --provenance --access public --tag ${{ needs.prepare.outputs.npm_tag }}
 
-  upload-release:
-    needs: [linux-x64, linux-arm64, windows-x64, build-macos-universal, amalgamation, wasm-build]
+  # ── Flip draft → published (runs LAST) ──────────────────
+  # Only flip the release to published once PyPI + NPM + asset upload all
+  # succeeded. If any upstream job fails, the draft stays around with whatever
+  # assets made it — debug, delete, fix, re-run.
+  finalize-release:
+    needs:
+      - prepare
+      - upload-release
+      - publish-pypi
+      - publish-npm
     runs-on: ubuntu-latest
-    name: Upload Release Assets
+    name: Publish release
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.release.target_commitish }}
-
-      - uses: actions/download-artifact@v7
-
-      - name: Rename artifacts for unique asset names
-        run: |
-          mv linux-x86_64/muninn.so muninn-linux-x86_64.so
-          mv linux-arm64/muninn.so muninn-linux-arm64.so
-          mv macos-universal/muninn.dylib muninn-macos-universal.dylib
-          mv windows-x86_64/muninn.dll muninn-windows-x86_64.dll
-
-      # Upload to the DRAFT release. Draft releases are mutable, so this
-      # succeeds; once the user clicks "Publish release" in the UI, the
-      # release flips to immutable with these assets baked in.
-      - name: Upload to GitHub Release draft
+      - name: Flip draft → published
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
-            muninn-linux-x86_64.so \
-            muninn-linux-arm64.so \
-            muninn-macos-universal.dylib \
-            muninn-windows-x86_64.dll \
-            amalgamation/muninn-amalgamation.tar.gz \
-            wasm/muninn_sqlite3.js \
-            wasm/muninn_sqlite3.wasm
+          gh release edit "$TAG" \
+            --repo "${{ github.repository }}" \
+            --draft=false
+          echo "::notice::Released $TAG"
