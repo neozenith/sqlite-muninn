@@ -37,7 +37,7 @@ jobs:
         run: make all
 
       - name: Run C unit tests
-        run: make test
+        run: make test-c
 
       - name: Copy binary into Python package
         run: cp build/muninn.so sqlite_muninn/
@@ -83,7 +83,7 @@ jobs:
         run: make all
 
       - name: Run C unit tests
-        run: make test
+        run: make test-c
 
       - name: Copy binary into Python package
         run: cp build/muninn.so sqlite_muninn/
