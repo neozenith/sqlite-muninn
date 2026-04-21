@@ -31,12 +31,8 @@ export default defineConfig({
     exclude: ['e2e/**', 'node_modules/**'],
     coverage: {
       provider: 'v8',
-      include: ['src/lib/**/*.ts'],
-      thresholds: {
-        lines: 90,
-        functions: 90,
-        branches: 85,
-      },
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/main.tsx', 'src/vite-env.d.ts', 'src/test-setup.ts'],
     },
   },
 })

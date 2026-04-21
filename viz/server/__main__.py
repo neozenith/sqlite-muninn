@@ -5,7 +5,7 @@ import logging
 
 import uvicorn
 
-from server.config import DEFAULT_PORT
+DEFAULT_PORT = 8200
 
 logging.basicConfig(
     level=logging.INFO,

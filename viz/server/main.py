@@ -1,54 +1,53 @@
-"""FastAPI application for muninn visualization."""
+"""FastAPI application entry point for muninn-viz."""
 
 import logging
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+import os
+from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI, HTTPException
 
-from server.routes import databases, graph, health, kg, vss
-from server.services.db import validate_startup
-from server.services.kg import warm_embedding_model
+from server.databases import DatabaseInfo, ManifestError, get_database, load_manifest
 
 log = logging.getLogger(__name__)
 
+DEFAULT_DEMOS_DIR = Path(__file__).resolve().parent.parent / "frontend" / "public" / "demos"
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Manage application lifecycle — validate DB + warm model on startup."""
-    log.info("Starting muninn-viz server")
-    # Open a temporary connection to validate the DB exists and extension loads.
-    # This surfaces failures at startup rather than on first request.
-    conn = validate_startup()
-    log.info("Database and extension validated")
-    # Pre-load the sentence-transformers embedding model so the first KG query
-    # doesn't take 5-15 seconds downloading/validating model files.
-    warm_embedding_model(conn)
-    conn.close()
-    yield
-    log.info("Shutting down muninn-viz server")
+
+def get_demos_dir() -> Path:
+    """Resolve the demos directory — env var takes precedence over default."""
+    return Path(os.environ.get("MUNINN_DEMOS_DIR", str(DEFAULT_DEMOS_DIR)))
 
 
 app = FastAPI(
     title="muninn-viz",
     description="Interactive visualization for the muninn SQLite extension",
     version="0.1.0",
-    lifespan=lifespan,
 )
 
-# CORS — allow frontend dev server
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-# Register routers
-app.include_router(health.router)
-app.include_router(databases.router)
-app.include_router(vss.router)
-app.include_router(graph.router)
-app.include_router(kg.router)
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    """Liveness probe — returns {'status': 'ok'} when the server is up."""
+    return {"status": "ok"}
+
+
+@app.get("/api/databases")
+def list_databases(demos_dir: Path = Depends(get_demos_dir)) -> dict[str, list[DatabaseInfo]]:
+    """Return every database entry from the demos manifest."""
+    try:
+        databases = load_manifest(demos_dir)
+    except ManifestError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    return {"databases": databases}
+
+
+@app.get("/api/databases/{database_id}")
+def get_database_info(database_id: str, demos_dir: Path = Depends(get_demos_dir)) -> DatabaseInfo:
+    """Return metadata for a single database, or 404 if unknown."""
+    try:
+        db = get_database(demos_dir, database_id)
+    except ManifestError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if db is None:
+        raise HTTPException(status_code=404, detail=f"Database '{database_id}' not found")
+    return db
