@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+### Bug Fixes
+
+- Address deploy pipeline issues
+- Relock uv.lock file
+
+### Other
+
+- Attempt to fix release pipeline fo v0.3.2
+
+## [0.3.1] - 2026-04-21
+
+### Other
+
+- Fix/deploy pipeline (#25)
+
+* fix: update ccache action versions
+
+* fix: updated test targets
+
+* fix: Increase macos build timeouts
+
+## [0.3.0] - 2026-04-21
+
 ### Other
 
 - Update plan docs
@@ -587,6 +610,7 @@ test-js` as the later dedicated steps after their respective setups.
 ---------
 
 Co-authored-by: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+- Get the current set of features out to unblock some production testing and update docs later (#24)
 
 ## [0.3.0-alpha.2] - 2026-03-26
 
