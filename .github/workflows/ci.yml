@@ -217,7 +217,7 @@ jobs:
     needs: [quality]
     runs-on: macos-15
     name: Build (macOS arm64)
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
@@ -291,7 +291,7 @@ jobs:
     needs: [quality]
     runs-on: macos-15
     name: Build (macOS x86_64)
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
