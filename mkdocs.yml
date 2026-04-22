@@ -2,6 +2,7 @@ exclude_docs: |
   plans/
   logo/
   diagrams/README.md
+  CLAUDE.md
 
 site_name: sqlite-muninn
 site_description: "HNSW vector search, graph traversal, centrality measures, community detection, CSR adjacency caching, dbt-style graph selection, and Node2Vec embeddings in a single SQLite extension."
@@ -49,7 +50,10 @@ nav:
   - Architecture: architecture.md
   - Guides:
     - Text Embeddings: text-embeddings.md
+    - Chat & Extraction: chat-and-extraction.md
+    - Entity Resolution: entity-resolution.md
     - Centrality & Community: centrality-community.md
+    - Graph Select: graph-select.md
     - Node2Vec: node2vec.md
     - GraphRAG Cookbook: graphrag-cookbook.md
   - API Reference:
