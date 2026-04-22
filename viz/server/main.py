@@ -150,22 +150,46 @@ def get_kg(
     database_id: str,
     table_id: str,
     resolution: float | None = None,
-    top_n: int = 500,
+    top_n: int = 50,
+    seed_metric: str = "edge_betweenness",
+    max_depth: int = 0,
     demos_dir: Path = Depends(get_demos_dir),
 ) -> KGPayload:
-    """Return the KG payload (nodes + edges + communities) for the given table.
+    """Return the KG payload (nodes + edges + communities).
 
-    `top_n` caps the result to the highest-degree nodes (pass 0 to disable).
-    The full counts are exposed via `total_node_count` / `total_edge_count`.
+    `top_n` picks the N highest-scoring seed nodes by `seed_metric`
+    (degree / node_betweenness / edge_betweenness). BFS then expands from
+    those seeds through the undirected edge view up to `max_depth` hops
+    (0 = unlimited, yields every connected component containing a seed).
+    The response carries per-node `node_betweenness` and per-edge
+    `edge_betweenness` scores computed over the FULL graph, so the client
+    can size elements by those metrics without recomputing.
     """
     if table_id not in KG_TABLES:
         raise HTTPException(
             status_code=400,
             detail=f"invalid kg table {table_id!r}; expected one of {list(KG_TABLES)}",
         )
+    if seed_metric not in ("degree", "node_betweenness", "edge_betweenness"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"invalid seed_metric {seed_metric!r}; "
+                "expected one of ['degree', 'node_betweenness', 'edge_betweenness']"
+            ),
+        )
+    if max_depth < 0:
+        raise HTTPException(status_code=400, detail=f"max_depth must be >= 0, got {max_depth}")
     try:
         with open_demo_db(demos_dir, database_id) as conn:
-            return load_kg_graph(conn, table_id, resolution, top_n=top_n)
+            return load_kg_graph(
+                conn,
+                table_id,
+                resolution,
+                top_n=top_n,
+                seed_metric=seed_metric,  # type: ignore[arg-type]
+                max_depth=max_depth,
+            )
     except DatabaseConnectionError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except UnknownKGTable as e:

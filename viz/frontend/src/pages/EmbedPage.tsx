@@ -1,9 +1,11 @@
 import { AmbientLight, DirectionalLight, LightingEffect, OrbitView } from '@deck.gl/core'
+import type { PickingInfo } from '@deck.gl/core'
 import { SimpleMeshLayer } from '@deck.gl/mesh-layers'
 import DeckGL from '@deck.gl/react'
 import { SphereGeometry } from '@luma.gl/engine'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { PanelSection, RightPanel } from '../components/RightPanel'
 import { ApiError, type EmbedPayload, type EmbedPoint, fetchEmbed } from '../lib/api-client'
 import { useTheme } from '../lib/ThemeProvider'
 
@@ -93,14 +95,27 @@ const LIGHTING_EFFECT = new LightingEffect({
   }),
 })
 
+const UNIFORM_COLOR: [number, number, number, number] = [110, 165, 230, 255]
+const HIGHLIGHT_COLOR: [number, number, number, number] = [255, 210, 70, 255]
+
+/** Read shiftKey from the mjolnir.js event wrapper deck.gl passes to onClick. */
+const eventHasShift = (event: unknown): boolean => {
+  const e = event as { srcEvent?: { shiftKey?: boolean }; shiftKey?: boolean }
+  return Boolean(e?.srcEvent?.shiftKey ?? e?.shiftKey)
+}
+
 export function EmbedPage() {
   const { databaseId, tableId } = useParams<{ databaseId: string; tableId: string }>()
   const [state, setState] = useState<LoadState>({ status: 'loading' })
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [pointScale, setPointScale] = useState<number>(1)
+  const [colorByCategory, setColorByCategory] = useState<boolean>(true)
   const { resolved } = useTheme()
 
   useEffect(() => {
     if (!databaseId || !tableId) return
     setState({ status: 'loading' })
+    setSelected(new Set())
     fetchEmbed(databaseId, tableId)
       .then((payload) => setState({ status: 'ready', payload }))
       .catch((err: unknown) => {
@@ -119,11 +134,45 @@ export function EmbedPage() {
     [state],
   )
 
+  const pointIndex = useMemo<Map<number, EmbedPoint>>(() => {
+    if (state.status !== 'ready') return new Map()
+    return new Map(state.payload.points.map((p) => [p.id, p]))
+  }, [state])
+
+  const baseRadius = Math.max(stats.extent * 0.012 * pointScale, 0.03)
+  const baseScale: [number, number, number] = [baseRadius, baseRadius, baseRadius]
+  const highlightScale: [number, number, number] = [baseRadius * 1.8, baseRadius * 1.8, baseRadius * 1.8]
+
+  const handleClick = (info: PickingInfo, event: unknown) => {
+    const shift = eventHasShift(event)
+    const p = info.object as EmbedPoint | null | undefined
+    if (!p) {
+      if (!shift) setSelected(new Set())
+      return
+    }
+    setSelected((prev) => {
+      if (shift) {
+        const next = new Set(prev)
+        if (next.has(p.id)) next.delete(p.id)
+        else next.add(p.id)
+        return next
+      }
+      if (prev.size === 1 && prev.has(p.id)) return new Set()
+      return new Set([p.id])
+    })
+  }
+
   const layers = useMemo(() => {
     if (state.status !== 'ready') return []
-    const radius = Math.max(stats.extent * 0.012, 0.05)
-    const scale: [number, number, number] = [radius, radius, radius]
-    return [
+    const getPointColor = (p: EmbedPoint): [number, number, number, number] => {
+      if (!colorByCategory || !p.category) return UNIFORM_COLOR
+      const [r, g, b] = hueToRgb(hashHue(p.category))
+      return [r, g, b, 255]
+    }
+    const selectedPoints =
+      selected.size > 0 ? state.payload.points.filter((p) => selected.has(p.id)) : []
+
+    const result = [
       new SimpleMeshLayer<EmbedPoint>({
         id: 'umap-spheres',
         data: state.payload.points,
@@ -131,16 +180,33 @@ export function EmbedPage() {
         pickable: true,
         material: { ambient: 0.35, diffuse: 0.7, shininess: 64, specularColor: [255, 255, 255] },
         getPosition: (p: EmbedPoint) => [p.x, p.y, p.z],
-        getColor: (p: EmbedPoint) =>
-          p.category ? [...hueToRgb(hashHue(p.category)), 255] : [110, 165, 230, 255],
-        getScale: () => scale,
+        getColor: getPointColor,
+        getScale: () => baseScale,
         updateTriggers: {
-          getColor: state.payload.table_id,
-          getScale: stats.extent,
+          getColor: [state.payload.table_id, colorByCategory],
+          getScale: [stats.extent, pointScale],
         },
       }),
     ]
-  }, [state, stats])
+    if (selectedPoints.length > 0) {
+      result.push(
+        new SimpleMeshLayer<EmbedPoint>({
+          id: 'umap-spheres-selected',
+          data: selectedPoints,
+          mesh: SPHERE_MESH,
+          pickable: false,
+          material: { ambient: 0.6, diffuse: 0.9, shininess: 96, specularColor: [255, 255, 255] },
+          getPosition: (p: EmbedPoint) => [p.x, p.y, p.z],
+          getColor: () => HIGHLIGHT_COLOR,
+          getScale: () => highlightScale,
+          updateTriggers: {
+            getScale: [stats.extent, pointScale],
+          },
+        }),
+      )
+    }
+    return result
+  }, [state, stats, pointScale, colorByCategory, selected, baseScale, highlightScale])
 
   const initialViewState = useMemo<EmbedViewState>(() => {
     const zoom = Math.max(Math.log2(VIEWPORT_FALLBACK / (stats.extent * 2)) - 0.5, 0)
@@ -149,14 +215,23 @@ export function EmbedPage() {
 
   const canvasBg = resolved === 'dark' ? '#12162288' : '#f8f8fa88'
 
+  const selectedPointsList = useMemo<EmbedPoint[]>(() => {
+    const items: EmbedPoint[] = []
+    for (const id of selected) {
+      const p = pointIndex.get(id)
+      if (p) items.push(p)
+    }
+    return items
+  }, [selected, pointIndex])
+
   return (
     <main
-      className="flex min-h-screen flex-col bg-[var(--color-surface)] text-[var(--color-foreground)]"
+      className="flex h-screen flex-col overflow-hidden bg-[var(--color-surface)] text-[var(--color-foreground)]"
       data-testid="embed-page"
       data-database-id={databaseId ?? ''}
       data-table-id={tableId ?? ''}
     >
-      <header className="border-b border-[var(--color-border-subtle)] p-4">
+      <header className="shrink-0 border-b border-[var(--color-border-subtle)] p-4">
         <nav className="flex gap-4 text-sm">
           <Link to="/" className="text-[var(--color-accent)] hover:underline">Home</Link>
           <Link to={`/${databaseId}/`} className="text-[var(--color-accent)] hover:underline">
@@ -173,45 +248,130 @@ export function EmbedPage() {
         )}
       </header>
 
-      <section className="relative flex-1">
-        {state.status === 'loading' && (
-          <div data-testid="embed-loading" className="p-8">Loading embeddings…</div>
-        )}
-        {state.status === 'error' && (
-          <div
-            data-testid="embed-error"
-            className="m-8 rounded border border-red-400 bg-red-50 p-4 text-red-800 dark:border-red-500 dark:bg-red-950/40 dark:text-red-200"
-          >
-            <p className="font-semibold">Failed to load embeddings</p>
-            <p className="text-sm">{state.message}</p>
-          </div>
-        )}
-        {state.status === 'ready' && (
-          <div className="absolute inset-0" style={{ background: canvasBg }}>
-            <DeckGL
-              views={new OrbitView({ orbitAxis: 'Y', fovy: 50 })}
-              initialViewState={initialViewState}
-              controller={true}
-              layers={layers}
-              effects={[LIGHTING_EFFECT]}
-              getTooltip={({ object }: { object?: EmbedPoint | null }) =>
-                object
-                  ? {
-                      html: `<div style="padding:6px 8px; background:#111; color:#fff; border-radius:4px; max-width:320px">
-                        <strong>#${object.id}</strong>
-                        ${object.category ? ` <em style="opacity:0.8">(${object.category})</em>` : ''}
-                        <br/>${object.label}
-                      </div>`,
-                    }
-                  : null
-              }
-            />
+      <section className="flex min-h-0 flex-1">
+        <div className="relative flex-1">
+          {state.status === 'loading' && (
+            <div data-testid="embed-loading" className="p-8">Loading embeddings…</div>
+          )}
+          {state.status === 'error' && (
             <div
-              data-testid="embed-canvas-ready"
-              data-point-count={state.payload.count}
-              className="hidden"
-            />
-          </div>
+              data-testid="embed-error"
+              className="m-8 rounded border border-red-400 bg-red-50 p-4 text-red-800 dark:border-red-500 dark:bg-red-950/40 dark:text-red-200"
+            >
+              <p className="font-semibold">Failed to load embeddings</p>
+              <p className="text-sm">{state.message}</p>
+            </div>
+          )}
+          {state.status === 'ready' && (
+            <div className="absolute inset-0" style={{ background: canvasBg }}>
+              <DeckGL
+                views={new OrbitView({ orbitAxis: 'Y', fovy: 50 })}
+                initialViewState={initialViewState}
+                controller={true}
+                layers={layers}
+                effects={[LIGHTING_EFFECT]}
+                onClick={handleClick}
+                getTooltip={({ object }: { object?: EmbedPoint | null }) =>
+                  object
+                    ? {
+                        html: `<div style="padding:6px 8px; background:#111; color:#fff; border-radius:4px; max-width:320px">
+                          <strong>#${object.id}</strong>
+                          ${object.category ? ` <em style="opacity:0.8">(${object.category})</em>` : ''}
+                          <br/>${object.label}
+                        </div>`,
+                      }
+                    : null
+                }
+              />
+              <div
+                data-testid="embed-canvas-ready"
+                data-point-count={state.payload.count}
+                className="hidden"
+              />
+            </div>
+          )}
+        </div>
+
+        {state.status === 'ready' && (
+          <RightPanel title="Embedding inspector" storageKey="embed" testId="embed">
+            <PanelSection title="Visualization">
+              <label className="flex flex-col gap-1" data-testid="embed-control-point-scale">
+                <span className="flex items-center justify-between">
+                  <span>Point scale</span>
+                  <span className="font-mono text-xs text-[var(--color-muted-foreground)]">
+                    {pointScale.toFixed(2)}×
+                  </span>
+                </span>
+                <input
+                  type="range"
+                  min={0.3}
+                  max={3}
+                  step={0.05}
+                  value={pointScale}
+                  onChange={(e) => setPointScale(Number(e.target.value))}
+                  className="w-full accent-[var(--color-accent)]"
+                />
+              </label>
+              <label className="flex items-center gap-2" data-testid="embed-control-color-by-category">
+                <input
+                  type="checkbox"
+                  checked={colorByCategory}
+                  onChange={(e) => setColorByCategory(e.target.checked)}
+                  className="accent-[var(--color-accent)]"
+                />
+                <span>Color by category</span>
+              </label>
+              <p className="text-[11px] leading-snug text-[var(--color-muted-foreground)]">
+                Click a sphere to select. Shift-click to add/remove from the selection; click empty space to clear.
+              </p>
+            </PanelSection>
+
+            <PanelSection
+              title="Selection"
+              meta={
+                <span className="font-mono" data-testid="embed-selection-count">
+                  {selected.size}
+                </span>
+              }
+            >
+              {selectedPointsList.length === 0 ? (
+                <p className="text-[12px] text-[var(--color-muted-foreground)]">Nothing selected.</p>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(new Set())}
+                    className="self-start rounded border border-[var(--color-border-subtle)] px-2 py-0.5 text-[11px] hover:border-[var(--color-accent)]"
+                    data-testid="embed-clear-selection"
+                  >
+                    Clear
+                  </button>
+                  <ul className="flex flex-col gap-2" data-testid="embed-selection-list">
+                    {selectedPointsList.map((p) => (
+                      <li
+                        key={p.id}
+                        data-testid={`embed-selection-item-${p.id}`}
+                        className="rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] p-2"
+                      >
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="font-mono text-xs">#{p.id}</span>
+                          {p.category && (
+                            <span className="rounded bg-[var(--color-surface-sunken)] px-1 text-[10px]">
+                              {p.category}
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 break-words text-[12px] leading-snug">{p.label}</div>
+                        <div className="mt-1 font-mono text-[10px] text-[var(--color-muted-foreground)]">
+                          x={p.x.toFixed(2)} · y={p.y.toFixed(2)} · z={p.z.toFixed(2)}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </PanelSection>
+          </RightPanel>
         )}
       </section>
     </main>

@@ -28,6 +28,15 @@ SAMPLE_DATABASES = [
         "size_bytes": 8044544,
         "label": "Book 39653 + NomicEmbed (768d)",
     },
+    # Session-log demo: no Gutenberg book_id. Exercises the optional field path.
+    {
+        "id": "sessions_demo",
+        "model": "nomic-embed-text-v1.5.Q8_0.gguf",
+        "dim": 768,
+        "file": "sessions_demo.db",
+        "size_bytes": 532971520,
+        "label": "Claude Code Sessions (768d)",
+    },
 ]
 
 

@@ -20,7 +20,7 @@ export default defineConfig({
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
   ],
   outputDir: 'e2e-screenshots',
-  timeout: 90000,
+  timeout: 150000,
   expect: { timeout: 10000 },
   globalSetup: './e2e/global-setup.ts',
 

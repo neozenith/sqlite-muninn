@@ -199,45 +199,80 @@ describe('api-client', () => {
   })
 
   describe('fetchKG', () => {
+    const emptyKG = (overrides: Partial<KGPayload> = {}): KGPayload => ({
+      table_id: 'base',
+      resolution: 0.25,
+      seed_metric: 'edge_betweenness',
+      max_depth: 0,
+      node_count: 0,
+      edge_count: 0,
+      community_count: 0,
+      total_node_count: 0,
+      total_edge_count: 0,
+      nodes: [],
+      edges: [],
+      communities: [],
+      ...overrides,
+    })
+
     test('returns the KG payload without resolution query', async () => {
-      const body: KGPayload = {
-        table_id: 'base',
-        resolution: 0.25,
+      const body: KGPayload = emptyKG({
         node_count: 1,
-        edge_count: 0,
         community_count: 1,
         total_node_count: 1,
-        total_edge_count: 0,
         nodes: [
-          { id: 'a', label: 'a', entity_type: null, community_id: 0, mention_count: 1 },
+          {
+            id: 'a',
+            label: 'a',
+            entity_type: null,
+            community_id: 0,
+            mention_count: 1,
+            node_betweenness: 0.5,
+          },
         ],
-        edges: [],
         communities: [{ id: 0, label: null, member_count: 1, node_ids: ['a'] }],
-      }
+      })
       fetchMock.mockResolvedValueOnce(makeResponse(body))
       const result = await fetchKG('3300_MiniLM', 'base')
       expect(result.resolution).toBe(0.25)
+      expect(result.seed_metric).toBe('edge_betweenness')
       expect(fetchMock).toHaveBeenCalledWith('/api/databases/3300_MiniLM/kg/base')
     })
 
     test('appends the resolution query string when provided', async () => {
-      fetchMock.mockResolvedValueOnce(
-        makeResponse({
-          table_id: 'base',
-          resolution: 1.0,
-          node_count: 0,
-          edge_count: 0,
-          community_count: 0,
-          total_node_count: 0,
-          total_edge_count: 0,
-          nodes: [],
-          edges: [],
-          communities: [],
-        }),
-      )
-      await fetchKG('3300_MiniLM', 'base', 1.0)
+      fetchMock.mockResolvedValueOnce(makeResponse(emptyKG({ resolution: 1 })))
+      await fetchKG('3300_MiniLM', 'base', { resolution: 1.0 })
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/databases/3300_MiniLM/kg/base?resolution=1',
+      )
+    })
+
+    test('appends the top_n query string when provided', async () => {
+      fetchMock.mockResolvedValueOnce(makeResponse(emptyKG()))
+      await fetchKG('3300_MiniLM', 'base', { topN: 1500 })
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/databases/3300_MiniLM/kg/base?top_n=1500',
+      )
+    })
+
+    test('appends seed_metric and max_depth when provided', async () => {
+      fetchMock.mockResolvedValueOnce(
+        makeResponse(emptyKG({ seed_metric: 'degree', max_depth: 2 })),
+      )
+      await fetchKG('3300_MiniLM', 'base', {
+        seedMetric: 'degree',
+        maxDepth: 2,
+      })
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/databases/3300_MiniLM/kg/base?seed_metric=degree&max_depth=2',
+      )
+    })
+
+    test('combines resolution and top_n when both are given', async () => {
+      fetchMock.mockResolvedValueOnce(makeResponse(emptyKG({ resolution: 1 })))
+      await fetchKG('3300_MiniLM', 'base', { resolution: 1, topN: 0 })
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/databases/3300_MiniLM/kg/base?resolution=1&top_n=0',
       )
     })
 

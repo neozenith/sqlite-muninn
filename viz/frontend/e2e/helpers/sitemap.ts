@@ -13,7 +13,8 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 
 export interface ManifestDatabase {
   id: string
-  book_id: number
+  /** Optional — absent for session-log / non-book demos like sessions_demo. */
+  book_id?: number
   model: string
   dim: number
   file: string
@@ -113,9 +114,11 @@ export const SECTIONS: readonly Section[] = [
     // `kg-canvas-ready` fires after Cytoscape mounts + an initial grid
     // layout lands; fcose refinement continues in the background. That
     // keeps ready-semantics tight to "data rendered" rather than "physics
-    // converged" — which would take minutes on 6K-node graphs.
+    // converged" — which would take minutes on 6K-node graphs. 120s
+    // accommodates parallel workers thrashing the server with BC compute
+    // for large ER graphs (3300_MiniLM ER = 8K cluster nodes).
     loadedTestId: 'kg-canvas-ready',
-    loadTimeoutMs: 60000,
+    loadTimeoutMs: 120000,
     takesDatabase: true,
   },
 ] as const

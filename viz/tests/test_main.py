@@ -52,15 +52,19 @@ def test_list_databases_returns_all_entries(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert "databases" in body
-    assert len(body["databases"]) == 2
-    assert {db["id"] for db in body["databases"]} == {"3300_MiniLM", "39653_NomicEmbed"}
+    assert len(body["databases"]) == 3
+    assert {db["id"] for db in body["databases"]} == {
+        "3300_MiniLM",
+        "39653_NomicEmbed",
+        "sessions_demo",
+    }
 
 
 def test_list_databases_preserves_manifest_order(client: TestClient) -> None:
     """The order in manifest.json matters for UI grouping — never sort silently."""
     response = client.get("/api/databases")
     ids = [db["id"] for db in response.json()["databases"]]
-    assert ids == ["3300_MiniLM", "39653_NomicEmbed"]
+    assert ids == ["3300_MiniLM", "39653_NomicEmbed", "sessions_demo"]
 
 
 def test_list_databases_exposes_expected_fields(client: TestClient) -> None:
@@ -69,6 +73,21 @@ def test_list_databases_exposes_expected_fields(client: TestClient) -> None:
     assert set(entry.keys()) == {"id", "book_id", "model", "dim", "file", "size_bytes", "label"}
     assert entry["dim"] == 384
     assert entry["book_id"] == 3300
+
+
+def test_list_databases_session_entry_has_null_book_id(client: TestClient) -> None:
+    """Session-log demos omit book_id in the manifest; the API must surface it as null."""
+    response = client.get("/api/databases")
+    entries = {db["id"]: db for db in response.json()["databases"]}
+    assert entries["sessions_demo"]["book_id"] is None
+    assert entries["3300_MiniLM"]["book_id"] == 3300
+
+
+def test_get_database_session_entry(client: TestClient) -> None:
+    response = client.get("/api/databases/sessions_demo")
+    assert response.status_code == 200
+    assert response.json()["book_id"] is None
+    assert response.json()["id"] == "sessions_demo"
 
 
 def test_get_database_returns_single_entry(client: TestClient) -> None:
@@ -165,6 +184,62 @@ def test_kg_endpoint_base(real_client: TestClient) -> None:
     assert body["node_count"] > 0
     assert body["edge_count"] > 0
     assert body["community_count"] > 0
+    # New fields in the enriched payload
+    assert body["seed_metric"] == "edge_betweenness"
+    assert body["max_depth"] == 0
+    assert "node_betweenness" in body["nodes"][0]
+    assert "edge_betweenness" in body["edges"][0]
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_kg_endpoint_seed_metric_degree(real_client: TestClient) -> None:
+    response = real_client.get(
+        f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=degree&top_n=10&max_depth=1"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["seed_metric"] == "degree"
+    assert body["max_depth"] == 1
+    assert body["node_count"] >= 10  # at least the seeds, plus 1-hop neighbors
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_kg_endpoint_seed_metric_node_betweenness(real_client: TestClient) -> None:
+    response = real_client.get(
+        f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=node_betweenness&top_n=20&max_depth=0"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["seed_metric"] == "node_betweenness"
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_kg_endpoint_max_depth_expands(real_client: TestClient) -> None:
+    """Increasing max_depth from 1 to 2 should never shrink the result."""
+    r1 = real_client.get(
+        f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=degree&top_n=5&max_depth=1"
+    )
+    r2 = real_client.get(
+        f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=degree&top_n=5&max_depth=2"
+    )
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r2.json()["node_count"] >= r1.json()["node_count"]
+
+
+def test_kg_endpoint_invalid_seed_metric_400(real_client: TestClient) -> None:
+    response = real_client.get(
+        f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=bogus"
+    )
+    assert response.status_code == 400
+    assert "seed_metric" in response.json()["detail"]
+
+
+def test_kg_endpoint_negative_max_depth_400(real_client: TestClient) -> None:
+    response = real_client.get(
+        f"/api/databases/{SAMPLE_DB_ID}/kg/base?max_depth=-1"
+    )
+    assert response.status_code == 400
+    assert "max_depth" in response.json()["detail"]
 
 
 @pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")

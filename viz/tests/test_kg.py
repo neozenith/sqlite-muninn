@@ -103,3 +103,39 @@ def test_resolution_override() -> None:
     with open_demo_db(DEMOS_DIR, SAMPLE_DB_ID) as conn:
         payload = load_kg_graph(conn, "base", resolution=1.0)
     assert payload.resolution == 1.0
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_seed_metric_invalid_raises() -> None:
+    with open_demo_db(DEMOS_DIR, SAMPLE_DB_ID) as conn:
+        with pytest.raises(ValueError, match="invalid seed_metric"):
+            load_kg_graph(conn, "base", seed_metric="bogus")  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_max_depth_negative_raises() -> None:
+    with open_demo_db(DEMOS_DIR, SAMPLE_DB_ID) as conn:
+        with pytest.raises(ValueError, match="max_depth"):
+            load_kg_graph(conn, "base", max_depth=-2)
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_betweenness_metrics_attached() -> None:
+    """Every returned node/edge carries a full-graph BC score (or None for isolates)."""
+    with open_demo_db(DEMOS_DIR, SAMPLE_DB_ID) as conn:
+        payload = load_kg_graph(conn, "base", top_n=20, max_depth=1)
+    # Nodes that participated in any edge have a numeric BC value
+    node_bc = [n.node_betweenness for n in payload.nodes]
+    assert any(bc is not None for bc in node_bc)
+    # Edges that survive expansion carry their BC score
+    edge_bc = [e.edge_betweenness for e in payload.edges]
+    assert any(bc is not None for bc in edge_bc)
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_max_depth_limits_expansion() -> None:
+    """Depth-0 is unlimited; depth=1 should never exceed depth=0."""
+    with open_demo_db(DEMOS_DIR, SAMPLE_DB_ID) as conn:
+        unlimited = load_kg_graph(conn, "base", top_n=5, max_depth=0)
+        depth_one = load_kg_graph(conn, "base", top_n=5, max_depth=1)
+    assert depth_one.node_count <= unlimited.node_count

@@ -14,11 +14,20 @@ def _write_manifest(dir_: Path, payload: dict) -> None:
 
 def test_load_manifest_returns_typed_entries(demos_dir: Path) -> None:
     entries = load_manifest(demos_dir)
-    assert len(entries) == 2
+    assert len(entries) == 3
     assert all(isinstance(e, DatabaseInfo) for e in entries)
     assert entries[0].id == "3300_MiniLM"
     assert entries[0].dim == 384
     assert entries[1].id == "39653_NomicEmbed"
+    assert entries[2].id == "sessions_demo"
+
+
+def test_load_manifest_accepts_entries_without_book_id(demos_dir: Path) -> None:
+    """Session-log demos omit book_id. The pydantic model must default it to None."""
+    entries = load_manifest(demos_dir)
+    by_id = {e.id: e for e in entries}
+    assert by_id["sessions_demo"].book_id is None
+    assert by_id["3300_MiniLM"].book_id == 3300
 
 
 def test_load_manifest_missing_file_raises(tmp_path: Path) -> None:

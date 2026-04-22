@@ -101,8 +101,12 @@ export function DatabasePage() {
           </p>
 
           <dl className="mt-6 grid max-w-xl grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-            <dt className="font-semibold">Book ID</dt>
-            <dd>{state.data.database.book_id}</dd>
+            {state.data.database.book_id !== null && state.data.database.book_id !== undefined && (
+              <>
+                <dt className="font-semibold">Book ID</dt>
+                <dd>{state.data.database.book_id}</dd>
+              </>
+            )}
             <dt className="font-semibold">Embedding Model</dt>
             <dd>{state.data.database.model}</dd>
             <dt className="font-semibold">Dimensions</dt>

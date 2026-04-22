@@ -9,11 +9,13 @@ from pydantic import BaseModel
 class DatabaseInfo(BaseModel):
     """One entry in the demos manifest.
 
-    Mirrors the shape written by `benchmarks/demo_builder/manifest.py`.
+    Mirrors the shape written by `benchmarks/demo_builder/manifest.py` and the
+    sessions_demo builder. `book_id` is optional because session-log DBs are
+    not tied to a Project Gutenberg id.
     """
 
     id: str
-    book_id: int
+    book_id: int | None = None
     model: str
     dim: int
     file: str

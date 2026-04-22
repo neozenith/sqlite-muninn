@@ -8,7 +8,8 @@
 
 export interface DatabaseInfo {
   id: string
-  book_id: number
+  /** Project Gutenberg book id. Absent for session-log / non-book demos. */
+  book_id: number | null
   model: string
   dim: number
   file: string
@@ -50,6 +51,8 @@ export interface KGNode {
   entity_type: string | null
   community_id: number | null
   mention_count: number | null
+  /** Betweenness centrality over the FULL graph, not the filtered subset. */
+  node_betweenness: number | null
 }
 
 export interface KGEdge {
@@ -57,6 +60,8 @@ export interface KGEdge {
   target: string
   rel_type: string | null
   weight: number | null
+  /** Betweenness centrality over the FULL graph, not the filtered subset. */
+  edge_betweenness: number | null
 }
 
 export interface KGCommunity {
@@ -66,9 +71,13 @@ export interface KGCommunity {
   node_ids: string[]
 }
 
+export type SeedMetric = 'degree' | 'node_betweenness' | 'edge_betweenness'
+
 export interface KGPayload {
   table_id: string
   resolution: number
+  seed_metric: SeedMetric
+  max_depth: number
   node_count: number
   edge_count: number
   community_count: number
@@ -147,16 +156,31 @@ export async function fetchEmbed(
 
 /**
  * GET /api/databases/:id/kg/:table_id — KG payload for Cytoscape.
- * `tableId` is one of {'base', 'er'}. Optional `resolution` picks a Leiden
- * resolution from the ones the DB was built with.
+ *
+ * `topN` picks the N highest-scoring seed nodes by `seedMetric` (default
+ * edge_betweenness). The backend then BFS-expands from those seeds through
+ * the undirected edge view up to `maxDepth` hops — `maxDepth=0` is
+ * unlimited (union of connected components containing a seed).
  */
 export async function fetchKG(
   databaseId: string,
   tableId: string,
-  resolution?: number,
+  options: {
+    resolution?: number
+    topN?: number
+    seedMetric?: SeedMetric
+    maxDepth?: number
+  } = {},
 ): Promise<KGPayload> {
-  const query = resolution !== undefined ? `?resolution=${resolution}` : ''
+  const params = new URLSearchParams()
+  if (options.resolution !== undefined) params.set('resolution', String(options.resolution))
+  if (options.topN !== undefined) params.set('top_n', String(options.topN))
+  if (options.seedMetric !== undefined) params.set('seed_metric', options.seedMetric)
+  if (options.maxDepth !== undefined) params.set('max_depth', String(options.maxDepth))
+  const query = params.toString()
   return getJson<KGPayload>(
-    `/databases/${encodeURIComponent(databaseId)}/kg/${encodeURIComponent(tableId)}${query}`,
+    `/databases/${encodeURIComponent(databaseId)}/kg/${encodeURIComponent(tableId)}${
+      query ? `?${query}` : ''
+    }`,
   )
 }

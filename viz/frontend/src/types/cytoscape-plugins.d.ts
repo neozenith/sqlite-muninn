@@ -12,6 +12,12 @@ declare module 'cytoscape-fcose' {
   export default fcose
 }
 
+declare module 'cytoscape-elk' {
+  import type { Ext } from 'cytoscape'
+  const elk: Ext
+  export default elk
+}
+
 declare module 'react-cytoscapejs' {
   import type { ComponentType, CSSProperties } from 'react'
   import type { Core, ElementDefinition, StylesheetStyle } from 'cytoscape'
