@@ -17,14 +17,12 @@ description: >
 license: MIT
 compatibility: >
   Requires muninn extension. Python: `pip install sqlite-muninn`.
-  Node.js: `npm install sqlite-muninn`. C: download amalgamation from GitHub Releases.
-  Optional companions: `pip install sqlite-lembed` (GGUF embeddings),
-  `pip install sqlite-rembed` (API embeddings).
+  Node.js: `npm install sqlite-muninn`. 
+  C: download amalgamation from GitHub Releases.
 metadata:
   author: joshpeak
   version: "0.4.0-rc1"
   repository: https://github.com/user/sqlite-muninn
-allowed-tools: Bash(sqlite3:*), Bash(python:*), Bash(node:*)
 ---
 
 # muninn — HNSW Vector Search + Graph Traversal for SQLite
