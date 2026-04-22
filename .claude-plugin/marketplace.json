@@ -1,19 +1,48 @@
 {
-  "name": "muninn",
+  "name": "sqlite-muninn",
   "owner": {
-    "name": "joshpeak"
+    "name": "Josh Peak",
+    "email": "joshpeak05@gmail.com"
+  },
+  "metadata": {
+    "description": "HNSW vector search, graph algorithms (BFS/DFS/PageRank/Leiden/centrality), Node2Vec embeddings, GGUF embedding and LLM chat/extraction — all inside SQLite via a single C11 extension.",
+    "version": "0.4.0"
   },
   "plugins": [
     {
       "name": "muninn",
+      "description": "Nine task-granular agent skills for the sqlite-muninn extension: setup, HNSW vector search, GGUF text embedding, LLM chat/extraction, graph algorithms, dbt-style lineage (graph_select), Node2Vec, GraphRAG pipelines, and troubleshooting. Covers SQLite CLI, C, Python, Node.js, and WASM runtimes.",
       "source": "./",
-      "description": "HNSW vector search, graph traversal, and Node2Vec for SQLite.",
-      "version": "0.1.0",
-      "author": { "name": "joshpeak" },
-      "repository": "https://github.com/user/sqlite-muninn",
+      "strict": false,
+      "version": "0.4.0",
+      "homepage": "https://github.com/neozenith/sqlite-muninn",
+      "repository": "https://github.com/neozenith/sqlite-muninn",
       "license": "MIT",
-      "keywords": ["sqlite", "vector", "hnsw", "graph", "node2vec", "search"],
-      "skills": ["./skills/"]
+      "keywords": [
+        "sqlite",
+        "vector-search",
+        "hnsw",
+        "knowledge-graph",
+        "graph-algorithms",
+        "pagerank",
+        "leiden",
+        "node2vec",
+        "gguf",
+        "embedding",
+        "llm",
+        "graphrag"
+      ],
+      "skills": [
+        "./skills/muninn-setup",
+        "./skills/muninn-vector-search",
+        "./skills/muninn-embed-text",
+        "./skills/muninn-chat-extract",
+        "./skills/muninn-graph-algorithms",
+        "./skills/muninn-graph-select",
+        "./skills/muninn-node2vec",
+        "./skills/muninn-graphrag",
+        "./skills/muninn-troubleshoot"
+      ]
     }
   ]
 }

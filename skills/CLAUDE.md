@@ -10,7 +10,13 @@ This file is loaded whenever an assistant edits files under `skills/`. It define
 
 Library users who run Claude Code already have the authoritative reference in `docs/`. Skills are not a second copy of the docs — they are **procedural knowledge for an agent**: how to recover from a build failure, how to phrase a `muninn_embed` call inside a trigger, which model to register when the user says "semantic search." If a skill only restates what `docs/*.md` already explains, delete the skill; if it teaches Claude to *do* something correctly without re-reading the docs, keep it.
 
-Distribution channel: `npx skills add neozenith/sqlite-muninn` (see [skills.sh](https://skills.sh/)) and/or Claude Code's `/plugin marketplace add` command. Both read the same `skills/` directory layout — do not fork into a `.claude-plugin/` tree.
+Distribution channels — all CLI, all verified against `claude plugin --help` and `codex marketplace --help`:
+
+- `npx skills add neozenith/sqlite-muninn …` (see [skills.sh](https://skills.sh/)) — copies SKILL.md directories into `~/.claude/skills/` or `~/.codex/skills/`, bypasses the plugin layer.
+- `claude plugin marketplace add neozenith/sqlite-muninn` + `claude plugin install muninn@sqlite-muninn` — reads `.claude-plugin/marketplace.json`.
+- `codex marketplace add neozenith/sqlite-muninn` + `[plugins."muninn@sqlite-muninn"] enabled = true` in `~/.codex/config.toml` — reads `.codex-plugin/plugin.json`.
+
+All three read the same top-level `skills/<name>/SKILL.md` files. Do not duplicate the skill tree into `.claude-plugin/`, `.codex-plugin/`, or anywhere else.
 
 ---
 
@@ -117,6 +123,44 @@ Do not add a tenth skill without first asking: can this be a `references/*.md` i
 
 ---
 
+## Plugin-ecosystem files (dual Claude Code + Codex support)
+
+The `skills/` tree is the single source of truth. Two thin manifest files at the repo root expose the same bundle to both plugin ecosystems:
+
+| File | Purpose | Authoritative schema |
+|------|---------|-----------------------|
+| [`.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json) | Claude Code marketplace + plugin definition (one manifest, `strict: false` so per-plugin `plugin.json` is not needed) | [code.claude.com/docs/en/plugin-marketplaces](https://code.claude.com/docs/en/plugin-marketplaces) |
+| [`.codex-plugin/plugin.json`](../.codex-plugin/plugin.json) | Codex plugin manifest (includes the `interface` block with `displayName`, `defaultPrompt`, etc.) | [developers.openai.com/codex/plugins/build](https://developers.openai.com/codex/plugins/build) |
+| [`AGENTS.md`](../AGENTS.md) | Symlink → `CLAUDE.md`. Codex reads `AGENTS.md` for per-project instructions; Claude Code reads `CLAUDE.md`. One source, two entrypoints. | [Codex AGENTS.md docs](https://developers.openai.com/codex/guides/agents-md) |
+
+Codex also accepts `.claude-plugin/marketplace.json` as a fallback marketplace source — the two manifests do not compete.
+
+### Rules for maintaining parity
+
+1. **Every skill added / renamed / removed requires both manifests updated.**
+    - Add or remove the path in `.claude-plugin/marketplace.json` → `plugins[0].skills[]` (explicit path, one per skill).
+    - `.codex-plugin/plugin.json` uses `"skills": "./skills/"` auto-discovery — no edit needed for add/remove, but re-run the validator to confirm.
+2. **Run `claude plugin validate .claude-plugin/marketplace.json` on every manifest change.** Non-negotiable. It runs Claude's Zod schema against the file and fails fast on unknown fields, missing required fields, or bad nesting. If this command reports `✔ Validation passed`, the manifest will load. If not, it won't.
+3. **Never add a `$schema` key to the Claude manifest.** Claude's schema uses `additionalProperties: false` — unrecognized keys fail validation. This is counterintuitive if you are used to VS Code-friendly JSON where `$schema` is a helpful hint; here it is a hard error.
+4. **Never promote `./skills/` wildcard to the Claude marketplace manifest.** `anthropics/skills` uses an explicit path array and so must we — the wildcard form is undocumented for Claude Code and may silently register zero skills.
+5. **`strict: false` is load-bearing.** It tells the marketplace "this plugin entry is the complete definition" — don't flip to `strict: true` unless you also add a `.claude-plugin/plugin.json` per-plugin manifest with the full schema.
+6. **Version fields must match — never hand-edit them.** The canonical version lives in the repo-root `VERSION` file. Run `make version-stamp` (or `uv run scripts/generate_build.py version`) to propagate it into `.claude-plugin/marketplace.json` (both `metadata.version` and `plugins[0].version`), `.codex-plugin/plugin.json` (`version`), and `npm/package.json`. The stamp targets are declared in `VERSION_STAMP_TARGETS` inside `scripts/generate_build.py` — add new files there, not by hand-editing elsewhere. Check-only mode: `uv run scripts/generate_build.py version --check` (exits 1 if any target is stale — useful in CI).
+7. **Do not edit `AGENTS.md` directly.** It is a symlink to `CLAUDE.md`. Edit `CLAUDE.md` and the change propagates. If the symlink is ever materialized into a file (Windows contributor, some CI flow), re-symlink with `ln -sf CLAUDE.md AGENTS.md`.
+
+### Shell CLI commands we support (authoritative — not slash commands)
+
+All three install paths are CLI-only. Claude Code's TUI `/plugin …` slash commands exist but we do not document them — the shell equivalents work identically and compose with shell scripts / CI.
+
+| Path | Shell commands |
+|------|----------------|
+| skills.sh | `npx skills add neozenith/sqlite-muninn --agent claude-code codex --yes` |
+| Claude Code plugin | `claude plugin marketplace add neozenith/sqlite-muninn`<br>`claude plugin install muninn@sqlite-muninn` (`--scope user\|project\|local`) |
+| Codex plugin | `codex marketplace add neozenith/sqlite-muninn`<br>append `[plugins."muninn@sqlite-muninn"] enabled = true` to `~/.codex/config.toml` |
+
+For the full discovered `claude plugin` subtree — `list`, `enable`, `disable`, `uninstall`, `update`, `validate` — see `claude plugin --help`. When these outputs change (CLI update), re-sync `skills/README.md`.
+
+---
+
 ## Prior art — what we learned from other OSS libraries
 
 Research summary from April 2026 (see `tmp/skills-research/` for the raw reports, or re-run the general-purpose agent prompts preserved there).
@@ -128,6 +172,7 @@ Research summary from April 2026 (see `tmp/skills-research/` for the raw reports
 - **[vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills)** — seven discipline-sized skills, each with runnable `scripts/` + `references/`. Installable via `npx skills add`. Good precedent for bundling helper scripts alongside prose.
 - **[supabase/agent-skills](https://github.com/supabase/agent-skills)** — hybrid granularity: one broad `supabase` skill + a narrow `supabase-postgres-best-practices` skill. Shows that it's OK to mix product-wide and surgical skills in the same repo.
 - **[planetscale/database-skills](https://github.com/planetscale/database-skills)** — one skill per database product (`mysql`, `postgres`, `vitess`, `neki`). Useful reference for per-surface granularity — but note that Planet Scale's skills trend too broad; muninn's per-workflow decomposition is tighter.
+- **[zeabur/agent-skills](https://github.com/zeabur/agent-skills)** — the canonical **dual Claude Code + Codex** reference. Ships both `.claude-plugin/` and `.codex-plugin/` pointing at a single top-level `skills/` directory — the layout we adopted.
 
 ### Negative examples to avoid
 
@@ -163,6 +208,12 @@ Sources:
 - [ ] No emoji; no "simply," "just," "easy," "blazing"
 - [ ] No fallback / try-except-skip chains; requirements are mandatory
 - [ ] Referenced `references/*.md` and `scripts/*` files actually exist and are linked
+- [ ] `.claude-plugin/marketplace.json` `plugins[0].skills[]` enumerates every skill directory (added/removed/renamed entries updated)
+- [ ] `.codex-plugin/plugin.json` version matches `.claude-plugin/marketplace.json` version
+- [ ] `AGENTS.md` symlink still resolves to `CLAUDE.md` (`readlink AGENTS.md` prints `CLAUDE.md`)
+- [ ] `claude plugin validate .claude-plugin/marketplace.json` returns `✔ Validation passed`
+- [ ] No `$schema` key in `.claude-plugin/marketplace.json` (the Claude validator rejects it)
+- [ ] `skills/README.md` install commands still match the shell subcommand tree from `claude plugin --help` and `codex marketplace --help` (CLI surfaces change between releases)
 
 ---
 
