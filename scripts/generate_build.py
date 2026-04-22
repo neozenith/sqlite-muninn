@@ -164,13 +164,18 @@ NPM_PLATFORMS = {
 
 # ── Version stamp targets ───────────────────────────────────────────
 # Each: (file relative to project root, regex pattern)
+# The Python `re.sub(pattern, repl, text)` call replaces ALL non-overlapping
+# matches — useful for files like .claude-plugin/marketplace.json that carry
+# the version in both metadata.version and plugins[0].version under the same
+# JSON key name.
 VERSION_STAMP_TARGETS = [
-    (
-        "skills/muninn/SKILL.md",
-        r'(  version:\s*")[\d]+\.[\d]+\.[\d]+[^"]*(")',
-    ),
     ("npm/package.json", r'("version":\s*")[\d]+\.[\d]+\.[\d]+[^"]*(")'),
     ("npm/package.json", r'("@sqlite-muninn/[^"]+": ")[\d]+\.[\d]+\.[\d]+[^"]*(")'),
+    # Claude Code plugin marketplace manifest — catches both the marketplace-level
+    # `metadata.version` AND the plugin-level `plugins[0].version` in one regex.
+    (".claude-plugin/marketplace.json", r'("version":\s*")[\d]+\.[\d]+\.[\d]+[^"]*(")'),
+    # Codex CLI plugin manifest — single top-level `version` field.
+    (".codex-plugin/plugin.json", r'("version":\s*")[\d]+\.[\d]+\.[\d]+[^"]*(")'),
 ]
 
 

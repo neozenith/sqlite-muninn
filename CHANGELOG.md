@@ -6,14 +6,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
-### Bug Fixes
+### Features
 
-- Address deploy pipeline issues
-- Relock uv.lock file
+- Update library agentic skills
+- Refactor rewrite of agent skills
+- Update version stamping for marketplace manifests for skills
 
 ### Other
 
-- Attempt to fix release pipeline fo v0.3.2
+- Refactor viz (#27)
+
+* refactor: start rewrite of viz demo
+
+* stamp new rc version
+
+* continued rewrite of viz
+
+* Commit changes about viz navigation and spheres for embedding markers
+
+* Add sub charts in navigation
+
+* docs: refactor documentation
+
+* docs: refactoring the viz/ kg visualisations
+
+* feat: improvements to knowledge graph colouring, filterings, node and edge sizing and layout algorithm configs
+
+* chore: push min-degree server-side, isolate community opacity, unify KG restyle
+
+Server:
+- `min_degree` is now a query param on /kg/{table}; pruned after BFS expansion so
+  communities shrink their node_ids and member_count with the same filter, and
+  empty communities are dropped. Echoes back via KGPayload.min_degree.
+- seed_metric/max_depth validation surfaces as 400 with a clear detail message.
+- `_GraphCache` keyed by (db_path, table, resolution) memoizes BC across
+  requests that only tune top_n/max_depth/seed_metric.
+
+Frontend:
+- Community opacity now applies only to compound parents via the three
+  per-component properties (background/border/text opacity) rather than
+  element-level `opacity`, which cascades to children in cytoscape.
+- Seven separate styling `useEffect`s collapsed into one unified restyle pass
+  that runs on every filter/colour/size change. Visibility runs first,
+  producing hidden-id sets that feed normalization-aware node-size / edge-
+  thickness so hidden outliers don't compress the visible range.
+- minDegree joins the pending-reload group alongside topN/maxDepth/seedMetric.
+- Theme context split into theme-context.ts so react-refresh stays happy.
+- `resolved` theme derived via useMemo rather than a setState-in-effect round-trip.
+
+CI pass:
+- viz: ruff, prettier, mypy, eslint, pytest, vitest, playwright all green.
+- benchmarks/harness: mypy annotation fixes on pre-existing type-arg errors
+  (dict[str, Any] in s3_mirror + kg_api_adapters) so `make ci-all` advances
+  past typecheck.
+
+## [0.3.3] - 2026-04-21
+
+### Other
+
+- Finally publish to both npm and pypi after resolving deployment issues
+
+## [0.3.3-rc1] - 2026-04-21
+
+### Bug Fixes
+
+- Fix release pipeline
+
+### Other
+
+- Fix/release pipeline (#26)
+
+* attempt to fix release pipeline fo v0.3.2
+
+* fix: address deploy pipeline issues
+
+* fix: relock uv.lock file
+
+* docs: update changelog
+- Bump version and look at prototyping RC versions
+- Another try
 
 ## [0.3.1] - 2026-04-21
 

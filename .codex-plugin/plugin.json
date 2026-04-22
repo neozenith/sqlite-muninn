@@ -1,0 +1,44 @@
+{
+  "name": "muninn",
+  "version": "0.4.0",
+  "description": "HNSW vector search, graph algorithms, Node2Vec, and GGUF embedding + LLM inference — all inside SQLite via a single C11 extension. Ships nine task-granular skills covering setup, vector search, text embeddings, LLM extraction, graph algorithms, dbt-style lineage, Node2Vec, GraphRAG pipelines, and troubleshooting across SQLite CLI, C, Python, Node.js, and WASM.",
+  "author": {
+    "name": "Josh Peak",
+    "email": "joshpeak05@gmail.com",
+    "url": "https://github.com/neozenith"
+  },
+  "homepage": "https://github.com/neozenith/sqlite-muninn",
+  "repository": "https://github.com/neozenith/sqlite-muninn",
+  "license": "MIT",
+  "keywords": [
+    "sqlite",
+    "vector-search",
+    "hnsw",
+    "knowledge-graph",
+    "graph-algorithms",
+    "pagerank",
+    "leiden",
+    "node2vec",
+    "gguf",
+    "embedding",
+    "llm",
+    "graphrag"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "muninn",
+    "shortDescription": "Vector search, graph algorithms, and LLM inference in SQLite",
+    "longDescription": "sqlite-muninn is a C11 SQLite extension that registers HNSW vector indexes, graph traversal / centrality / Leiden community TVFs, Node2Vec training, GGUF embedding (muninn_embed), and GGUF LLM chat + structured extraction (muninn_chat, muninn_extract_entities, muninn_extract_relations, muninn_summarize) — all callable as SQL. This plugin bundles nine task-granular skills that teach Codex the correct invocation patterns for each subsystem across SQLite CLI, C, Python, Node.js, and WASM runtimes.",
+    "developerName": "Josh Peak",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/neozenith/sqlite-muninn",
+    "defaultPrompt": [
+      "Add semantic search to my SQLite database using muninn",
+      "Run Leiden community detection on my edge table",
+      "Build a GraphRAG pipeline entirely in SQL with local GGUF models",
+      "Extract entities and relations from text via muninn_extract_ner_re",
+      "Troubleshoot a muninn load error on macOS Python"
+    ]
+  }
+}
