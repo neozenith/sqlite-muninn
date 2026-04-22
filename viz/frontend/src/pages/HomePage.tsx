@@ -30,10 +30,13 @@ export function HomePage() {
   }, [])
 
   return (
-    <main className="min-h-screen p-8" data-testid="home-page">
+    <main
+      className="min-h-screen bg-[var(--color-surface)] p-8 text-[var(--color-foreground)]"
+      data-testid="home-page"
+    >
       <header className="mb-8">
         <h1 className="text-4xl font-bold">muninn-viz</h1>
-        <p className="text-muted-foreground">Select a database to explore.</p>
+        <p className="text-[var(--color-muted-foreground)]">Select a database to explore.</p>
       </header>
 
       {state.status === 'loading' && (
@@ -41,7 +44,10 @@ export function HomePage() {
       )}
 
       {state.status === 'error' && (
-        <div data-testid="home-error" className="rounded border border-red-400 bg-red-50 p-4 text-red-800">
+        <div
+          data-testid="home-error"
+          className="rounded border border-red-400 bg-red-50 p-4 text-red-800 dark:border-red-500 dark:bg-red-950/40 dark:text-red-200"
+        >
           <p className="font-semibold">Failed to load databases</p>
           <p className="text-sm">{state.message}</p>
         </div>
@@ -62,10 +68,10 @@ export function HomePage() {
               <Link
                 to={`/${encodeURIComponent(db.id)}/`}
                 data-testid={`db-card-${db.id}`}
-                className="block rounded border border-gray-300 p-4 transition hover:border-gray-500 hover:shadow"
+                className="block rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] p-4 transition hover:border-[var(--color-accent)] hover:shadow"
               >
                 <div className="font-semibold">{db.label}</div>
-                <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-sm text-muted-foreground">
+                <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-sm text-[var(--color-muted-foreground)]">
                   <dt>ID</dt>
                   <dd className="font-mono">{db.id}</dd>
                   <dt>Model</dt>

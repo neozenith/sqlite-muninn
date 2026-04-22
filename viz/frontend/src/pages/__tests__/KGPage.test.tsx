@@ -10,6 +10,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { ThemeProvider } from '../../lib/ThemeProvider'
 import { KGPage } from '../KGPage'
 
 const jsonResponse = (body: unknown, status = 200): Response =>
@@ -20,11 +21,13 @@ const jsonResponse = (body: unknown, status = 200): Response =>
 
 const renderAt = (path: string) =>
   render(
-    <MemoryRouter initialEntries={[path]}>
-      <Routes>
-        <Route path="/:databaseId/kg/:tableId/" element={<KGPage />} />
-      </Routes>
-    </MemoryRouter>,
+    <ThemeProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/:databaseId/kg/:tableId/" element={<KGPage />} />
+        </Routes>
+      </MemoryRouter>
+    </ThemeProvider>,
   )
 
 describe('KGPage', () => {

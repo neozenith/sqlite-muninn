@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import App from './App'
+import { ThemeProvider } from './lib/ThemeProvider'
 
 const SAMPLE_DBS = [
   {
@@ -21,6 +22,15 @@ const jsonResponse = (body: unknown, status = 200): Response =>
     headers: { 'content-type': 'application/json' },
   })
 
+const renderApp = (initialPath: string) =>
+  render(
+    <ThemeProvider>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <App />
+      </MemoryRouter>
+    </ThemeProvider>,
+  )
+
 describe('App', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
@@ -34,12 +44,15 @@ describe('App', () => {
   })
 
   test('home route renders the database list', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ databases: SAMPLE_DBS }))
-    render(
-      <MemoryRouter initialEntries={['/']}>
-        <App />
-      </MemoryRouter>,
-    )
+    // Both HomePage and Sidebar fetch /api/databases — the impl handles either
+    // URL by returning the same payload.
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/databases')) {
+        return Promise.resolve(jsonResponse({ databases: SAMPLE_DBS }))
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    renderApp('/')
     await waitFor(() => {
       expect(screen.getByTestId('home-database-list')).toBeInTheDocument()
     })
@@ -48,6 +61,9 @@ describe('App', () => {
 
   test('database route renders the detail page', async () => {
     fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/databases')) {
+        return Promise.resolve(jsonResponse({ databases: SAMPLE_DBS }))
+      }
       if (url.endsWith('/tables')) {
         return Promise.resolve(
           jsonResponse({
@@ -60,11 +76,7 @@ describe('App', () => {
       }
       return Promise.resolve(jsonResponse(SAMPLE_DBS[0]))
     })
-    render(
-      <MemoryRouter initialEntries={['/3300_MiniLM/']}>
-        <App />
-      </MemoryRouter>,
-    )
+    renderApp('/3300_MiniLM/')
     await waitFor(() => {
       expect(screen.getByTestId('database-detail')).toBeInTheDocument()
     })
@@ -72,12 +84,10 @@ describe('App', () => {
   })
 
   test('unknown route redirects to home', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ databases: [] }))
-    render(
-      <MemoryRouter initialEntries={['/totally/bogus/path']}>
-        <App />
-      </MemoryRouter>,
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(jsonResponse({ databases: [] })),
     )
+    renderApp('/totally/bogus/path')
     await waitFor(() => {
       expect(screen.getByTestId('home-page')).toBeInTheDocument()
     })

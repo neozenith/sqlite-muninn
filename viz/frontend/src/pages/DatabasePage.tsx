@@ -54,9 +54,17 @@ export function DatabasePage() {
   }, [databaseId])
 
   return (
-    <main className="min-h-screen p-8" data-testid="database-page" data-database-id={databaseId ?? ''}>
+    <main
+      className="min-h-screen bg-[var(--color-surface)] p-8 text-[var(--color-foreground)]"
+      data-testid="database-page"
+      data-database-id={databaseId ?? ''}
+    >
       <nav className="mb-4">
-        <Link to="/" className="text-sm text-blue-600 hover:underline" data-testid="back-to-home">
+        <Link
+          to="/"
+          className="text-sm text-[var(--color-accent)] hover:underline"
+          data-testid="back-to-home"
+        >
           ← Back to all databases
         </Link>
       </nav>
@@ -66,14 +74,20 @@ export function DatabasePage() {
       )}
 
       {state.status === 'error' && state.notFound && (
-        <div data-testid="database-not-found" className="rounded border border-amber-400 bg-amber-50 p-4 text-amber-900">
+        <div
+          data-testid="database-not-found"
+          className="rounded border border-amber-400 bg-amber-50 p-4 text-amber-900 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-200"
+        >
           <p className="font-semibold">Database not found</p>
-          <p className="text-sm font-mono">{databaseId}</p>
+          <p className="font-mono text-sm">{databaseId}</p>
         </div>
       )}
 
       {state.status === 'error' && !state.notFound && (
-        <div data-testid="database-error" className="rounded border border-red-400 bg-red-50 p-4 text-red-800">
+        <div
+          data-testid="database-error"
+          className="rounded border border-red-400 bg-red-50 p-4 text-red-800 dark:border-red-500 dark:bg-red-950/40 dark:text-red-200"
+        >
           <p className="font-semibold">Failed to load database</p>
           <p className="text-sm">{state.message}</p>
         </div>
@@ -82,7 +96,9 @@ export function DatabasePage() {
       {state.status === 'ready' && (
         <article data-testid="database-detail">
           <h1 className="text-4xl font-bold">{state.data.database.label}</h1>
-          <p className="mt-1 font-mono text-sm text-muted-foreground">{state.data.database.id}</p>
+          <p className="mt-1 font-mono text-sm text-[var(--color-muted-foreground)]">
+            {state.data.database.id}
+          </p>
 
           <dl className="mt-6 grid max-w-xl grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
             <dt className="font-semibold">Book ID</dt>
@@ -98,17 +114,19 @@ export function DatabasePage() {
           </dl>
 
           <section className="mt-8" data-testid="embed-links">
-            <h2 className="text-xl font-semibold mb-2">3D UMAP Embeddings</h2>
+            <h2 className="mb-2 text-xl font-semibold">3D UMAP Embeddings</h2>
             <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {state.data.tables.embed_tables.map((tid) => (
                 <li key={`embed-${tid}`}>
                   <Link
                     to={`/${encodeURIComponent(state.data.database.id)}/embed/${encodeURIComponent(tid)}/`}
                     data-testid={`embed-link-${tid}`}
-                    className="block rounded border border-gray-300 p-3 hover:border-gray-500 hover:shadow"
+                    className="block rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] p-3 transition hover:border-[var(--color-accent)] hover:shadow"
                   >
                     <span className="font-mono text-sm">{tid}</span>
-                    <span className="block text-xs text-muted-foreground">{EMBED_LABELS[tid] ?? tid}</span>
+                    <span className="block text-xs text-[var(--color-muted-foreground)]">
+                      {EMBED_LABELS[tid] ?? tid}
+                    </span>
                   </Link>
                 </li>
               ))}
@@ -116,17 +134,19 @@ export function DatabasePage() {
           </section>
 
           <section className="mt-6" data-testid="kg-links">
-            <h2 className="text-xl font-semibold mb-2">Knowledge Graphs</h2>
+            <h2 className="mb-2 text-xl font-semibold">Knowledge Graphs</h2>
             <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {state.data.tables.kg_tables.map((tid) => (
                 <li key={`kg-${tid}`}>
                   <Link
                     to={`/${encodeURIComponent(state.data.database.id)}/kg/${encodeURIComponent(tid)}/`}
                     data-testid={`kg-link-${tid}`}
-                    className="block rounded border border-gray-300 p-3 hover:border-gray-500 hover:shadow"
+                    className="block rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] p-3 transition hover:border-[var(--color-accent)] hover:shadow"
                   >
                     <span className="font-mono text-sm">{tid}</span>
-                    <span className="block text-xs text-muted-foreground">{KG_LABELS[tid] ?? tid}</span>
+                    <span className="block text-xs text-[var(--color-muted-foreground)]">
+                      {KG_LABELS[tid] ?? tid}
+                    </span>
                   </Link>
                 </li>
               ))}

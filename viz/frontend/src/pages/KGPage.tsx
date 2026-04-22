@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import CytoscapeComponent from 'react-cytoscapejs'
 import { Link, useParams } from 'react-router-dom'
 import { ApiError, type KGPayload, fetchKG } from '../lib/api-client'
+import { useTheme } from '../lib/ThemeProvider'
 
 cytoscape.use(fcose as unknown as cytoscape.Ext)
 
@@ -17,8 +18,6 @@ type LoadState =
 const buildElements = (payload: KGPayload): cytoscape.ElementDefinition[] => {
   const parentIdFor = (communityId: number) => `community_${communityId}`
 
-  // Parent compound nodes per community. Cytoscape needs parents to exist
-  // before any child references them via `data.parent`.
   const parents: cytoscape.ElementDefinition[] = payload.communities.map((c) => ({
     group: 'nodes',
     data: {
@@ -57,7 +56,7 @@ const buildElements = (payload: KGPayload): cytoscape.ElementDefinition[] => {
   return [...parents, ...children, ...edges]
 }
 
-const STYLESHEET: cytoscape.StylesheetStyle[] = [
+const LIGHT_STYLESHEET: cytoscape.StylesheetStyle[] = [
   {
     selector: 'node',
     style: {
@@ -106,11 +105,62 @@ const STYLESHEET: cytoscape.StylesheetStyle[] = [
   },
 ]
 
+const DARK_STYLESHEET: cytoscape.StylesheetStyle[] = [
+  {
+    selector: 'node',
+    style: {
+      'background-color': '#7AB3FF',
+      label: 'data(label)',
+      'font-size': '8px',
+      color: '#e6e6e6',
+      'text-wrap': 'ellipsis',
+      'text-max-width': '80px',
+      'text-valign': 'center',
+      'text-halign': 'center',
+      width: 14,
+      height: 14,
+    },
+  },
+  {
+    selector: 'node[?isCommunity]',
+    style: {
+      'background-color': '#3a341a',
+      'background-opacity': 0.35,
+      'border-color': '#E0C765',
+      'border-width': 1,
+      label: 'data(label)',
+      'font-size': '14px',
+      'font-weight': 'bold',
+      color: '#F5DC78',
+      'text-valign': 'top',
+      'text-halign': 'center',
+      'text-margin-y': -6,
+      'text-wrap': 'ellipsis',
+      'text-max-width': '200px',
+      shape: 'round-rectangle',
+      padding: '16px',
+    } as unknown as cytoscape.Css.Node,
+  },
+  {
+    selector: 'edge',
+    style: {
+      width: 1,
+      'line-color': '#5a6375',
+      'target-arrow-color': '#5a6375',
+      'target-arrow-shape': 'triangle',
+      'curve-style': 'bezier',
+      opacity: 0.7,
+    },
+  },
+]
+
 export function KGPage() {
   const { databaseId, tableId } = useParams<{ databaseId: string; tableId: string }>()
   const [state, setState] = useState<LoadState>({ status: 'loading' })
   const [layoutReady, setLayoutReady] = useState(false)
   const cyRef = useRef<cytoscape.Core | null>(null)
+  const { resolved } = useTheme()
+  const stylesheet = resolved === 'dark' ? DARK_STYLESHEET : LIGHT_STYLESHEET
 
   useEffect(() => {
     if (!databaseId || !tableId) return
@@ -160,25 +210,30 @@ export function KGPage() {
     })
   }, [elements, state.status])
 
+  // Recolor in place on theme change so we don't have to rebuild the layout.
+  useEffect(() => {
+    cyRef.current?.style(stylesheet as unknown as cytoscape.StylesheetStyle[])
+  }, [stylesheet])
+
   return (
     <main
-      className="min-h-screen flex flex-col"
+      className="flex min-h-screen flex-col bg-[var(--color-surface)] text-[var(--color-foreground)]"
       data-testid="kg-page"
       data-database-id={databaseId ?? ''}
       data-table-id={tableId ?? ''}
     >
-      <header className="p-4 border-b">
+      <header className="border-b border-[var(--color-border-subtle)] p-4">
         <nav className="flex gap-4 text-sm">
-          <Link to="/" className="text-blue-600 hover:underline">Home</Link>
-          <Link to={`/${databaseId}/`} className="text-blue-600 hover:underline">
+          <Link to="/" className="text-[var(--color-accent)] hover:underline">Home</Link>
+          <Link to={`/${databaseId}/`} className="text-[var(--color-accent)] hover:underline">
             ← {databaseId}
           </Link>
         </nav>
-        <h1 className="text-2xl font-bold mt-2">
+        <h1 className="mt-2 text-2xl font-bold">
           Knowledge Graph: <span className="font-mono">{tableId}</span>
         </h1>
         {state.status === 'ready' && (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-[var(--color-muted-foreground)]">
             {state.payload.node_count.toLocaleString()} nodes
             {state.payload.total_node_count > state.payload.node_count
               ? ` (of ${state.payload.total_node_count.toLocaleString()} — showing top by degree)`
@@ -190,12 +245,15 @@ export function KGPage() {
         )}
       </header>
 
-      <section className="flex-1 relative">
+      <section className="relative flex-1">
         {state.status === 'loading' && (
           <div data-testid="kg-loading" className="p-8">Loading knowledge graph…</div>
         )}
         {state.status === 'error' && (
-          <div data-testid="kg-error" className="m-8 rounded border border-red-400 bg-red-50 p-4 text-red-800">
+          <div
+            data-testid="kg-error"
+            className="m-8 rounded border border-red-400 bg-red-50 p-4 text-red-800 dark:border-red-500 dark:bg-red-950/40 dark:text-red-200"
+          >
             <p className="font-semibold">Failed to load knowledge graph</p>
             <p className="text-sm">{state.message}</p>
           </div>
@@ -204,7 +262,7 @@ export function KGPage() {
           <div className="absolute inset-0">
             <CytoscapeComponent
               elements={elements}
-              stylesheet={STYLESHEET}
+              stylesheet={stylesheet}
               cy={(cy: cytoscape.Core) => {
                 cyRef.current = cy
               }}
