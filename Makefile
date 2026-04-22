@@ -371,10 +371,10 @@ ci-benchmarks-demo-builder:                    ## CI for benchmarks/demo_builder
 ci-benchmarks-sessions-demo:                   ## CI for benchmarks/sessions_demo
 	$(MAKE) -C benchmarks/sessions_demo ci
 
-# ci-viz:                                      ## CI for viz (disabled until kg-demo db restored)
-# 	$(MAKE) -C viz ci
+ci-viz:                                      ## CI for viz (disabled until kg-demo db restored)
+	$(MAKE) -C viz ci
 
-ci-all: ci ci-benchmarks-harness ci-benchmarks-demo-builder ci-benchmarks-sessions-demo  ## Full CI including subprojects
+ci-all: ci ci-benchmarks-harness ci-benchmarks-demo-builder ci-benchmarks-sessions-demo ci-viz  ## Full CI including subprojects
 
 ######################################################################
 # CLEAN

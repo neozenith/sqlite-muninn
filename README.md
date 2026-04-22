@@ -5,6 +5,10 @@
     <p><i>Odin's mythic <a href="https://en.wikipedia.org/wiki/Huginn_and_Muninn">raven of Memory</a>.</i></p>
 </div>
 
+This project aims to build **agentic memory** and **knowledge graph** primitives for sqlite as a native C extension and also made available for Python, Node.JS and WASM. 
+
+It is **an advanced collection of knowledge graph primitives** like Vector Similarity Search, HNSW Indexes, Graph database, Community Detection, Node2Vec capabilities and loading GGUF models via llama.cpp integration.
+
 ```text
 Huginn and Muninn fly each day over the wide world.
 I fear for Huginn that he may not return,
@@ -15,7 +19,8 @@ yet I worry more for Muninn.
 
 _Odin fears losing Memory more than Thought._
 
-This project aims to build **agentic memory** and **knowledge graph** primitives for sqlite as a native C extension. It is an advanced collection of knowledge graph primitives like Vector Similarity Search, HNSW Indexes, Graph database, Community Detection, Node2Vec capabilities and loading GGUF models via llama.cpp integration.
+Huginn and Muninn are the two ravens of Odin and their names translate to _Thoughts_ and _Memory_.
+
 
 **[Documentation](https://neozenith.github.io/sqlite-muninn/)** | **[GitHub](https://github.com/neozenith/sqlite-muninn)**
 

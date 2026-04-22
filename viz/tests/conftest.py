@@ -1,116 +1,58 @@
-"""Test fixtures for muninn-viz API tests."""
+"""Shared test fixtures for muninn-viz."""
 
-import math
-import pathlib
-import sqlite3
-import struct
+import json
+from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-EXTENSION_PATH = str(PROJECT_ROOT / "build" / "muninn")
+from server.main import app, get_demos_dir
 
-
-def _create_test_db(tmp_path: pathlib.Path) -> str:
-    """Create a test database with synthetic HNSW index + edge table."""
-    db_path = str(tmp_path / "test.db")
-    conn = sqlite3.connect(db_path)
-    conn.enable_load_extension(True)
-    conn.load_extension(EXTENSION_PATH)
-
-    # Create a small HNSW index (4 dimensions, cosine)
-    conn.execute("""
-        CREATE VIRTUAL TABLE test_vec USING hnsw_index(
-            dimensions=4, metric='cosine', m=8, ef_construction=50
-        )
-    """)
-
-    # Insert some test vectors
-    for i in range(10):
-        vec = struct.pack("4f", float(i), float(i + 1), float(i + 2), float(i + 3))
-        conn.execute("INSERT INTO test_vec (rowid, vector) VALUES (?, ?)", (i + 1, vec))
-    conn.commit()
-
-    # Pre-computed UMAP table (required by /vss/{name}/embeddings endpoint)
-    conn.execute("""
-        CREATE TABLE test_vec_umap (
-            id INTEGER PRIMARY KEY,
-            x2d REAL, y2d REAL, x3d REAL, y3d REAL, z3d REAL
-        )
-    """)
-    for i in range(10):
-        angle = i * 2 * math.pi / 10
-        conn.execute(
-            "INSERT INTO test_vec_umap VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                i + 1,
-                round(math.cos(angle), 4),
-                round(math.sin(angle), 4),
-                round(math.cos(angle) * 0.5, 4),
-                round(math.sin(angle) * 0.5, 4),
-                round(i * 0.1, 4),
-            ),
-        )
-    conn.commit()
-
-    # Create edge table
-    conn.execute("""
-        CREATE TABLE test_edges (
-            src TEXT NOT NULL,
-            dst TEXT NOT NULL,
-            weight REAL DEFAULT 1.0
-        )
-    """)
-    edges = [
-        ("alice", "bob", 1.0),
-        ("bob", "carol", 2.0),
-        ("carol", "dave", 1.5),
-        ("alice", "carol", 0.5),
-        ("dave", "alice", 1.0),
-    ]
-    conn.executemany("INSERT INTO test_edges VALUES (?, ?, ?)", edges)
-    conn.commit()
-
-    # Create nodes table for metadata
-    conn.execute("""
-        CREATE TABLE nodes (
-            node_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            entity_type TEXT,
-            mention_count INTEGER DEFAULT 0
-        )
-    """)
-    for name in ("alice", "bob", "carol", "dave"):
-        conn.execute("INSERT INTO nodes (name, mention_count) VALUES (?, ?)", (name, 3))
-    conn.commit()
-
-    conn.close()
-    return db_path
+SAMPLE_DATABASES = [
+    {
+        "id": "3300_MiniLM",
+        "book_id": 3300,
+        "model": "MiniLM",
+        "dim": 384,
+        "file": "3300_MiniLM.db",
+        "size_bytes": 52285440,
+        "label": "Book 3300 + MiniLM (384d)",
+    },
+    {
+        "id": "39653_NomicEmbed",
+        "book_id": 39653,
+        "model": "NomicEmbed",
+        "dim": 768,
+        "file": "39653_NomicEmbed.db",
+        "size_bytes": 8044544,
+        "label": "Book 39653 + NomicEmbed (768d)",
+    },
+    # Session-log demo: no Gutenberg book_id. Exercises the optional field path.
+    {
+        "id": "sessions_demo",
+        "model": "nomic-embed-text-v1.5.Q8_0.gguf",
+        "dim": 768,
+        "file": "sessions_demo.db",
+        "size_bytes": 532971520,
+        "label": "Claude Code Sessions (768d)",
+    },
+]
 
 
 @pytest.fixture
-def test_db(tmp_path: pathlib.Path) -> str:
-    """Create a test database and return its path."""
-    return _create_test_db(tmp_path)
+def demos_dir(tmp_path: Path) -> Path:
+    """Create a tmp demos directory with a valid manifest.json."""
+    manifest = {"databases": SAMPLE_DATABASES}
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return tmp_path
 
 
 @pytest.fixture
-def client(test_db: str) -> TestClient:
-    """Create a TestClient with the server configured to use the test database."""
-    from server import config
-    from server.services import db
-
-    original_db_path = config.DB_PATH
-    config.DB_PATH = test_db
-    # Point the per-request connection factory at the test DB
-    db.reset_state(db_path=test_db)
-
-    from server.main import app
-
-    test_client = TestClient(app)
-    yield test_client
-
-    # Restore
-    config.DB_PATH = original_db_path
-    db.reset_state()
+def client(demos_dir: Path) -> Generator[TestClient, None, None]:
+    """TestClient with get_demos_dir overridden to point at the fixture dir."""
+    app.dependency_overrides[get_demos_dir] = lambda: demos_dir
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()

@@ -1,182 +1,167 @@
-# Node2Vec Guide
+# Node2Vec
 
-[Node2Vec](https://arxiv.org/abs/1607.00653) (Grover & Leskovec, 2016) learns vector embeddings from graph structure. Each node gets a dense vector that captures its structural role and neighborhood — nodes with similar graph positions end up close in vector space. The embeddings are stored directly in an HNSW index for similarity search.
+Learn vector embeddings from graph topology using biased random walks (Grover & Leskovec, 2016) and skip-gram with negative sampling (Mikolov et al., 2013). The output is written directly into an existing `hnsw_index`, turning structural similarity into an ordinary KNN query.
 
-## How It Works
+## Concept in three steps
 
-1. **Random walks**: For each node, generate multiple biased random walks through the graph
-2. **Skip-gram training**: Treat walks like sentences and train word2vec-style ([SGNS](https://arxiv.org/abs/1310.4546); Mikolov et al., 2013) to predict context nodes from center nodes
-3. **Store in HNSW**: Write the learned embeddings into an existing `hnsw_index` virtual table
+1. **Biased random walks** — for each node, generate `num_walks` walks of up to `walk_length` steps. Walks are biased by two parameters (`p`, `q`) that trade off BFS-like vs DFS-like behavior.
+2. **Skip-gram training** — treat walks like sentences, slide a context window of size `window`, and train per-node vectors so that nodes appearing close together in walks have close vectors.
+3. **Store in HNSW** — each node ends up with one L2-normalized vector written to the provided HNSW table at `rowid = node_index + 1`.
 
-The result: you can query "which nodes are structurally similar to node X?" using vector similarity search.
+## Signature
 
-## Basic Usage
+```sql
+node2vec_train(
+    edge_table TEXT,
+    src_col TEXT,
+    dst_col TEXT,
+    output_table TEXT,     -- must already exist as hnsw_index, matching 'dimensions'
+    dimensions INTEGER,
+    p REAL, q REAL,
+    num_walks INTEGER,
+    walk_length INTEGER,
+    window INTEGER,
+    neg_samples INTEGER,
+    learning_rate REAL,
+    epochs INTEGER
+) -> INTEGER               -- count of nodes embedded
+```
+
+All 12 arguments are positional and required. Edges are treated as undirected regardless of `src`/`dst` direction.
+
+## Minimal recipe
 
 ```sql
 .load ./muninn
 
--- Create the edge table
 CREATE TABLE edges (src TEXT, dst TEXT);
-INSERT INTO edges VALUES ('a', 'b'), ('b', 'c'), ('c', 'd'),
-                         ('a', 'e'), ('e', 'f'), ('f', 'd');
+INSERT INTO edges VALUES
+  ('a', 'b'), ('b', 'c'), ('c', 'd'),
+  ('a', 'e'), ('e', 'f'), ('f', 'd');
 
--- Create an HNSW index for the embeddings
-CREATE VIRTUAL TABLE node_emb USING hnsw_index(
-    dimensions=64, metric='cosine'
-);
+CREATE VIRTUAL TABLE node_emb USING hnsw_index(dimensions=64, metric='cosine');
 
--- Train Node2Vec (returns the number of nodes embedded)
 SELECT node2vec_train(
-    'edges',        -- edge table
-    'src',          -- source column
-    'dst',          -- destination column
-    'node_emb',     -- HNSW table to store embeddings
-    64,             -- embedding dimensions (must match HNSW table)
-    1.0,            -- p: return parameter
-    1.0,            -- q: in-out parameter
-    10,             -- num_walks: walks per node
-    80,             -- walk_length: max steps per walk
-    5,              -- window_size: SGNS context window
-    5,              -- negative_samples: negatives per positive
-    0.025,          -- learning_rate: initial LR (decays linearly)
-    5               -- epochs: training epochs
+  'edges', 'src', 'dst', 'node_emb',
+  64,                -- dimensions (match HNSW)
+  1.0, 1.0,          -- p, q  (DeepWalk defaults)
+  10, 40,            -- num_walks, walk_length
+  5, 5,              -- window, neg_samples
+  0.025, 3           -- learning_rate, epochs
 );
 ```
 
-## Understanding p and q
+```text
+6        -- number of nodes embedded
+```
 
-The `p` and `q` parameters control the bias of random walks, which determines **what kind of structure** the embeddings capture.
+## `p` and `q` — what they actually do
 
-### Return Parameter (p)
+After each walk step from node `t` to node `v`, the next step's transition probability is scaled by:
 
-Controls the likelihood of returning to the previous node:
+- `1/p` — for returning to `t`
+- `1.0` — for neighbors of `v` that are also neighbors of `t` (stay local)
+- `1/q` — for neighbors of `v` that are far from `t` (explore outward)
 
-- **Low p (e.g., 0.25)**: Walks tend to backtrack, staying local — BFS-like behavior
-- **High p (e.g., 4.0)**: Walks avoid backtracking, exploring further
+| Setting | Behavior | Captures | When to use |
+|---------|----------|----------|-------------|
+| `p=1, q=1` | Uniform (DeepWalk) | General structural similarity | Default; start here |
+| `p=0.25, q=1` | BFS-like, stays local | Community / neighborhood | "Find me nodes in the same cluster" |
+| `p=1, q=0.5` | DFS-like, explores far | Structural role (hubs, bridges) | "Find me nodes in a similar graph *role*" |
+| `p=0.5, q=2.0` | Very local | Tight cliques | "Find me nodes in the same dense subgraph" |
 
-### In-Out Parameter (q)
+Start with `p=q=1` unless you have a specific structural hypothesis. Changing `p` and `q` only matters at scale (> ~500 nodes); for small graphs the differences are in the noise.
 
-Controls whether walks move inward (toward the previous node's neighborhood) or outward:
+## Other parameters
 
-- **Low q (e.g., 0.5)**: Walks explore outward, DFS-like — captures structural roles
-- **High q (e.g., 2.0)**: Walks stay close to the start, capturing community structure
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `num_walks` | 10 | More walks → better coverage, linearly more compute |
+| `walk_length` | 80 | Longer walks capture global structure |
+| `window` | 5 | Skip-gram context — larger relates more distant walk neighbors |
+| `neg_samples` | 5 | Standard SGNS value |
+| `learning_rate` | 0.025 | Decays linearly over epochs |
+| `epochs` | 5 | Training passes over the full walk corpus |
+| `dimensions` | — | **Must equal** the `dimensions` declared on `output_table` |
 
-### Parameter Guide
+### Dimension sizing
 
-| Setting | Walk Behavior | Best For | Example Use Case |
-|---------|--------------|----------|-----------------|
-| p=1, q=1 | Uniform random ([DeepWalk](https://arxiv.org/abs/1403.6652)) | General similarity | Default starting point |
-| p=0.25, q=1 | BFS-like, local | Community/cluster similarity | Finding nodes in the same neighborhood |
-| p=1, q=0.5 | DFS-like, exploratory | Structural role similarity | Finding hubs, bridges, periphery nodes |
-| p=0.5, q=2.0 | Very local, community-focused | Tight community detection | Identifying cliques |
-
-!!! tip "Start with p=1, q=1"
-    The uniform setting (DeepWalk) is a good default. Only tune p and q if you have a specific structural hypothesis to test. For community detection, try low p. For structural role detection (finding all hub-like nodes), try low q.
-
-## Other Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `num_walks` | 10 | Walks per node. More walks = better coverage, slower training |
-| `walk_length` | 80 | Max steps per walk. Longer walks capture more global structure |
-| `window_size` | 5 | SGNS context window. Larger windows relate more distant walk neighbors |
-| `negative_samples` | 5 | Negative samples per positive. Standard value for SGNS |
-| `learning_rate` | 0.025 | Initial learning rate. Decays linearly during training |
-| `epochs` | 5 | Training passes over all walks |
-| `dimensions` | — | Embedding size. Must match the HNSW table's `dimensions` parameter |
-
-### Dimension Sizing
-
-Embedding dimensionality is a quality vs. cost trade-off:
-
-| Dimensions | Use Case |
+| Dimensions | Use case |
 |-----------|----------|
-| 16–32 | Small graphs (< 1K nodes), quick experiments |
-| 64 | Good default for most graphs |
-| 128 | Large graphs (> 10K nodes) or when precision matters |
-| 256+ | Rarely needed; diminishing returns |
+| 16–32 | < 1,000 nodes, quick experiments |
+| 64 | Default for most graphs |
+| 128 | > 10,000 nodes or when precision matters |
+| 256+ | Rarely worth it — diminishing returns |
 
-## Integration with HNSW
+## Querying structural similarity
 
-After training, the HNSW index contains one embedding per node. You can search it like any other HNSW index:
+After training, the HNSW index contains one embedding per node. muninn assigns `rowid = node_index + 1`, where `node_index` is the order the node was first seen while scanning the edge table.
+
+To find nodes structurally similar to a known node:
 
 ```sql
--- Find nodes structurally similar to node 'alice'
--- Step 1: Get alice's embedding
-SELECT vector FROM node_emb_nodes WHERE rowid = (
-    SELECT rowid FROM node_emb WHERE rowid = CAST('alice' AS INTEGER)
-);
-
--- Step 2: Use it as a query vector
-SELECT rowid, distance FROM node_emb
-WHERE vector MATCH ?alice_embedding AND k = 5;
+-- Look up a node's index via the HNSW shadow table
+WITH a_vec AS (
+  SELECT vector FROM node_emb_nodes WHERE id = (
+    SELECT node_idx + 1 FROM g WHERE node = 'a'
+  )
+)
+SELECT ne.rowid, round(ne.distance, 4) AS d FROM node_emb ne, a_vec
+  WHERE ne.vector MATCH a_vec.vector AND ne.k = 5;
 ```
 
-### Retrieving Embeddings in Python
+This assumes a `graph_adjacency` virtual table `g` over the same edge table — its `node_idx` is the canonical node index. Without `graph_adjacency`, maintain your own mapping (e.g. a table `nodes(name TEXT PRIMARY KEY, idx INTEGER)`) populated in the same insertion order used for edges.
+
+```text
+rowid  d
+-----  ------
+1      0.0000
+4      0.0832       -- 'd' is structurally similar to 'a'
+...
+```
+
+!!! note "Rowid mapping caveat"
+    `node2vec_train` does not expose the node-to-rowid map directly. The safest approach is to create a `graph_adjacency` vtable over the same edge table and use its `node_idx` column — it uses the same canonical ordering. See [API Reference — `graph_adjacency`](api.md#graph_adjacency).
+
+## Exporting embeddings to Python
 
 ```python
-import struct
+import sqlite3, struct
 
-# Get all embeddings
-rows = db.execute("SELECT rowid, vector FROM node_emb_nodes").fetchall()
-for rowid, blob in rows:
-    dim = 64
-    vector = struct.unpack(f'{dim}f', blob)
-    print(f"Node {rowid}: first 3 dims = {vector[:3]}")
+db = sqlite3.connect("graph.db")
+db.enable_load_extension(True)
+db.load_extension("./muninn")
+
+dim = 64
+for rowid, blob in db.execute("SELECT rowid, vector FROM node_emb_nodes"):
+    vec = struct.unpack(f"{dim}f", blob)
+    print(f"Node idx {rowid - 1}: first 3 dims = {vec[:3]}")
 ```
 
-## Use Cases
+The shadow table `{name}_nodes` is stable and safe to read directly.
 
-### Similarity Search on Graph Structure
+## Use-case patterns
 
-Find nodes with similar structural positions without needing attribute data:
+### Structural similarity ranking
 
-```sql
--- Train on a citation graph
-SELECT node2vec_train('citations', 'citing', 'cited', 'paper_emb', 64,
-                      1.0, 1.0, 10, 80, 5, 5, 0.025, 5);
+Given a seed node from a vector search over content embeddings, boost recall by also retrieving structurally similar nodes from Node2Vec space. The two embeddings capture **different** similarity axes.
 
--- Find papers with similar citation patterns to paper #42
-SELECT rowid, distance FROM paper_emb
-WHERE vector MATCH (SELECT vector FROM paper_emb_nodes WHERE rowid = 42)
-  AND k = 10;
-```
+### Community supernodes
 
-### Cluster Detection with Community + Node2Vec
+After running Leiden, compute the mean Node2Vec vector per community as a supernode embedding. Search supernodes first, drill into the matching community. See [GraphRAG Cookbook](graphrag-cookbook.md) for the full pattern.
 
-Combine Leiden communities with Node2Vec embeddings:
+### Role detection
 
-```sql
--- Detect communities
-CREATE TEMP TABLE communities AS
-SELECT node, community_id FROM graph_leiden
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst';
+Low-`q` walks capture **roles** rather than community — a low-q Node2Vec index groups all hub-like nodes together regardless of which cluster they're in. Useful for finding peripheral-role nodes, bridge-role nodes, etc.
 
--- Train embeddings
-SELECT node2vec_train('edges', 'src', 'dst', 'node_emb', 64,
-                      0.25, 1.0, 10, 80, 5, 5, 0.025, 5);
+## See also
 
--- Now you can: compute mean embedding per community for hierarchical search
-```
-
-### Enriching Vector Search with Graph Context
-
-If you have both content embeddings (from a language model) and graph embeddings (from Node2Vec), you can combine them for hybrid retrieval:
-
-1. Search content embeddings for semantic relevance
-2. For top results, find their graph neighbors via BFS
-3. Re-rank using centrality scores
-
-See the [GraphRAG Cookbook](graphrag-cookbook.md) for a full worked example.
+- [API Reference — `node2vec_train`](api.md#node2vec_train) — exact parameter spec
+- [Centrality and Community](centrality-community.md) — complementary signal from Leiden / betweenness
+- [GraphRAG Cookbook](graphrag-cookbook.md) — full pipeline using Node2Vec for structural expansion
 
 ## References
 
 - Grover, A. & Leskovec, J. (2016). [node2vec: Scalable Feature Learning for Networks](https://arxiv.org/abs/1607.00653). *KDD '16*.
 - Perozzi, B., Al-Rfou, R. & Skiena, S. (2014). [DeepWalk: Online Learning of Social Representations](https://arxiv.org/abs/1403.6652). *KDD '14*.
 - Mikolov, T. et al. (2013). [Distributed Representations of Words and Phrases and their Compositionality](https://arxiv.org/abs/1310.4546). *NeurIPS 2013*.
-
-## Further Reading
-
-- [API Reference](api.md#node2vec) — Full parameter reference
-- [Centrality & Community Guide](centrality-community.md) — Combine with centrality analysis
-- [GraphRAG Cookbook](graphrag-cookbook.md) — End-to-end pipeline using Node2Vec

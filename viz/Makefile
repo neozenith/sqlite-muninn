@@ -1,23 +1,12 @@
-# Muninn Visualization Tool — Build & Dev targets
+# muninn-viz — Build & Dev targets
 # All commands run from viz/ directory (invoked via make -C viz)
 
 BACKEND_PORT ?= 8200
-FRONTEND_PORT ?= 5280
-AGENTIC_BACKEND_PORT ?= 8201
-AGENTIC_FRONTEND_PORT ?= 5281
+FRONTEND_PORT ?= 5282
 
-WASM_DIR_SRC = ../build/wasm
-WASM_JS_SRC  = $(WASM_DIR_SRC)/muninn_sqlite3.js
-WASM_BIN_SRC = $(WASM_DIR_SRC)/muninn_sqlite3.wasm
-
-WASM_DIR = frontend/public/wasm
-WASM_JS  = $(WASM_DIR)/muninn_sqlite3.js
-WASM_BIN = $(WASM_DIR)/muninn_sqlite3.wasm
-
-.PHONY: help install dev dev-agentic wasm test test-api test-frontend test-e2e e2e-videos test-e2e-full clean \
-       format format-python format-frontend \
-       lint lint-python lint-frontend \
-       typecheck typecheck-python typecheck-frontend
+.PHONY: help install install-python install-frontend dev test test-api test-frontend test-e2e \
+       fix fix-python fix-frontend lint lint-python lint-frontend \
+       typecheck typecheck-python typecheck-frontend ci clean
 
 help:                                              ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -31,92 +20,61 @@ install-python:                                    ## Install Python deps
 install-frontend:                                  ## Install frontend deps
 	npm --prefix frontend install
 
-wasm:                                                ## Build WASM artifacts → viz/frontend/public/wasm/
-	$(MAKE) -C .. build-wasm
-	@mkdir -p $(WASM_DIR)
-	cp $(WASM_JS_SRC) $(WASM_JS)
-	cp $(WASM_BIN_SRC) $(WASM_BIN)
-
-dev: install wasm                                       ## Start dev servers (human ports)
-	@echo "http://localhost:$(FRONTEND_PORT)/kg/query/"
+dev: install                                       ## Start dev servers (backend + frontend)
+	@echo "http://localhost:$(FRONTEND_PORT)/"
 	npx --prefix frontend concurrently --kill-others \
 		--names "backend,frontend" --prefix-colors "blue,green" \
 		"uv run --directory . python -m server --port $(BACKEND_PORT) --reload" \
 		"VITE_API_PORT=$(BACKEND_PORT) npm --prefix frontend run dev -- --port $(FRONTEND_PORT)"
 
-dev-agentic: install wasm                               ## Start dev servers (agentic ports)
-	npx --prefix frontend concurrently --kill-others \
-		--names "backend,frontend" --prefix-colors "blue,green" \
-		"uv run --directory . python -m server --port $(AGENTIC_BACKEND_PORT) --reload" \
-		"VITE_API_PORT=$(AGENTIC_BACKEND_PORT) npm --prefix frontend run dev -- --port $(AGENTIC_FRONTEND_PORT)"
+# ── Tests ─────────────────────────────────────────────────────────────
 
-test: test-api test-frontend                       ## Run all tests
+test: test-api test-frontend                       ## Run unit tests (API + frontend)
 
-ci: format lint typecheck test test-e2e-full                               ## Run all tests + E2E
-
-test-api: install-python                           ## Python API tests (>90% coverage)
+test-api: install-python                           ## Python API tests
 	uv run --directory . pytest -v
 
-test-frontend: install-frontend                    ## TypeScript tests (>90% coverage)
-	npm --prefix frontend run test -- --coverage
+test-frontend: install-frontend                    ## TypeScript unit tests (vitest)
+	npm --prefix frontend run test
 
 test-e2e: install                                  ## Playwright E2E tests
 	npm --prefix frontend run test:e2e
-	
+
+ci: lint typecheck test test-e2e                   ## Full CI: lint + typecheck + test + e2e
 
 # ── Code Quality ─────────────────────────────────────────────────────
 
-fix: fix-python fix-frontend           ## Format all code
+fix: fix-python fix-frontend                       ## Format all code
 
-fix-python:                                   ## Format Python code with ruff
+fix-python:                                        ## Format Python code with ruff
 	uv run --directory . ruff format .
 	uv run --directory . ruff check --fix-only .
 
-fix-frontend: install-frontend                ## Format TypeScript code with prettier
+fix-frontend: install-frontend                     ## Format TypeScript code with prettier
 	npm --prefix frontend run format
-	npm --prefix frontend audit fix
 
-lint: lint-python lint-frontend                  ## Lint all code
+lint: lint-python lint-frontend                    ## Lint all code
 
-lint-python: fix-python                                     ## Lint Python code with ruff
+lint-python:                                       ## Lint Python code with ruff
 	uv run --directory . ruff check .
 	uv run --directory . ruff format --check .
 
-lint-frontend: install-frontend fix-frontend                  ## Lint TypeScript code with eslint
+lint-frontend: install-frontend                    ## Lint TypeScript code with eslint + prettier
 	npm --prefix frontend run lint
 	npm --prefix frontend run format:check
 
-typecheck: typecheck-python typecheck-frontend   ## Type-check all code
+typecheck: typecheck-python typecheck-frontend     ## Type-check all code
 
-typecheck-python:                                ## Type-check Python with mypy
+typecheck-python:                                  ## Type-check Python with mypy
 	uv run --directory . mypy server/
 
-typecheck-frontend: install-frontend             ## Type-check TypeScript with tsc
+typecheck-frontend: install-frontend               ## Type-check TypeScript with tsc
 	npm --prefix frontend run typecheck
-
-# ── Video conversion ──────────────────────────────────────────────────
-
-E2E_DIR = frontend/test-results
-
-%.mp4: %.webm                                      ## Convert .webm to .mp4 (2x speed, 10fps)
-	ffmpeg -i $< -vf "setpts=0.5*PTS,fps=10" -s 1280x720 -c:v libx264 -crf 20 -an -y $@
-
-%.gif: %.webm                                      ## Convert .webm to .gif (2x speed, 10fps)
-	ffmpeg -i $< -vf "setpts=0.5*PTS,fps=10,scale=1280:-1:flags=lanczos,palettegen" -y $@.palette.png
-	ffmpeg -i $< -i $@.palette.png -filter_complex "setpts=0.5*PTS,fps=10,scale=1280:-1:flags=lanczos[x];[x][1:v]paletteuse" -y $@
-	rm -f $@.palette.png
-
-test-e2e-full: e2e-videos
-e2e-videos: test-e2e                                            ## Convert all E2E videos
-	$(MAKE) $(patsubst %.webm,%.mp4,$(wildcard $(E2E_DIR)/**/*.webm))
-	$(MAKE) $(patsubst %.webm,%.gif,$(wildcard $(E2E_DIR)/**/*.webm))
 
 # ── Clean ─────────────────────────────────────────────────────────────
 
 clean:                                             ## Remove build artifacts
 	rm -rf frontend/dist frontend/node_modules/.cache
-	rm -rf frontend/screenshots frontend/test-results
+	rm -rf frontend/test-results frontend/coverage
 	rm -rf .pytest_cache __pycache__ server/__pycache__ tests/__pycache__
 	rm -rf .coverage
-	rm -rf .venv
-	rm -f $(WASM_DIR)/muninn_sqlite3.*

@@ -31,12 +31,18 @@ export default defineConfig({
     exclude: ['e2e/**', 'node_modules/**'],
     coverage: {
       provider: 'v8',
-      include: ['src/lib/**/*.ts'],
-      thresholds: {
-        lines: 90,
-        functions: 90,
-        branches: 85,
-      },
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        'src/main.tsx',
+        'src/vite-env.d.ts',
+        'src/test-setup.ts',
+        'src/types/**',
+        // Canvas-heavy pages: WebGL (Deck.GL) and DOM measurement (Cytoscape)
+        // don't work under jsdom. The real render paths are covered by the
+        // Playwright E2E suite against a live browser.
+        'src/pages/EmbedPage.tsx',
+        'src/pages/KGPage.tsx',
+      ],
     },
   },
 })

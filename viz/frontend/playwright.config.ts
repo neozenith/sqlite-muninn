@@ -1,33 +1,64 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test'
 
+/**
+ * Playwright config for muninn-viz.
+ *
+ * - Backend (FastAPI) at :8200, frontend (Vite) at :5280
+ * - All artifacts (screenshots, .log, .network.json, failure traces) land in
+ *   e2e-screenshots/ so the whole post-mortem set lives in one folder.
+ * - globalSetup warms Vite so the first test in each worker doesn't pay the
+ *   lazy-compile tax.
+ */
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: false,
+  fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  workers: 1,
-  reporter: 'list',
+  workers: process.env.CI ? 1 : undefined,
+  reporter: [
+    ['list'],
+    ['html', { outputFolder: 'playwright-report', open: 'never' }],
+  ],
+  outputDir: 'e2e-screenshots',
+  timeout: 150000,
+  expect: { timeout: 10000 },
+  globalSetup: './e2e/global-setup.ts',
+
   use: {
-    baseURL: 'http://localhost:5281',
-    colorScheme: 'dark',
-    video: { mode: 'on', size: { width: 1280, height: 720 } },
+    baseURL: 'http://localhost:5282',
     viewport: { width: 1280, height: 720 },
-    screenshot: 'off', // We handle screenshots manually via checkpoint()
     trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
   },
+
   projects: [
     {
       name: 'chromium',
-      use: { browserName: 'chromium' },
+      use: {
+        ...devices['Desktop Chrome'],
+        // WebGL args for Deck.GL to initialize in headless Chromium.
+        // `use-gl=angle` + `angle=swiftshader` gives us a working software
+        // rasterizer; `ignore-gpu-blocklist` skips the sandbox-based refusal
+        // that headless chrome otherwise applies on Linux CI.
+        launchOptions: {
+          args: [
+            '--enable-webgl',
+            '--use-gl=angle',
+            '--use-angle=swiftshader',
+            '--ignore-gpu-blocklist',
+          ],
+        },
+      },
     },
   ],
+
   webServer: {
     command:
-      'VITE_API_PORT=8201 npx concurrently --kill-others ' +
-      '"uv run --directory .. python -m server --port 8201" ' +
-      '"npx vite --port 5281"',
-    port: 5281,
-    reuseExistingServer: true,
-    timeout: 30_000,
+      'concurrently --kill-others --names "be,fe" ' +
+      '"uv run --directory .. python -m server --port 8200" ' +
+      '"VITE_API_PORT=8200 npx vite --port 5282 --strictPort"',
+    url: 'http://localhost:5282',
+    reuseExistingServer: !process.env.CI,
+    timeout: 120000,
   },
-});
+})

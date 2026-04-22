@@ -16,6 +16,7 @@ Environment variables required:
 
 import json
 import logging
+from typing import Any
 
 import anthropic
 import google.generativeai as genai
@@ -53,7 +54,7 @@ def _user_prompt(text: str, labels: list[str]) -> str:
     return f"Extract entities of types: {labels_csv}\nText: {text}"
 
 
-def _parse_entities(raw: dict, text: str) -> list[EntityMention]:
+def _parse_entities(raw: dict[str, Any], text: str) -> list[EntityMention]:
     """Parse a raw JSON dict with an 'entities' key into EntityMention list.
 
     Finds start/end offsets by locating the entity text in the source string.

@@ -1,232 +1,279 @@
-# Centrality & Community Detection
+# Centrality and Community
 
-muninn provides four TVFs for analyzing graph structure: three centrality measures and Leiden community detection. All operate on **any** existing SQLite edge table — no special schema required.
+Five TVFs for structural graph analysis on any existing edge table: four centrality measures (`graph_degree`, `graph_node_betweenness`, `graph_edge_betweenness`, `graph_closeness`) and Leiden community detection (`graph_leiden`). All support weighted, directed, and temporally filtered inputs through the [shared constraint syntax](api.md#graph-tvf-constraint-syntax).
 
-## When to Use What
+## When to use what
 
-| Question | Use |
+| Question | TVF |
 |----------|-----|
-| Which nodes have the most connections? | `graph_degree` |
-| Which nodes bridge separate clusters? | `graph_betweenness` |
-| Which nodes can reach others most quickly? | `graph_closeness` |
-| What clusters exist in the graph? | `graph_leiden` |
+| Which nodes have the most connections? | [`graph_degree`](api.md#graph_degree) |
+| Which **nodes** bridge separate clusters? | [`graph_node_betweenness`](api.md#graph_node_betweenness) |
+| Which **edges** hold the graph together? | [`graph_edge_betweenness`](api.md#graph_edge_betweenness) |
+| Which nodes can reach everyone fastest? | [`graph_closeness`](api.md#graph_closeness) |
+| What clusters exist? | [`graph_leiden`](api.md#graph_leiden) |
+| What's the top node in each cluster? | [Leiden + betweenness, joined](#combining-centrality-with-communities) |
 
-## Setup
+## Setup — a two-cluster graph
 
-All examples use this edge table:
+Every example below uses this tiny graph — two triangles joined by a single bridge edge (`dave → eve`):
 
 ```sql
 .load ./muninn
 
 CREATE TABLE edges (src TEXT, dst TEXT, weight REAL DEFAULT 1.0);
 
--- Two clusters connected by a bridge
 INSERT INTO edges VALUES
-    ('alice', 'bob', 1.0), ('alice', 'carol', 1.0), ('bob', 'carol', 1.0),
-    ('bob', 'dave', 1.0), ('carol', 'dave', 1.0),
-    ('dave', 'eve', 1.0),  -- bridge edge
-    ('eve', 'frank', 1.0), ('eve', 'grace', 1.0), ('frank', 'grace', 1.0);
+  ('alice', 'bob',   1.0), ('alice', 'carol', 1.0), ('bob',   'carol', 1.0),
+  ('bob',   'dave',  1.0), ('carol', 'dave',  1.0),
+  ('dave',  'eve',   1.0),   -- bridge
+  ('eve',   'frank', 1.0), ('eve',   'grace', 1.0), ('frank', 'grace', 1.0);
 ```
 
 ---
 
-## Degree Centrality
+## Degree centrality
 
-Counts incoming, outgoing, and total edges per node. The simplest centrality measure — fast and useful as a first pass.
-
-```sql
-SELECT node, in_degree, out_degree, degree, centrality
-FROM graph_degree
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst';
-```
-
-**With normalization** (divides by N-1, producing values in [0, 1]):
+Cheapest centrality — in/out/total edge counts per node. Run this first as a sanity check before spending time on betweenness or closeness.
 
 ```sql
-SELECT node, centrality FROM graph_degree
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
-  AND normalized = 1
-ORDER BY centrality DESC;
+SELECT node, in_degree, out_degree, degree
+  FROM graph_degree
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both';
 ```
 
-**With weights** (sums edge weights instead of counting):
+```text
+node    in_degree  out_degree  degree
+------  ---------  ----------  ------
+alice   2.0        2.0         4.0
+bob     3.0        3.0         6.0
+carol   3.0        3.0         6.0
+dave    3.0        3.0         6.0
+eve     3.0        3.0         6.0
+frank   2.0        2.0         4.0
+grace   2.0        2.0         4.0
+```
+
+**Weighted**: pass `weight_col = 'weight'` and degrees become sums of edge weights.
+
+**Normalized** (values in `[0, 1]`, scaled by `N - 1`):
 
 ```sql
-SELECT node, degree FROM graph_degree
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
-  AND weight_col = 'weight';
+SELECT node, round(centrality, 3) AS c FROM graph_degree
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both' AND normalized = 1
+  ORDER BY c DESC;
 ```
-
-### Output Columns
-
-| Column | Description |
-|--------|-------------|
-| `node` | Node identifier |
-| `in_degree` | Count (or weighted sum) of incoming edges |
-| `out_degree` | Count (or weighted sum) of outgoing edges |
-| `degree` | Total degree (in + out) |
-| `centrality` | Raw degree, or normalized if `normalized = 1` |
 
 ---
 
-## Betweenness Centrality
+## Node betweenness
 
-Identifies **bridge nodes** that sit on many shortest paths between other nodes. Computed via [Brandes' algorithm](https://doi.org/10.1080/0022250X.2001.9990249) (Brandes, 2001) in O(VE) time.
-
-```sql
-SELECT node, centrality FROM graph_betweenness
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
-  AND direction = 'both'
-ORDER BY centrality DESC;
-```
-
-In the example graph, `dave` has the highest betweenness because it's the sole bridge between the two clusters.
-
-!!! tip "GraphRAG Application"
-    In knowledge graphs, high-betweenness nodes connect otherwise separate topic clusters. These are the most valuable context nodes for retrieval — they provide cross-domain links that improve answer quality.
-
-**Normalized** (values in [0, 1], scaled by `2/((N-1)(N-2))` for undirected):
+Brandes' O(VE) algorithm. Identifies **bridge nodes** — those sitting on many shortest paths. In the example graph, `dave` and `eve` are the two endpoints of the only bridge, so they dominate:
 
 ```sql
-SELECT node, centrality FROM graph_betweenness
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
-  AND direction = 'both' AND normalized = 1;
+SELECT node, round(centrality, 3) AS c FROM graph_node_betweenness
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both' AND normalized = 1
+  ORDER BY c DESC;
 ```
 
-### Direction Modes
+```text
+node    c
+------  -----
+dave    0.600
+eve     0.600
+bob     0.133
+carol   0.133
+frank   0.133
+grace   0.133
+alice   0.000
+```
 
-| `direction` | Behavior |
-|-------------|----------|
-| `'forward'` (default) | Follow edges src → dst only |
+### Performance on large graphs
+
+Exact betweenness is O(VE) — slow on anything over ~50k nodes. The `auto_approx_threshold` constraint switches to source-sampling when the graph exceeds the threshold:
+
+```sql
+-- Approximate on graphs larger than 10k nodes (samples ceil(√N) sources)
+SELECT node, centrality FROM graph_node_betweenness
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both' AND auto_approx_threshold = 10000
+  ORDER BY centrality DESC LIMIT 20;
+```
+
+Default threshold is 50,000. Set it lower on graphs you know are large.
+
+!!! tip "GraphRAG signal"
+    Bridge nodes are the most valuable retrieval context in knowledge graphs — they connect otherwise disjoint topic clusters. Betweenness is typically worth caching as a regular table and recomputing on a schedule rather than on every query.
+
+---
+
+## Edge betweenness
+
+Same algorithm, per-edge output. Returns one row per edge present in the graph.
+
+```sql
+SELECT src, dst, round(centrality, 3) AS c FROM graph_edge_betweenness
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both'
+  ORDER BY c DESC LIMIT 3;
+```
+
+```text
+src     dst     c
+------  ------  ------
+dave    eve     12.000
+bob     dave    5.000
+carol   dave    5.000
+```
+
+The `dave → eve` edge has by far the highest score — removing it would split the graph. This is the signal used by the **Girvan-Newman** hierarchical clustering algorithm and by muninn's [entity resolution](entity-resolution.md) cascade (for bridge-edge removal before Leiden).
+
+---
+
+## Closeness centrality
+
+Inverse of total shortest-path distance — high closeness means a node can reach every other node in few hops. muninn uses **Wasserman-Faust** normalization by default, which handles disconnected graphs gracefully: if a node can only reach R of the N−1 other nodes, its score is scaled by `(R / (N−1))²`.
+
+```sql
+SELECT node, round(centrality, 3) AS c FROM graph_closeness
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both'
+  ORDER BY c DESC;
+```
+
+`normalized = 1` is the default (unlike degree and betweenness). Pass `normalized = 0` for unscaled scores.
+
+---
+
+## Direction modes
+
+All centrality TVFs accept `direction`:
+
+| Value | Behavior |
+|-------|----------|
+| `'forward'` | Follow edges src → dst only |
 | `'reverse'` | Follow edges dst → src only |
-| `'both'` | Treat edges as undirected |
+| `'both'` (default for most) | Treat edges as undirected |
+
+For undirected graphs stored with one row per edge, use `'both'`. For DAGs or directed graphs where edge direction carries meaning, pick `'forward'` or `'reverse'` deliberately.
 
 ---
 
-## Closeness Centrality
+## Temporal filtering
 
-Measures how quickly a node can reach all other nodes. Nodes with high closeness are "close to everything" in the graph.
-
-```sql
-SELECT node, centrality FROM graph_closeness
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
-  AND direction = 'both'
-ORDER BY centrality DESC;
-```
-
-Uses **[Wasserman-Faust](https://doi.org/10.1017/CBO9780511815478) normalization** (Wasserman & Faust, 1994) for disconnected graphs: if a node can only reach R out of N-1 other nodes, the score is weighted by `(R/(N-1))^2` to avoid inflating scores for small components.
-
----
-
-## Temporal Filtering
-
-All centrality TVFs support temporal filtering — compute centrality only on edges within a time window:
+All centrality TVFs accept optional `timestamp_col`, `time_start`, `time_end`. When all three are supplied, the TVF loads only edges whose timestamp falls within the window — useful for time-sliced social or activity graphs.
 
 ```sql
--- Add timestamps to edges
 CREATE TABLE events (src TEXT, dst TEXT, ts TEXT);
-INSERT INTO events VALUES ('alice', 'bob', '2026-01-15T10:00:00');
-INSERT INTO events VALUES ('bob', 'carol', '2026-02-01T14:30:00');
+INSERT INTO events VALUES
+  ('alice', 'bob',   '2026-01-15T10:00:00'),
+  ('bob',   'carol', '2026-02-01T14:30:00'),
+  ('carol', 'dave',  '2026-03-03T09:15:00');
 
--- Centrality only for January events
-SELECT node, centrality FROM graph_betweenness
-WHERE edge_table = 'events' AND src_col = 'src' AND dst_col = 'dst'
-  AND timestamp_col = 'ts'
-  AND time_start = '2026-01-01T00:00:00'
-  AND time_end = '2026-01-31T23:59:59'
-  AND direction = 'both';
+-- Betweenness over January-only edges
+SELECT node, centrality FROM graph_node_betweenness
+  WHERE edge_table = 'events' AND src_col = 'src' AND dst_col = 'dst'
+    AND timestamp_col = 'ts'
+    AND time_start = '2026-01-01T00:00:00'
+    AND time_end   = '2026-01-31T23:59:59'
+    AND direction = 'both';
 ```
+
+Timestamps are compared as strings (ISO 8601 is the safe choice).
 
 ---
 
-## Leiden Community Detection
+## Leiden community detection
 
-The [Leiden algorithm](https://arxiv.org/abs/1810.08473) (Traag, Waltman & van Eck, 2019) partitions a graph into **well-connected communities**. It improves on Louvain by guaranteeing that communities are internally connected — no "phantom" communities that fall apart on inspection.
+The Leiden algorithm (Traag, Waltman & van Eck, 2019) partitions a graph into communities by maximizing modularity, with a guarantee that every community is internally well-connected — unlike Louvain, which can produce phantom communities that split apart on inspection.
 
 ```sql
-SELECT node, community_id, modularity FROM graph_leiden
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst';
+SELECT node, community_id, round(modularity, 3) AS mod
+  FROM graph_leiden
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both';
 ```
 
-### Resolution Parameter
+```text
+node    community_id  mod
+------  ------------  -----
+alice   0             0.432
+bob     0             0.432
+carol   0             0.432
+dave    0             0.432
+eve     1             0.432
+frank   1             0.432
+grace   1             0.432
+```
 
-The `resolution` parameter controls community granularity:
+### Resolution parameter
+
+`resolution` controls the granularity of the partition:
 
 | Resolution | Effect |
 |-----------|--------|
 | `< 1.0` | Fewer, larger communities |
-| `1.0` (default) | Standard modularity optimization |
+| `1.0` (default) | Standard modularity |
 | `> 1.0` | More, smaller communities |
 
 ```sql
--- Fine-grained communities
+-- Finer partitioning
 SELECT node, community_id FROM graph_leiden
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
-  AND resolution = 2.0;
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND resolution = 2.5;
 ```
 
-### Output Columns
+Sweep a few values (0.5, 1.0, 2.0) and pick the partition that matches your domain understanding — modularity alone is not sufficient for choosing a resolution.
 
-| Column | Description |
-|--------|-------------|
-| `node` | Node identifier |
-| `community_id` | Community assignment (0-based, contiguous) |
-| `modularity` | Global modularity score of the partition (same for all rows) |
-
-### Weighted Graphs
-
-Leiden respects edge weights — stronger connections are more likely to end up in the same community:
+### Weighted communities
 
 ```sql
-SELECT node, community_id, modularity FROM graph_leiden
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
-  AND weight_col = 'weight';
+SELECT node, community_id FROM graph_leiden
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND weight_col = 'weight';
 ```
 
-!!! tip "Microsoft GraphRAG Pattern"
-    Microsoft's GraphRAG uses Leiden for hierarchical retrieval: detect communities, compute a summary embedding for each community, then search community embeddings first before drilling into individual nodes. This provides efficient "global search" over large knowledge graphs.
+Strong edges are more likely to keep endpoints in the same community.
+
+!!! tip "Microsoft GraphRAG pattern"
+    Microsoft's [GraphRAG](https://microsoft.github.io/graphrag/) uses Leiden for hierarchical retrieval: detect communities, compute a summary embedding per community (mean of member vectors, or an LLM-generated label), search supernodes first, drill into the matching community. muninn supplies the building blocks — see [`muninn_label_groups`](api.md#muninn_label_groups) for the labeling step.
 
 ---
 
-## Combining Centrality + Community
+## Combining centrality with communities
 
-A common pattern: detect communities, then find the most important nodes within each community.
+A common pattern: detect communities, then pick the most important node inside each.
 
 ```sql
--- Step 1: Get communities
-CREATE TEMP TABLE node_communities AS
-SELECT node, community_id FROM graph_leiden
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst';
-
--- Step 2: Get betweenness centrality
-CREATE TEMP TABLE node_centrality AS
-SELECT node, centrality FROM graph_betweenness
-WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
-  AND direction = 'both';
-
--- Step 3: Top node per community
-SELECT nc.community_id, nc.node, ncent.centrality
-FROM node_communities nc
-JOIN node_centrality ncent ON nc.node = ncent.node
-WHERE ncent.centrality = (
-    SELECT MAX(ncent2.centrality)
-    FROM node_communities nc2
-    JOIN node_centrality ncent2 ON nc2.node = ncent2.node
-    WHERE nc2.community_id = nc.community_id
+WITH node_comm AS (
+  SELECT node, community_id FROM graph_leiden
+    WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+      AND direction = 'both'
+),
+node_cent AS (
+  SELECT node, centrality FROM graph_node_betweenness
+    WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+      AND direction = 'both' AND normalized = 1
 )
-ORDER BY nc.community_id;
+SELECT nc.community_id, nc.node, round(cent.centrality, 3) AS c
+  FROM node_comm nc
+  JOIN node_cent cent USING (node)
+  ORDER BY nc.community_id, c DESC;
 ```
 
-This identifies the **representative node** for each community — useful for summarization, sampling, or hierarchical search.
+`dave` and `eve` will emerge as representatives of their respective communities — both sit on the bridge, which gives them maximum betweenness among their neighbors. These "community representatives" are a good context unit for LLM summarization ([`muninn_summarize`](api.md#muninn_summarize)) or prompt-grounding.
+
+## Where to go next
+
+- [Entity Resolution](entity-resolution.md) — uses `graph_edge_betweenness` + `graph_leiden` as part of a deduplication cascade
+- [Node2Vec](node2vec.md) — learn structural embeddings that *encode* community and centrality signal
+- [GraphRAG Cookbook](graphrag-cookbook.md) — full retrieval pipeline built on these primitives
+- [API Reference — Centrality](api.md#centrality) — every constraint and default
 
 ## References
 
 - Brandes, U. (2001). [A Faster Algorithm for Betweenness Centrality](https://doi.org/10.1080/0022250X.2001.9990249). *Journal of Mathematical Sociology*, 25(2), 163–177.
-- Wasserman, S. & Faust, K. (1994). [Social Network Analysis: Methods and Applications](https://doi.org/10.1017/CBO9780511815478). *Cambridge University Press*.
+- Wasserman, S. & Faust, K. (1994). *Social Network Analysis: Methods and Applications*. Cambridge University Press.
 - Traag, V. A., Waltman, L. & van Eck, N. J. (2019). [From Louvain to Leiden: guaranteeing well-connected communities](https://arxiv.org/abs/1810.08473). *Scientific Reports*, 9(1), 5233.
-
-## Further Reading
-
-- [API Reference](api.md) — Full parameter details for all TVFs
-- [GraphRAG Cookbook](graphrag-cookbook.md) — End-to-end pipeline using centrality + community detection
-- [Node2Vec Guide](node2vec.md) — Learn structural embeddings from graph topology

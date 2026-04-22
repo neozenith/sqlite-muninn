@@ -11,6 +11,9 @@ frontend/dist/
 # Test artifacts
 frontend/screenshots/
 frontend/test-results/
+frontend/e2e-screenshots/
+frontend/playwright-report/
+frontend/coverage/
 
 # IDE
 .idea/
