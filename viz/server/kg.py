@@ -30,6 +30,7 @@ DEFAULT_RESOLUTION = 0.25
 DEFAULT_TOP_N = 50
 DEFAULT_SEED_METRIC = "edge_betweenness"
 DEFAULT_MAX_DEPTH = 0
+DEFAULT_MIN_DEGREE = 1
 
 SeedMetric = Literal["degree", "node_betweenness", "edge_betweenness"]
 VALID_SEED_METRICS: tuple[SeedMetric, ...] = ("degree", "node_betweenness", "edge_betweenness")
@@ -69,6 +70,7 @@ class KGPayload(BaseModel):
     resolution: float
     seed_metric: str
     max_depth: int
+    min_degree: int
     node_count: int
     edge_count: int
     community_count: int
@@ -387,28 +389,48 @@ def _graph_with_metrics(
     return result
 
 
+def _prune_by_min_degree(
+    g: nx.DiGraph, kept: set[str], min_degree: int
+) -> set[str]:
+    """Drop nodes whose induced-subgraph degree is below `min_degree`.
+
+    Degree is counted on the undirected view of the subgraph induced by
+    `kept`, so isolates (degree 0) and weakly-connected leaves (degree 1)
+    can be removed together. Iterating once is sufficient because removing
+    a low-degree node never *raises* another node's subgraph degree.
+    """
+    if min_degree <= 0:
+        return kept
+    sub = g.subgraph(kept).to_undirected()
+    return {n for n in kept if sub.degree(n) >= min_degree}
+
+
 def _select_and_expand(
     nodes: list[KGNode],
     edges: list[KGEdge],
     top_n: int,
     seed_metric: SeedMetric,
     max_depth: int,
+    min_degree: int,
     cache_key: tuple[str, str, float] | None = None,
 ) -> tuple[set[str], dict[str, float], dict[tuple[str, str], float]]:
-    """Pick seeds by the metric, BFS-expand, and return kept ids + metrics."""
+    """Pick seeds by the metric, BFS-expand, prune by min-degree, and return
+    kept ids + full-graph BC maps."""
     g, node_bc, edge_bc = _graph_with_metrics(cache_key, nodes, edges)
 
     if top_n <= 0 or top_n >= len(nodes):
-        return {n.id for n in nodes}, node_bc, edge_bc
+        kept: set[str] = {n.id for n in nodes}
+    else:
+        score = _seed_scores(nodes, g, node_bc, edge_bc, seed_metric)
+        ranked = sorted(
+            nodes,
+            key=lambda n: (score.get(n.id, 0.0), n.mention_count or 0),
+            reverse=True,
+        )
+        seeds = {n.id for n in ranked[:top_n]}
+        kept = _bfs_expand(g, seeds, max_depth)
 
-    score = _seed_scores(nodes, g, node_bc, edge_bc, seed_metric)
-    ranked = sorted(
-        nodes,
-        key=lambda n: (score.get(n.id, 0.0), n.mention_count or 0),
-        reverse=True,
-    )
-    seeds = {n.id for n in ranked[:top_n]}
-    kept = _bfs_expand(g, seeds, max_depth)
+    kept = _prune_by_min_degree(g, kept, min_degree)
     return kept, node_bc, edge_bc
 
 
@@ -437,14 +459,17 @@ def load_kg_graph(
     top_n: int = DEFAULT_TOP_N,
     seed_metric: SeedMetric = DEFAULT_SEED_METRIC,
     max_depth: int = DEFAULT_MAX_DEPTH,
+    min_degree: int = DEFAULT_MIN_DEGREE,
 ) -> KGPayload:
-    """Assemble a KG payload: pick seeds, BFS-expand, attach BC metrics.
+    """Assemble a KG payload: pick seeds, BFS-expand, prune by degree,
+    attach full-graph BC metrics.
 
     `top_n` selects the N highest-scoring seed nodes by `seed_metric`. BFS
     then expands from those seeds through the undirected view up to
     `max_depth` hops (0 = unlimited — yields every connected component
-    containing a seed). `total_node_count` / `total_edge_count` reflect the
-    full graph for the UI's "showing N of M" banner.
+    containing a seed). `min_degree` drops nodes with fewer than that many
+    edges in the expanded-subgraph's undirected view, which also shrinks
+    the community node_ids and member counts accordingly.
     """
     if table_id not in KG_TABLES:
         raise UnknownKGTable(f"unknown KG table: {table_id!r}. Expected one of {KG_TABLES}")
@@ -454,6 +479,8 @@ def load_kg_graph(
         )
     if max_depth < 0:
         raise ValueError(f"max_depth must be >= 0, got {max_depth}")
+    if min_degree < 0:
+        raise ValueError(f"min_degree must be >= 0, got {min_degree}")
 
     if not table_exists(conn, "leiden_communities"):
         raise KGDataMissing("leiden_communities table missing")
@@ -470,7 +497,7 @@ def load_kg_graph(
 
     cache_key = _cache_key_for_conn(conn, table_id, resolved)
     kept, node_bc, edge_bc = _select_and_expand(
-        nodes, edges, top_n, seed_metric, max_depth, cache_key=cache_key
+        nodes, edges, top_n, seed_metric, max_depth, min_degree, cache_key=cache_key
     )
 
     kept_nodes = [
@@ -512,6 +539,7 @@ def load_kg_graph(
         resolution=resolved,
         seed_metric=seed_metric,
         max_depth=max_depth,
+        min_degree=min_degree,
         node_count=len(kept_nodes),
         edge_count=len(kept_edges),
         community_count=len(kept_communities),

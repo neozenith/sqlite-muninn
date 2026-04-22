@@ -139,3 +139,46 @@ def test_max_depth_limits_expansion() -> None:
         unlimited = load_kg_graph(conn, "base", top_n=5, max_depth=0)
         depth_one = load_kg_graph(conn, "base", top_n=5, max_depth=1)
     assert depth_one.node_count <= unlimited.node_count
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_min_degree_prunes_isolates() -> None:
+    """Raising min_degree should never grow the kept set."""
+    with open_demo_db(DEMOS_DIR, SAMPLE_DB_ID) as conn:
+        none = load_kg_graph(conn, "base", top_n=50, max_depth=0, min_degree=0)
+        default = load_kg_graph(conn, "base", top_n=50, max_depth=0, min_degree=1)
+        deg2 = load_kg_graph(conn, "base", top_n=50, max_depth=0, min_degree=2)
+    assert default.node_count <= none.node_count
+    assert deg2.node_count <= default.node_count
+    assert default.min_degree == 1
+    assert deg2.min_degree == 2
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_min_degree_also_prunes_communities() -> None:
+    """Min-degree must shrink communities' node_ids — not just leaf nodes."""
+    with open_demo_db(DEMOS_DIR, SAMPLE_DB_ID) as conn:
+        loose = load_kg_graph(conn, "base", top_n=50, max_depth=0, min_degree=0)
+        tight = load_kg_graph(conn, "base", top_n=50, max_depth=0, min_degree=3)
+    # Communities with no surviving members must not appear.
+    for c in tight.communities:
+        assert c.member_count > 0
+        assert len(c.node_ids) == c.member_count
+    # Total membership shrinks with the stricter filter.
+    loose_members = sum(c.member_count for c in loose.communities)
+    tight_members = sum(c.member_count for c in tight.communities)
+    assert tight_members <= loose_members
+
+
+def test_min_degree_negative_raises() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE leiden_communities "
+        "(node TEXT, resolution REAL, community_id INTEGER, modularity REAL)"
+    )
+    conn.execute("INSERT INTO leiden_communities VALUES ('n', 0.25, 1, 0.0)")
+    conn.execute("CREATE TABLE nodes (node_id INTEGER, name TEXT, entity_type TEXT, mention_count INTEGER)")
+    conn.execute("CREATE TABLE edges (src TEXT, dst TEXT, rel_type TEXT, weight REAL)")
+    with pytest.raises(ValueError, match="min_degree"):
+        load_kg_graph(conn, "base", min_degree=-1)
+    conn.close()

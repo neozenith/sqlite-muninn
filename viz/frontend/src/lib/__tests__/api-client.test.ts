@@ -204,6 +204,7 @@ describe('api-client', () => {
       resolution: 0.25,
       seed_metric: 'edge_betweenness',
       max_depth: 0,
+      min_degree: 1,
       node_count: 0,
       edge_count: 0,
       community_count: 0,
@@ -265,6 +266,14 @@ describe('api-client', () => {
       })
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/databases/3300_MiniLM/kg/base?seed_metric=degree&max_depth=2',
+      )
+    })
+
+    test('appends min_degree when provided', async () => {
+      fetchMock.mockResolvedValueOnce(makeResponse(emptyKG({ min_degree: 3 })))
+      await fetchKG('3300_MiniLM', 'base', { minDegree: 3 })
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/databases/3300_MiniLM/kg/base?min_degree=3',
       )
     })
 

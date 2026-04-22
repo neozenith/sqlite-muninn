@@ -355,7 +355,12 @@ const runLayout = (
   }
 }
 
-const applyNodeSizes = (cy: cytoscape.Core, mode: SizeMode, scale: number): void => {
+const applyNodeSizes = (
+  cy: cytoscape.Core,
+  mode: SizeMode,
+  scale: number,
+  hiddenIds: Set<string>,
+): void => {
   const base = 14 * scale
   const leaves = cy.nodes().filter((n: cytoscape.NodeSingular) => !n.data('isCommunity'))
   if (mode === 'uniform') {
@@ -366,9 +371,12 @@ const applyNodeSizes = (cy: cytoscape.Core, mode: SizeMode, scale: number): void
     if (mode === 'degree') return n.degree(false)
     return Number(n.data('nodeBetweenness') ?? 0)
   }
+  // Normalize over the visible subset so hidden outliers don't compress the
+  // visible range. Hidden nodes are still sized (so re-showing them feels
+  // consistent) but using the visible-set min/max.
   const values: number[] = []
   leaves.forEach((n: cytoscape.NodeSingular) => {
-    values.push(metric(n))
+    if (!hiddenIds.has(n.id())) values.push(metric(n))
   })
   const max = values.length > 0 ? Math.max(...values) : 1
   const min = values.length > 0 ? Math.min(...values) : 0
@@ -411,6 +419,7 @@ const applyEdgeThickness = (
   cy: cytoscape.Core,
   mode: EdgeThicknessMode,
   scale: number,
+  hiddenEdgeIds: Set<string>,
 ): void => {
   const base = 1 * scale
   const edges = cy.edges()
@@ -424,7 +433,7 @@ const applyEdgeThickness = (
       : Number(e.data('edgeBetweenness') ?? 0)
   const values: number[] = []
   edges.forEach((e: cytoscape.EdgeSingular) => {
-    values.push(metric(e))
+    if (!hiddenEdgeIds.has(e.id())) values.push(metric(e))
   })
   const max = values.length > 0 ? Math.max(...values) : 1
   const min = values.length > 0 ? Math.min(...values) : 0
@@ -438,30 +447,34 @@ const applyEdgeThickness = (
 }
 
 const applyCommunityOpacity = (cy: cytoscape.Core, opacity: number): void => {
-  const parents = cy.nodes().filter((n) => n.data('isCommunity'))
-  parents.style('opacity', opacity)
+  // Use the per-component opacity properties rather than the element-level
+  // `opacity`, because cytoscape's compound-node `opacity` cascades to
+  // children. We want the community box fade independent of its members.
+  const parents = cy.nodes().filter((n: cytoscape.NodeSingular) => n.data('isCommunity'))
+  parents.style({
+    'background-opacity': opacity,
+    'border-opacity': opacity,
+    'text-opacity': opacity,
+  })
 }
 
 interface VisibilityOptions {
-  minDegree: number
   hiddenEntityTypes: Set<string>
   hiddenRelTypes: Set<string>
 }
 
-const applyVisibility = (cy: cytoscape.Core, opts: VisibilityOptions): void => {
-  const leaves = cy.nodes().filter((n: cytoscape.NodeSingular) => !n.data('isCommunity'))
-  // Pre-compute total (not filtered) degree — min-degree is a structural
-  // filter against the loaded subgraph, not a recursive one.
-  const degreeMap = new Map<string, number>()
+interface VisibilityResult {
+  hiddenNodeIds: Set<string>
+  hiddenEdgeIds: Set<string>
+}
+
+const applyVisibility = (cy: cytoscape.Core, opts: VisibilityOptions): VisibilityResult => {
   const hiddenNodeIds = new Set<string>()
-  leaves.forEach((n: cytoscape.NodeSingular) => {
-    degreeMap.set(n.id(), n.degree(false))
-  })
+  const hiddenEdgeIds = new Set<string>()
+  const leaves = cy.nodes().filter((n: cytoscape.NodeSingular) => !n.data('isCommunity'))
   leaves.forEach((n: cytoscape.NodeSingular) => {
     const entityType = String(n.data('entityType') ?? 'unknown')
-    const hiddenByLegend = opts.hiddenEntityTypes.has(entityType)
-    const belowMinDegree = (degreeMap.get(n.id()) ?? 0) < opts.minDegree
-    const hide = hiddenByLegend || belowMinDegree
+    const hide = opts.hiddenEntityTypes.has(entityType)
     if (hide) hiddenNodeIds.add(n.id())
     n.style('display', hide ? 'none' : 'element')
   })
@@ -471,8 +484,10 @@ const applyVisibility = (cy: cytoscape.Core, opts: VisibilityOptions): void => {
     const srcHidden = hiddenNodeIds.has(e.source().id())
     const tgtHidden = hiddenNodeIds.has(e.target().id())
     const hide = hiddenByLegend || srcHidden || tgtHidden
+    if (hide) hiddenEdgeIds.add(e.id())
     e.style('display', hide ? 'none' : 'element')
   })
+  return { hiddenNodeIds, hiddenEdgeIds }
 }
 
 const groupCounts = (values: Array<string | null | undefined>): Array<[string, number]> => {
@@ -508,9 +523,10 @@ export function KGPage() {
   const [pendingMaxDepth, setPendingMaxDepth] = useState<number>(DEFAULT_MAX_DEPTH)
   const [seedMetric, setSeedMetric] = useState<SeedMetric>(DEFAULT_SEED_METRIC)
   const [pendingSeedMetric, setPendingSeedMetric] = useState<SeedMetric>(DEFAULT_SEED_METRIC)
+  const [minDegree, setMinDegree] = useState<number>(DEFAULT_MIN_DEGREE)
+  const [pendingMinDegree, setPendingMinDegree] = useState<number>(DEFAULT_MIN_DEGREE)
 
   // Client-side filters.
-  const [minDegree, setMinDegree] = useState<number>(DEFAULT_MIN_DEGREE)
   const [hiddenEntityTypes, setHiddenEntityTypes] = useState<Set<string>>(new Set())
   const [hiddenRelTypes, setHiddenRelTypes] = useState<Set<string>>(new Set())
 
@@ -548,7 +564,7 @@ export function KGPage() {
     setSelection(EMPTY_SELECTION)
     setHiddenEntityTypes(new Set())
     setHiddenRelTypes(new Set())
-    fetchKG(databaseId, tableId, { topN, seedMetric, maxDepth })
+    fetchKG(databaseId, tableId, { topN, seedMetric, maxDepth, minDegree })
       .then((payload) => setState({ status: 'ready', payload }))
       .catch((err: unknown) => {
         const message =
@@ -559,7 +575,7 @@ export function KGPage() {
               : 'unknown error'
         setState({ status: 'error', message })
       })
-  }, [databaseId, tableId, topN, seedMetric, maxDepth])
+  }, [databaseId, tableId, topN, seedMetric, maxDepth, minDegree])
 
   const elements = useMemo(
     () => (state.status === 'ready' ? buildElements(state.payload) : []),
@@ -642,47 +658,37 @@ export function KGPage() {
     }
   }, [elements])
 
+  // Unified re-styling pass. Runs whenever *any* visual spec changes so
+  // filters, colors, sizes, and thickness stay coherent. Order matters:
+  // visibility first (computes hidden id sets), then the
+  // normalization-aware size/thickness passes that respect the visible
+  // subset, then colors + opacities which don't depend on visibility.
   useEffect(() => {
     const cy = cyRef.current
     if (!cy) return
-    applyNodeSizes(cy, sizeMode, nodeScale)
-  }, [sizeMode, nodeScale, elements])
-
-  useEffect(() => {
-    const cy = cyRef.current
-    if (!cy) return
+    const { hiddenNodeIds, hiddenEdgeIds } = applyVisibility(cy, {
+      hiddenEntityTypes,
+      hiddenRelTypes,
+    })
+    applyNodeSizes(cy, sizeMode, nodeScale, hiddenNodeIds)
+    applyEdgeThickness(cy, edgeThicknessMode, edgeThicknessScale, hiddenEdgeIds)
     applyNodeColors(cy, nodeColorMode)
-  }, [nodeColorMode, elements])
-
-  useEffect(() => {
-    const cy = cyRef.current
-    if (!cy) return
     applyEdgeColors(cy, edgeColorMode)
-  }, [edgeColorMode, elements])
-
-  useEffect(() => {
-    const cy = cyRef.current
-    if (!cy) return
-    applyEdgeThickness(cy, edgeThicknessMode, edgeThicknessScale)
-  }, [edgeThicknessMode, edgeThicknessScale, elements])
-
-  useEffect(() => {
-    const cy = cyRef.current
-    if (!cy) return
-    cy.edges().style('opacity', edgeOpacity)
-  }, [edgeOpacity, elements])
-
-  useEffect(() => {
-    const cy = cyRef.current
-    if (!cy) return
     applyCommunityOpacity(cy, communityOpacity)
-  }, [communityOpacity, elements])
-
-  useEffect(() => {
-    const cy = cyRef.current
-    if (!cy) return
-    applyVisibility(cy, { minDegree, hiddenEntityTypes, hiddenRelTypes })
-  }, [minDegree, hiddenEntityTypes, hiddenRelTypes, elements])
+    cy.edges().style('opacity', edgeOpacity)
+  }, [
+    elements,
+    hiddenEntityTypes,
+    hiddenRelTypes,
+    sizeMode,
+    nodeScale,
+    edgeThicknessMode,
+    edgeThicknessScale,
+    nodeColorMode,
+    edgeColorMode,
+    communityOpacity,
+    edgeOpacity,
+  ])
 
   const applyAndRunLayout = useCallback(() => {
     const cy = cyRef.current
@@ -716,15 +722,18 @@ export function KGPage() {
   const handleReload = () => {
     if (Number.isNaN(pendingTopN) || pendingTopN < 0) return
     if (Number.isNaN(pendingMaxDepth) || pendingMaxDepth < 0) return
+    if (Number.isNaN(pendingMinDegree) || pendingMinDegree < 0) return
     setTopN(pendingTopN)
     setMaxDepth(pendingMaxDepth)
     setSeedMetric(pendingSeedMetric)
+    setMinDegree(pendingMinDegree)
   }
 
   const reloadDirty =
     pendingTopN !== topN ||
     pendingMaxDepth !== maxDepth ||
-    pendingSeedMetric !== seedMetric
+    pendingSeedMetric !== seedMetric ||
+    pendingMinDegree !== minDegree
 
   const legendAllKeys = (group: 'entity' | 'rel'): string[] =>
     (group === 'entity' ? entityTypeLegend : relTypeLegend).map(([k]) => k)
@@ -828,7 +837,8 @@ export function KGPage() {
             {' · '}
             {state.payload.edge_count.toLocaleString()} edges ·{' '}
             {state.payload.community_count.toLocaleString()} communities · seeds by{' '}
-            <span className="font-mono">{state.payload.seed_metric}</span>, depth={state.payload.max_depth}
+            <span className="font-mono">{state.payload.seed_metric}</span>, depth={state.payload.max_depth},
+            min-deg={state.payload.min_degree}
           </p>
         )}
       </header>
@@ -955,8 +965,8 @@ export function KGPage() {
                   type="number"
                   min={0}
                   step={1}
-                  value={minDegree}
-                  onChange={(e) => setMinDegree(Number(e.target.value))}
+                  value={pendingMinDegree}
+                  onChange={(e) => setPendingMinDegree(Number(e.target.value))}
                   className="rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] px-2 py-1 text-xs"
                 />
               </label>

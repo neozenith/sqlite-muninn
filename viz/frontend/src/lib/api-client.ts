@@ -78,6 +78,8 @@ export interface KGPayload {
   resolution: number
   seed_metric: SeedMetric
   max_depth: number
+  /** Server-side degree threshold applied after BFS expansion. */
+  min_degree: number
   node_count: number
   edge_count: number
   community_count: number
@@ -170,6 +172,7 @@ export async function fetchKG(
     topN?: number
     seedMetric?: SeedMetric
     maxDepth?: number
+    minDegree?: number
   } = {},
 ): Promise<KGPayload> {
   const params = new URLSearchParams()
@@ -177,6 +180,7 @@ export async function fetchKG(
   if (options.topN !== undefined) params.set('top_n', String(options.topN))
   if (options.seedMetric !== undefined) params.set('seed_metric', options.seedMetric)
   if (options.maxDepth !== undefined) params.set('max_depth', String(options.maxDepth))
+  if (options.minDegree !== undefined) params.set('min_degree', String(options.minDegree))
   const query = params.toString()
   return getJson<KGPayload>(
     `/databases/${encodeURIComponent(databaseId)}/kg/${encodeURIComponent(tableId)}${

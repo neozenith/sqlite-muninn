@@ -242,6 +242,23 @@ def test_kg_endpoint_negative_max_depth_400(real_client: TestClient) -> None:
     assert "max_depth" in response.json()["detail"]
 
 
+def test_kg_endpoint_negative_min_degree_400(real_client: TestClient) -> None:
+    response = real_client.get(
+        f"/api/databases/{SAMPLE_DB_ID}/kg/base?min_degree=-2"
+    )
+    assert response.status_code == 400
+    assert "min_degree" in response.json()["detail"]
+
+
+@pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
+def test_kg_endpoint_echoes_min_degree(real_client: TestClient) -> None:
+    response = real_client.get(
+        f"/api/databases/{SAMPLE_DB_ID}/kg/base?min_degree=3"
+    )
+    assert response.status_code == 200
+    assert response.json()["min_degree"] == 3
+
+
 @pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
 def test_kg_endpoint_er(real_client: TestClient) -> None:
     response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/er")

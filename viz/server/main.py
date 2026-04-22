@@ -153,6 +153,7 @@ def get_kg(
     top_n: int = 50,
     seed_metric: str = "edge_betweenness",
     max_depth: int = 0,
+    min_degree: int = 1,
     demos_dir: Path = Depends(get_demos_dir),
 ) -> KGPayload:
     """Return the KG payload (nodes + edges + communities).
@@ -180,6 +181,8 @@ def get_kg(
         )
     if max_depth < 0:
         raise HTTPException(status_code=400, detail=f"max_depth must be >= 0, got {max_depth}")
+    if min_degree < 0:
+        raise HTTPException(status_code=400, detail=f"min_degree must be >= 0, got {min_degree}")
     try:
         with open_demo_db(demos_dir, database_id) as conn:
             return load_kg_graph(
@@ -189,6 +192,7 @@ def get_kg(
                 top_n=top_n,
                 seed_metric=seed_metric,  # type: ignore[arg-type]
                 max_depth=max_depth,
+                min_degree=min_degree,
             )
     except DatabaseConnectionError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
