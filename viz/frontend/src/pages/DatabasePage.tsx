@@ -1,12 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import {
-  ApiError,
-  type DatabaseInfo,
-  type TablesResponse,
-  fetchDatabase,
-  fetchTables,
-} from '../lib/api-client'
+import { ApiError, type DatabaseInfo, type TablesResponse, fetchDatabase, fetchTables } from '../lib/api-client'
 
 interface Loaded {
   database: DatabaseInfo
@@ -36,11 +30,13 @@ export function DatabasePage() {
 
   useEffect(() => {
     if (!databaseId) return
+    // Reset to the loading state so stale data doesn't flash while the new
+    // fetch is in flight. The rule flags this as a "cascading render" but
+    // it's exactly what the pattern requires on a route-param change.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState({ status: 'loading' })
     Promise.all([fetchDatabase(databaseId), fetchTables(databaseId)])
-      .then(([database, tables]) =>
-        setState({ status: 'ready', data: { database, tables } }),
-      )
+      .then(([database, tables]) => setState({ status: 'ready', data: { database, tables } }))
       .catch((err: unknown) => {
         const isNotFound = err instanceof ApiError && err.status === 404
         const message =
@@ -60,18 +56,12 @@ export function DatabasePage() {
       data-database-id={databaseId ?? ''}
     >
       <nav className="mb-4">
-        <Link
-          to="/"
-          className="text-sm text-[var(--color-accent)] hover:underline"
-          data-testid="back-to-home"
-        >
+        <Link to="/" className="text-sm text-[var(--color-accent)] hover:underline" data-testid="back-to-home">
           ← Back to all databases
         </Link>
       </nav>
 
-      {state.status === 'loading' && (
-        <p data-testid="database-loading">Loading database…</p>
-      )}
+      {state.status === 'loading' && <p data-testid="database-loading">Loading database…</p>}
 
       {state.status === 'error' && state.notFound && (
         <div
@@ -96,9 +86,7 @@ export function DatabasePage() {
       {state.status === 'ready' && (
         <article data-testid="database-detail">
           <h1 className="text-4xl font-bold">{state.data.database.label}</h1>
-          <p className="mt-1 font-mono text-sm text-[var(--color-muted-foreground)]">
-            {state.data.database.id}
-          </p>
+          <p className="mt-1 font-mono text-sm text-[var(--color-muted-foreground)]">{state.data.database.id}</p>
 
           <dl className="mt-6 grid max-w-xl grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
             {state.data.database.book_id !== null && state.data.database.book_id !== undefined && (
@@ -148,9 +136,7 @@ export function DatabasePage() {
                     className="block rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] p-3 transition hover:border-[var(--color-accent)] hover:shadow"
                   >
                     <span className="font-mono text-sm">{tid}</span>
-                    <span className="block text-xs text-[var(--color-muted-foreground)]">
-                      {KG_LABELS[tid] ?? tid}
-                    </span>
+                    <span className="block text-xs text-[var(--color-muted-foreground)]">{KG_LABELS[tid] ?? tid}</span>
                   </Link>
                 </li>
               ))}

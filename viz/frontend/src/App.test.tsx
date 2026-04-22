@@ -84,9 +84,7 @@ describe('App', () => {
   })
 
   test('unknown route redirects to home', async () => {
-    fetchMock.mockImplementation(() =>
-      Promise.resolve(jsonResponse({ databases: [] })),
-    )
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse({ databases: [] })))
     renderApp('/totally/bogus/path')
     await waitFor(() => {
       expect(screen.getByTestId('home-page')).toBeInTheDocument()

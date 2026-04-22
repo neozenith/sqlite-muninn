@@ -1,19 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-
-export type ThemeMode = 'light' | 'dark' | 'system'
-type ResolvedTheme = 'light' | 'dark'
-
-interface ThemeContextValue {
-  mode: ThemeMode
-  resolved: ResolvedTheme
-  setMode: (mode: ThemeMode) => void
-  toggle: () => void
-}
+import { type ResolvedTheme, ThemeContext, type ThemeContextValue, type ThemeMode } from './theme-context'
 
 const STORAGE_KEY = 'muninn-viz:theme'
-
-const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 const safeGet = (key: string): string | null => {
   try {
@@ -45,28 +34,31 @@ const prefersDark = (): boolean => {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
-const resolve = (mode: ThemeMode): ResolvedTheme =>
-  mode === 'system' ? (prefersDark() ? 'dark' : 'light') : mode
-
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(() => readStoredMode())
-  const [resolved, setResolved] = useState<ResolvedTheme>(() => resolve(readStoredMode()))
+  const [osPrefersDark, setOsPrefersDark] = useState<boolean>(() => prefersDark())
 
   useEffect(() => {
-    const next = resolve(mode)
-    setResolved(next)
-    const root = document.documentElement
-    root.classList.toggle('dark', next === 'dark')
-    root.dataset.theme = next
-  }, [mode])
-
-  useEffect(() => {
-    if (mode !== 'system' || typeof window === 'undefined' || !window.matchMedia) return
+    if (typeof window === 'undefined' || !window.matchMedia) return
     const mql = window.matchMedia('(prefers-color-scheme: dark)')
-    const handler = () => setResolved(mql.matches ? 'dark' : 'light')
+    const handler = () => setOsPrefersDark(mql.matches)
     mql.addEventListener('change', handler)
     return () => mql.removeEventListener('change', handler)
-  }, [mode])
+  }, [])
+
+  // `resolved` is a pure function of mode + OS preference — derive it with
+  // useMemo rather than duplicating it into state. The DOM side-effects
+  // (html.dark class, data-theme attribute) live in a separate effect.
+  const resolved = useMemo<ResolvedTheme>(
+    () => (mode === 'system' ? (osPrefersDark ? 'dark' : 'light') : mode),
+    [mode, osPrefersDark],
+  )
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.classList.toggle('dark', resolved === 'dark')
+    root.dataset.theme = resolved
+  }, [resolved])
 
   const setMode = useCallback((next: ThemeMode) => {
     setModeState(next)
@@ -75,7 +67,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const toggle = useCallback(() => {
     setModeState((prev) => {
-      const next: ThemeMode = resolve(prev) === 'dark' ? 'light' : 'dark'
+      const currentResolved: ResolvedTheme = prev === 'system' ? (prefersDark() ? 'dark' : 'light') : prev
+      const next: ThemeMode = currentResolved === 'dark' ? 'light' : 'dark'
       safeSet(STORAGE_KEY, next)
       return next
     })
@@ -87,10 +80,4 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   )
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
-}
-
-export const useTheme = (): ThemeContextValue => {
-  const ctx = useContext(ThemeContext)
-  if (!ctx) throw new Error('useTheme must be used inside <ThemeProvider>')
-  return ctx
 }

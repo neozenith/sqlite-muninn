@@ -59,9 +59,7 @@ export function RightPanel({ storageKey, title, children, testId }: RightPanelPr
       }`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border-subtle)] px-3 py-2">
-        {!collapsed && (
-          <h2 className="truncate text-sm font-semibold tracking-tight">{title}</h2>
-        )}
+        {!collapsed && <h2 className="truncate text-sm font-semibold tracking-tight">{title}</h2>}
         <button
           type="button"
           onClick={toggle}
@@ -72,9 +70,7 @@ export function RightPanel({ storageKey, title, children, testId }: RightPanelPr
           {collapsed ? '«' : '»'}
         </button>
       </div>
-      {!collapsed && (
-        <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-3 text-sm">{children}</div>
-      )}
+      {!collapsed && <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-3 text-sm">{children}</div>}
     </aside>
   )
 }
@@ -95,9 +91,7 @@ export function PanelSection({ title, meta, children }: PanelSectionProps) {
     <section>
       <header className="mb-1 flex items-baseline justify-between gap-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted-foreground)]">
         <span>{title}</span>
-        {meta !== undefined && meta !== null && (
-          <span className="normal-case tracking-normal">{meta}</span>
-        )}
+        {meta !== undefined && meta !== null && <span className="normal-case tracking-normal">{meta}</span>}
       </header>
       <div className="flex flex-col gap-2">{children}</div>
     </section>

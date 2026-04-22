@@ -55,9 +55,7 @@ describe('KGPage', () => {
   test('shows error state on 422', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(() =>
-        Promise.resolve(jsonResponse({ detail: 'data missing' }, 422)),
-      ),
+      vi.fn(() => Promise.resolve(jsonResponse({ detail: 'data missing' }, 422))),
     )
     renderAt('/3300_MiniLM/kg/base/')
     await waitFor(() => {

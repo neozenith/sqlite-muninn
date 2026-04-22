@@ -32,9 +32,7 @@ def main() -> None:
         print(f"  {row}")
 
     print("\nEDGES.src UPPER sample:")
-    for row in conn.execute(
-        "SELECT src, dst FROM edges WHERE src = UPPER(src) AND src != LOWER(src) LIMIT 5"
-    ):
+    for row in conn.execute("SELECT src, dst FROM edges WHERE src = UPPER(src) AND src != LOWER(src) LIMIT 5"):
         print(f"  {row}")
 
     conn.close()

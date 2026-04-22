@@ -17,15 +17,12 @@ import {
   type SeedMetric,
   fetchKG,
 } from '../lib/api-client'
-import { useTheme } from '../lib/ThemeProvider'
+import { useTheme } from '../lib/theme-context'
 
 cytoscape.use(fcose as unknown as cytoscape.Ext)
 cytoscape.use(elk as unknown as cytoscape.Ext)
 
-type LoadState =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; payload: KGPayload }
+type LoadState = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; payload: KGPayload }
 
 type LayoutEngine = 'grid' | 'fcose' | 'elk'
 type SizeMode = 'uniform' | 'degree' | 'betweenness'
@@ -139,8 +136,7 @@ const ELK_PRESETS: Record<string, object> = {
 
 const DEFAULT_ELK_PRESET = 'layered (top→down)'
 
-const defaultElkConfig = (): string =>
-  JSON.stringify(ELK_PRESETS[DEFAULT_ELK_PRESET], null, 2)
+const defaultElkConfig = (): string => JSON.stringify(ELK_PRESETS[DEFAULT_ELK_PRESET], null, 2)
 
 const DEFAULT_CONFIGS: Record<Exclude<LayoutEngine, 'grid'>, string> = {
   fcose: JSON.stringify(DEFAULT_FCOSE_CONFIG, null, 2),
@@ -337,11 +333,7 @@ interface LayoutRunResult {
   error?: string
 }
 
-const runLayout = (
-  cy: cytoscape.Core,
-  engine: LayoutEngine,
-  configJson: string,
-): LayoutRunResult => {
+const runLayout = (cy: cytoscape.Core, engine: LayoutEngine, configJson: string): LayoutRunResult => {
   try {
     if (engine === 'grid') {
       cy.layout({ name: 'grid', animate: false } as cytoscape.LayoutOptions).run()
@@ -355,12 +347,7 @@ const runLayout = (
   }
 }
 
-const applyNodeSizes = (
-  cy: cytoscape.Core,
-  mode: SizeMode,
-  scale: number,
-  hiddenIds: Set<string>,
-): void => {
+const applyNodeSizes = (cy: cytoscape.Core, mode: SizeMode, scale: number, hiddenIds: Set<string>): void => {
   const base = 14 * scale
   const leaves = cy.nodes().filter((n: cytoscape.NodeSingular) => !n.data('isCommunity'))
   if (mode === 'uniform') {
@@ -428,9 +415,7 @@ const applyEdgeThickness = (
     return
   }
   const metric = (e: cytoscape.EdgeSingular): number =>
-    mode === 'weight'
-      ? Number(e.data('weight') ?? 1)
-      : Number(e.data('edgeBetweenness') ?? 0)
+    mode === 'weight' ? Number(e.data('weight') ?? 1) : Number(e.data('edgeBetweenness') ?? 0)
   const values: number[] = []
   edges.forEach((e: cytoscape.EdgeSingular) => {
     if (!hiddenEdgeIds.has(e.id())) values.push(metric(e))
@@ -532,9 +517,7 @@ export function KGPage() {
 
   // Layout-axis.
   const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>('fcose')
-  const [layoutConfigs, setLayoutConfigs] = useState<Record<'fcose' | 'elk', string>>(
-    () => ({ ...DEFAULT_CONFIGS }),
-  )
+  const [layoutConfigs, setLayoutConfigs] = useState<Record<'fcose' | 'elk', string>>(() => ({ ...DEFAULT_CONFIGS }))
   const [elkPreset, setElkPreset] = useState<string>(DEFAULT_ELK_PRESET)
   const [layoutError, setLayoutError] = useState<string | null>(null)
 
@@ -544,10 +527,8 @@ export function KGPage() {
   const [edgeColorMode, setEdgeColorMode] = useState<EdgeColorMode>('rel_type')
   const [nodeScale, setNodeScale] = useState<number>(1)
   const [edgeOpacity, setEdgeOpacity] = useState<number>(0.6)
-  const [communityOpacity, setCommunityOpacity] =
-    useState<number>(DEFAULT_COMMUNITY_OPACITY)
-  const [edgeThicknessMode, setEdgeThicknessMode] =
-    useState<EdgeThicknessMode>('uniform')
+  const [communityOpacity, setCommunityOpacity] = useState<number>(DEFAULT_COMMUNITY_OPACITY)
+  const [edgeThicknessMode, setEdgeThicknessMode] = useState<EdgeThicknessMode>('uniform')
   const [edgeThicknessScale, setEdgeThicknessScale] = useState<number>(1)
 
   const [selection, setSelection] = useState<KGSelection>(EMPTY_SELECTION)
@@ -559,6 +540,8 @@ export function KGPage() {
 
   useEffect(() => {
     if (!databaseId || !tableId) return
+    // Reset to loading + clear selection / legend filters so the previous
+    // graph's state doesn't bleed into the refetch.
     setState({ status: 'loading' })
     setLayoutReady(false)
     setSelection(EMPTY_SELECTION)
@@ -577,10 +560,7 @@ export function KGPage() {
       })
   }, [databaseId, tableId, topN, seedMetric, maxDepth, minDegree])
 
-  const elements = useMemo(
-    () => (state.status === 'ready' ? buildElements(state.payload) : []),
-    [state],
-  )
+  const elements = useMemo(() => (state.status === 'ready' ? buildElements(state.payload) : []), [state])
 
   const nodeIndex = useMemo<Map<string, KGNode>>(() => {
     if (state.status !== 'ready') return new Map()
@@ -701,8 +681,7 @@ export function KGPage() {
 
   const resetLayoutConfig = () => {
     if (layoutEngine === 'grid') return
-    const def =
-      layoutEngine === 'elk' ? JSON.stringify(ELK_PRESETS[elkPreset], null, 2) : DEFAULT_CONFIGS.fcose
+    const def = layoutEngine === 'elk' ? JSON.stringify(ELK_PRESETS[elkPreset], null, 2) : DEFAULT_CONFIGS.fcose
     setLayoutConfigs((prev) => ({ ...prev, [layoutEngine]: def }))
     setLayoutError(null)
   }
@@ -798,17 +777,14 @@ export function KGPage() {
     return items
   }, [selection.communities, communityIndex])
 
-  const totalSelected =
-    selectedNodes.length + selectedEdges.length + selectedCommunities.length
+  const totalSelected = selectedNodes.length + selectedEdges.length + selectedCommunities.length
 
   const currentConfig = layoutEngine === 'grid' ? '' : layoutConfigs[layoutEngine]
 
   const legendItemClass = (hidden: boolean): string =>
     [
       'flex items-center gap-1 rounded px-1 py-0.5 text-left transition',
-      hidden
-        ? 'opacity-40 line-through hover:opacity-70'
-        : 'hover:bg-[var(--color-surface-elevated)]',
+      hidden ? 'opacity-40 line-through hover:opacity-70' : 'hover:bg-[var(--color-surface-elevated)]',
     ].join(' ')
 
   return (
@@ -820,7 +796,9 @@ export function KGPage() {
     >
       <header className="shrink-0 border-b border-[var(--color-border-subtle)] p-4">
         <nav className="flex gap-4 text-sm">
-          <Link to="/" className="text-[var(--color-accent)] hover:underline">Home</Link>
+          <Link to="/" className="text-[var(--color-accent)] hover:underline">
+            Home
+          </Link>
           <Link to={`/${databaseId}/`} className="text-[var(--color-accent)] hover:underline">
             ← {databaseId}
           </Link>
@@ -835,10 +813,9 @@ export function KGPage() {
               ? ` (of ${state.payload.total_node_count.toLocaleString()})`
               : ''}
             {' · '}
-            {state.payload.edge_count.toLocaleString()} edges ·{' '}
-            {state.payload.community_count.toLocaleString()} communities · seeds by{' '}
-            <span className="font-mono">{state.payload.seed_metric}</span>, depth={state.payload.max_depth},
-            min-deg={state.payload.min_degree}
+            {state.payload.edge_count.toLocaleString()} edges · {state.payload.community_count.toLocaleString()}{' '}
+            communities · seeds by <span className="font-mono">{state.payload.seed_metric}</span>, depth=
+            {state.payload.max_depth}, min-deg={state.payload.min_degree}
           </p>
         )}
       </header>
@@ -846,7 +823,9 @@ export function KGPage() {
       <section className="flex min-h-0 flex-1">
         <div className="relative flex-1">
           {state.status === 'loading' && (
-            <div data-testid="kg-loading" className="p-8">Loading knowledge graph…</div>
+            <div data-testid="kg-loading" className="p-8">
+              Loading knowledge graph…
+            </div>
           )}
           {state.status === 'error' && (
             <div
@@ -1011,9 +990,7 @@ export function KGPage() {
                   <span>Config (JSON)</span>
                   <textarea
                     value={currentConfig}
-                    onChange={(e) =>
-                      setLayoutConfigs((prev) => ({ ...prev, [layoutEngine]: e.target.value }))
-                    }
+                    onChange={(e) => setLayoutConfigs((prev) => ({ ...prev, [layoutEngine]: e.target.value }))}
                     rows={12}
                     spellCheck={false}
                     className="rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] px-2 py-1 font-mono text-[10px] leading-snug"
@@ -1110,9 +1087,7 @@ export function KGPage() {
                 <span>Edge thickness by</span>
                 <select
                   value={edgeThicknessMode}
-                  onChange={(e) =>
-                    setEdgeThicknessMode(e.target.value as EdgeThicknessMode)
-                  }
+                  onChange={(e) => setEdgeThicknessMode(e.target.value as EdgeThicknessMode)}
                   className="rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-elevated)] px-2 py-1 text-xs"
                 >
                   <option value="uniform">uniform</option>
@@ -1198,8 +1173,7 @@ export function KGPage() {
                               style={{ background: colorForKey(key) }}
                             />
                             <span className="truncate">
-                              {key}{' '}
-                              <span className="text-[var(--color-muted-foreground)]">·{count}</span>
+                              {key} <span className="text-[var(--color-muted-foreground)]">·{count}</span>
                             </span>
                           </button>
                         </li>
@@ -1232,8 +1206,7 @@ export function KGPage() {
                               style={{ background: colorForKey(key) }}
                             />
                             <span className="truncate">
-                              {key}{' '}
-                              <span className="text-[var(--color-muted-foreground)]">·{count}</span>
+                              {key} <span className="text-[var(--color-muted-foreground)]">·{count}</span>
                             </span>
                           </button>
                         </li>
@@ -1244,8 +1217,8 @@ export function KGPage() {
               )}
 
               <p className="text-[11px] leading-snug text-[var(--color-muted-foreground)]">
-                Legend: single-click toggles, double-click isolates (or restores all if already
-                isolated). Click a node, edge, or community to select. Ctrl/Cmd-click adds.
+                Legend: single-click toggles, double-click isolates (or restores all if already isolated). Click a node,
+                edge, or community to select. Ctrl/Cmd-click adds.
               </p>
             </PanelSection>
 
@@ -1292,9 +1265,7 @@ export function KGPage() {
                             <div className="mt-1 break-words text-[12px] leading-snug">{n.label}</div>
                             <div className="mt-1 flex gap-3 font-mono text-[10px] text-[var(--color-muted-foreground)]">
                               {n.mention_count !== null && <span>mentions = {n.mention_count}</span>}
-                              {n.node_betweenness !== null && (
-                                <span>bc = {n.node_betweenness.toFixed(4)}</span>
-                              )}
+                              {n.node_betweenness !== null && <span>bc = {n.node_betweenness.toFixed(4)}</span>}
                             </div>
                           </li>
                         ))}
@@ -1323,9 +1294,7 @@ export function KGPage() {
                                 </span>
                               )}
                             </div>
-                            {e.rel_type && (
-                              <div className="mt-1 text-[12px] leading-snug">{e.rel_type}</div>
-                            )}
+                            {e.rel_type && <div className="mt-1 text-[12px] leading-snug">{e.rel_type}</div>}
                             {e.edge_betweenness !== null && (
                               <div className="mt-1 font-mono text-[10px] text-[var(--color-muted-foreground)]">
                                 bc = {e.edge_betweenness.toFixed(4)}

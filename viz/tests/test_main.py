@@ -193,9 +193,7 @@ def test_kg_endpoint_base(real_client: TestClient) -> None:
 
 @pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
 def test_kg_endpoint_seed_metric_degree(real_client: TestClient) -> None:
-    response = real_client.get(
-        f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=degree&top_n=10&max_depth=1"
-    )
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=degree&top_n=10&max_depth=1")
     assert response.status_code == 200
     body = response.json()
     assert body["seed_metric"] == "degree"
@@ -216,45 +214,33 @@ def test_kg_endpoint_seed_metric_node_betweenness(real_client: TestClient) -> No
 @pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
 def test_kg_endpoint_max_depth_expands(real_client: TestClient) -> None:
     """Increasing max_depth from 1 to 2 should never shrink the result."""
-    r1 = real_client.get(
-        f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=degree&top_n=5&max_depth=1"
-    )
-    r2 = real_client.get(
-        f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=degree&top_n=5&max_depth=2"
-    )
+    r1 = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=degree&top_n=5&max_depth=1")
+    r2 = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=degree&top_n=5&max_depth=2")
     assert r1.status_code == 200 and r2.status_code == 200
     assert r2.json()["node_count"] >= r1.json()["node_count"]
 
 
 def test_kg_endpoint_invalid_seed_metric_400(real_client: TestClient) -> None:
-    response = real_client.get(
-        f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=bogus"
-    )
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base?seed_metric=bogus")
     assert response.status_code == 400
     assert "seed_metric" in response.json()["detail"]
 
 
 def test_kg_endpoint_negative_max_depth_400(real_client: TestClient) -> None:
-    response = real_client.get(
-        f"/api/databases/{SAMPLE_DB_ID}/kg/base?max_depth=-1"
-    )
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base?max_depth=-1")
     assert response.status_code == 400
     assert "max_depth" in response.json()["detail"]
 
 
 def test_kg_endpoint_negative_min_degree_400(real_client: TestClient) -> None:
-    response = real_client.get(
-        f"/api/databases/{SAMPLE_DB_ID}/kg/base?min_degree=-2"
-    )
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base?min_degree=-2")
     assert response.status_code == 400
     assert "min_degree" in response.json()["detail"]
 
 
 @pytest.mark.skipif(not HAS_DEMO, reason="sample demo db not available")
 def test_kg_endpoint_echoes_min_degree(real_client: TestClient) -> None:
-    response = real_client.get(
-        f"/api/databases/{SAMPLE_DB_ID}/kg/base?min_degree=3"
-    )
+    response = real_client.get(f"/api/databases/{SAMPLE_DB_ID}/kg/base?min_degree=3")
     assert response.status_code == 200
     assert response.json()["min_degree"] == 3
 

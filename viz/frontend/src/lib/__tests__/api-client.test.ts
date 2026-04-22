@@ -74,9 +74,7 @@ describe('api-client', () => {
     })
 
     test('throws ApiError on non-2xx', async () => {
-      fetchMock.mockResolvedValueOnce(
-        makeResponse({ detail: 'manifest not found' }, { status: 500 }),
-      )
+      fetchMock.mockResolvedValueOnce(makeResponse({ detail: 'manifest not found' }, { status: 500 }))
       await expect(fetchDatabases()).rejects.toBeInstanceOf(ApiError)
     })
   })
@@ -96,9 +94,7 @@ describe('api-client', () => {
     })
 
     test('throws ApiError(404) on unknown id', async () => {
-      fetchMock.mockResolvedValueOnce(
-        makeResponse({ detail: "Database 'x' not found" }, { status: 404 }),
-      )
+      fetchMock.mockResolvedValueOnce(makeResponse({ detail: "Database 'x' not found" }, { status: 404 }))
       await expect(fetchDatabase('x')).rejects.toMatchObject({ status: 404 })
     })
   })
@@ -181,20 +177,14 @@ describe('api-client', () => {
     })
 
     test('throws ApiError on 400 (invalid table)', async () => {
-      fetchMock.mockResolvedValueOnce(
-        makeResponse({ detail: 'invalid table' }, { status: 400 }),
-      )
+      fetchMock.mockResolvedValueOnce(makeResponse({ detail: 'invalid table' }, { status: 400 }))
       await expect(fetchEmbed('3300_MiniLM', 'bogus')).rejects.toMatchObject({ status: 400 })
     })
 
     test('URL-encodes both ids', async () => {
-      fetchMock.mockResolvedValueOnce(
-        makeResponse({ table_id: 'x', count: 0, points: [] }),
-      )
+      fetchMock.mockResolvedValueOnce(makeResponse({ table_id: 'x', count: 0, points: [] }))
       await fetchEmbed('weird/db', 'weird/table')
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/databases/weird%2Fdb/embed/weird%2Ftable',
-      )
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/weird%2Fdb/embed/weird%2Ftable')
     })
   })
 
@@ -243,52 +233,38 @@ describe('api-client', () => {
     test('appends the resolution query string when provided', async () => {
       fetchMock.mockResolvedValueOnce(makeResponse(emptyKG({ resolution: 1 })))
       await fetchKG('3300_MiniLM', 'base', { resolution: 1.0 })
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/databases/3300_MiniLM/kg/base?resolution=1',
-      )
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/3300_MiniLM/kg/base?resolution=1')
     })
 
     test('appends the top_n query string when provided', async () => {
       fetchMock.mockResolvedValueOnce(makeResponse(emptyKG()))
       await fetchKG('3300_MiniLM', 'base', { topN: 1500 })
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/databases/3300_MiniLM/kg/base?top_n=1500',
-      )
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/3300_MiniLM/kg/base?top_n=1500')
     })
 
     test('appends seed_metric and max_depth when provided', async () => {
-      fetchMock.mockResolvedValueOnce(
-        makeResponse(emptyKG({ seed_metric: 'degree', max_depth: 2 })),
-      )
+      fetchMock.mockResolvedValueOnce(makeResponse(emptyKG({ seed_metric: 'degree', max_depth: 2 })))
       await fetchKG('3300_MiniLM', 'base', {
         seedMetric: 'degree',
         maxDepth: 2,
       })
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/databases/3300_MiniLM/kg/base?seed_metric=degree&max_depth=2',
-      )
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/3300_MiniLM/kg/base?seed_metric=degree&max_depth=2')
     })
 
     test('appends min_degree when provided', async () => {
       fetchMock.mockResolvedValueOnce(makeResponse(emptyKG({ min_degree: 3 })))
       await fetchKG('3300_MiniLM', 'base', { minDegree: 3 })
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/databases/3300_MiniLM/kg/base?min_degree=3',
-      )
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/3300_MiniLM/kg/base?min_degree=3')
     })
 
     test('combines resolution and top_n when both are given', async () => {
       fetchMock.mockResolvedValueOnce(makeResponse(emptyKG({ resolution: 1 })))
       await fetchKG('3300_MiniLM', 'base', { resolution: 1, topN: 0 })
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/databases/3300_MiniLM/kg/base?resolution=1&top_n=0',
-      )
+      expect(fetchMock).toHaveBeenCalledWith('/api/databases/3300_MiniLM/kg/base?resolution=1&top_n=0')
     })
 
     test('throws ApiError on 422 (missing tables)', async () => {
-      fetchMock.mockResolvedValueOnce(
-        makeResponse({ detail: 'nodes table missing' }, { status: 422 }),
-      )
+      fetchMock.mockResolvedValueOnce(makeResponse({ detail: 'nodes table missing' }, { status: 422 }))
       await expect(fetchKG('x', 'base')).rejects.toMatchObject({ status: 422 })
     })
   })

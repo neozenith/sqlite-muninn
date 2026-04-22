@@ -68,9 +68,7 @@ describe('HomePage', () => {
   })
 
   test('shows error state when the API returns 500', async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response('manifest not found', { status: 500 }),
-    )
+    fetchMock.mockResolvedValueOnce(new Response('manifest not found', { status: 500 }))
     renderHome()
     await waitFor(() => {
       expect(screen.getByTestId('home-error')).toBeInTheDocument()

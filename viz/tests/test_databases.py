@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from server.databases import DatabaseInfo, ManifestError, get_database, load_manifest
 
@@ -56,7 +57,7 @@ def test_load_manifest_databases_not_list_raises(tmp_path: Path) -> None:
 def test_load_manifest_invalid_entry_raises(tmp_path: Path) -> None:
     """Pydantic should reject entries missing required fields."""
     _write_manifest(tmp_path, {"databases": [{"id": "x"}]})
-    with pytest.raises(Exception):  # pydantic.ValidationError is fine here
+    with pytest.raises(ValidationError):
         load_manifest(tmp_path)
 
 

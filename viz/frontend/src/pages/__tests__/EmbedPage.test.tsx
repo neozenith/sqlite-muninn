@@ -71,9 +71,7 @@ describe('EmbedPage', () => {
   test('shows error state on 400', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(() =>
-        Promise.resolve(jsonResponse({ detail: 'invalid table' }, 400)),
-      ),
+      vi.fn(() => Promise.resolve(jsonResponse({ detail: 'invalid table' }, 400))),
     )
     renderAt('/3300_MiniLM/embed/bogus/')
     await waitFor(() => {

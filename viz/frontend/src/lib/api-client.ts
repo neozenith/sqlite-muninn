@@ -147,13 +147,8 @@ export async function fetchTables(id: string): Promise<TablesResponse> {
  * GET /api/databases/:id/embed/:table_id — 3D UMAP points for Deck.GL.
  * `tableId` is one of {'chunks', 'entities'}.
  */
-export async function fetchEmbed(
-  databaseId: string,
-  tableId: string,
-): Promise<EmbedPayload> {
-  return getJson<EmbedPayload>(
-    `/databases/${encodeURIComponent(databaseId)}/embed/${encodeURIComponent(tableId)}`,
-  )
+export async function fetchEmbed(databaseId: string, tableId: string): Promise<EmbedPayload> {
+  return getJson<EmbedPayload>(`/databases/${encodeURIComponent(databaseId)}/embed/${encodeURIComponent(tableId)}`)
 }
 
 /**
@@ -183,8 +178,6 @@ export async function fetchKG(
   if (options.minDegree !== undefined) params.set('min_degree', String(options.minDegree))
   const query = params.toString()
   return getJson<KGPayload>(
-    `/databases/${encodeURIComponent(databaseId)}/kg/${encodeURIComponent(tableId)}${
-      query ? `?${query}` : ''
-    }`,
+    `/databases/${encodeURIComponent(databaseId)}/kg/${encodeURIComponent(tableId)}${query ? `?${query}` : ''}`,
   )
 }

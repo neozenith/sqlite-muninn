@@ -17,6 +17,7 @@ S3 operations are actually performed.
 import fnmatch
 import logging
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class S3Mirror:
         self.bucket = bucket
         self.prefix = prefix
         self._client = None
-        self._listing_cache: dict[str, list[dict]] = {}
+        self._listing_cache: dict[str, list[dict[str, Any]]] = {}
 
     @property
     def enabled(self) -> bool:
@@ -71,7 +72,7 @@ class S3Mirror:
         resp = getattr(error, "response", None)
         if resp is None:
             return False
-        return resp.get("Error", {}).get("Code") == "404"
+        return bool(resp.get("Error", {}).get("Code") == "404")
 
     def ensure_local(self, path: Path) -> bool:
         """Ensure a file exists locally, downloading from S3 if needed.
@@ -178,12 +179,12 @@ class S3Mirror:
 
         return sorted(local_files)
 
-    def _list_s3_prefix(self, prefix: str) -> list[dict]:
+    def _list_s3_prefix(self, prefix: str) -> list[dict[str, Any]]:
         """List S3 objects under a prefix (cached per session to minimize API calls)."""
         if prefix in self._listing_cache:
             return self._listing_cache[prefix]
 
-        objects: list[dict] = []
+        objects: list[dict[str, Any]] = []
         paginator = self.client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
             for obj in page.get("Contents", []):

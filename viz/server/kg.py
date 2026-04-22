@@ -15,6 +15,8 @@ score so the client can size nodes/edges by those metrics without
 recomputing.
 """
 
+from __future__ import annotations
+
 import sqlite3
 from collections import Counter, defaultdict
 from collections.abc import Mapping
@@ -28,11 +30,11 @@ from server.db import table_exists
 KG_TABLES = ("base", "er")
 DEFAULT_RESOLUTION = 0.25
 DEFAULT_TOP_N = 50
-DEFAULT_SEED_METRIC = "edge_betweenness"
 DEFAULT_MAX_DEPTH = 0
 DEFAULT_MIN_DEGREE = 1
 
 SeedMetric = Literal["degree", "node_betweenness", "edge_betweenness"]
+DEFAULT_SEED_METRIC: SeedMetric = "edge_betweenness"
 VALID_SEED_METRICS: tuple[SeedMetric, ...] = ("degree", "node_betweenness", "edge_betweenness")
 
 # Approximate BC is used for large graphs to bound latency. k=150 gives a
@@ -105,9 +107,7 @@ def _pick_resolution(conn: sqlite3.Connection, requested: float | None) -> float
     return requested
 
 
-def _load_base(
-    conn: sqlite3.Connection, resolution: float
-) -> tuple[list[KGNode], list[KGEdge], list[KGCommunity]]:
+def _load_base(conn: sqlite3.Connection, resolution: float) -> tuple[list[KGNode], list[KGEdge], list[KGCommunity]]:
     if not table_exists(conn, "nodes") or not table_exists(conn, "edges"):
         raise KGDataMissing("base KG requires `nodes` and `edges` tables")
 
@@ -155,28 +155,19 @@ def _load_base(
     return nodes, edges, communities
 
 
-def _load_er(
-    conn: sqlite3.Connection, resolution: float
-) -> tuple[list[KGNode], list[KGEdge], list[KGCommunity]]:
-    if (
-        not table_exists(conn, "entity_clusters")
-        or not table_exists(conn, "edges")
-        or not table_exists(conn, "nodes")
-    ):
+def _load_er(conn: sqlite3.Connection, resolution: float) -> tuple[list[KGNode], list[KGEdge], list[KGCommunity]]:
+    if not table_exists(conn, "entity_clusters") or not table_exists(conn, "edges") or not table_exists(conn, "nodes"):
         raise KGDataMissing("ER KG requires `entity_clusters`, `edges`, and `nodes`")
 
     canonical_map: dict[str, str] = {
-        str(row["name"]): str(row["canonical"])
-        for row in conn.execute("SELECT name, canonical FROM entity_clusters")
+        str(row["name"]): str(row["canonical"]) for row in conn.execute("SELECT name, canonical FROM entity_clusters")
     }
 
     cluster_labels: dict[str, str] = {}
     if table_exists(conn, "entity_cluster_labels"):
         cluster_labels = {
             str(row["canonical"]): str(row["label"])
-            for row in conn.execute(
-                "SELECT canonical, label FROM entity_cluster_labels WHERE label IS NOT NULL"
-            )
+            for row in conn.execute("SELECT canonical, label FROM entity_cluster_labels WHERE label IS NOT NULL")
         }
 
     type_counter: dict[str, Counter[str]] = defaultdict(Counter)
@@ -222,23 +213,14 @@ def _load_er(
         KGNode(
             id=c,
             label=cluster_labels.get(c, c),
-            entity_type=(
-                type_counter[c].most_common(1)[0][0] if type_counter.get(c) else None
-            ),
-            community_id=(
-                canonical_communities[c].most_common(1)[0][0]
-                if canonical_communities.get(c)
-                else None
-            ),
+            entity_type=(type_counter[c].most_common(1)[0][0] if type_counter.get(c) else None),
+            community_id=(canonical_communities[c].most_common(1)[0][0] if canonical_communities.get(c) else None),
             mention_count=mention_sum[c] if mention_sum[c] else None,
         )
         for c in sorted(all_canonicals)
     ]
 
-    flat_map = {
-        c: (counter.most_common(1)[0][0] if counter else None)
-        for c, counter in canonical_communities.items()
-    }
+    flat_map = {c: (counter.most_common(1)[0][0] if counter else None) for c, counter in canonical_communities.items()}
     communities = _build_communities(conn, resolution, flat_map)
     return nodes, edges, communities
 
@@ -273,14 +255,14 @@ def _build_communities(
     ]
 
 
-def _build_graph(nodes: list[KGNode], edges: list[KGEdge]) -> nx.DiGraph:
+def _build_graph(nodes: list[KGNode], edges: list[KGEdge]) -> nx.DiGraph[str]:
     """Build a DiGraph from the payload.
 
     Duplicate (source, target) edges collapse by summing their weights; self-
     loops are dropped. networkx's betweenness_centrality doesn't run on
     MultiDiGraph, hence the collapse.
     """
-    g: nx.DiGraph = nx.DiGraph()
+    g: nx.DiGraph[str] = nx.DiGraph()
     for n in nodes:
         g.add_node(n.id)
     for e in edges:
@@ -297,7 +279,7 @@ def _build_graph(nodes: list[KGNode], edges: list[KGEdge]) -> nx.DiGraph:
 
 
 def _compute_betweenness(
-    g: nx.DiGraph,
+    g: nx.DiGraph[str],
 ) -> tuple[dict[str, float], dict[tuple[str, str], float]]:
     """Node and edge betweenness centrality over the full graph.
 
@@ -317,7 +299,7 @@ def _compute_betweenness(
 
 def _seed_scores(
     nodes: list[KGNode],
-    g: nx.DiGraph,
+    g: nx.DiGraph[str],
     node_bc: dict[str, float],
     edge_bc: dict[tuple[str, str], float],
     metric: SeedMetric,
@@ -339,7 +321,7 @@ def _seed_scores(
     return {n.id: incident.get(n.id, 0.0) for n in nodes}
 
 
-def _bfs_expand(g: nx.DiGraph, seeds: set[str], max_depth: int) -> set[str]:
+def _bfs_expand(g: nx.DiGraph[str], seeds: set[str], max_depth: int) -> set[str]:
     """Expand seeds via undirected BFS. max_depth=0 → unlimited expansion."""
     undirected = g.to_undirected(as_view=True)
     if max_depth == 0:
@@ -370,7 +352,7 @@ def _bfs_expand(g: nx.DiGraph, seeds: set[str], max_depth: int) -> set[str]:
 # Cache keyed by the hashable `(db_file_path, table_id, resolution)` tuple.
 # Stores the built graph + full-graph BC scores so successive requests with
 # different top_n/max_depth/seed_metric don't repay the BC cost.
-_GraphCache = tuple[nx.DiGraph, dict[str, float], dict[tuple[str, str], float]]
+type _GraphCache = tuple[nx.DiGraph[str], dict[str, float], dict[tuple[str, str], float]]
 _GRAPH_CACHE: dict[tuple[str, str, float], _GraphCache] = {}
 
 
@@ -389,9 +371,7 @@ def _graph_with_metrics(
     return result
 
 
-def _prune_by_min_degree(
-    g: nx.DiGraph, kept: set[str], min_degree: int
-) -> set[str]:
+def _prune_by_min_degree(g: nx.DiGraph[str], kept: set[str], min_degree: int) -> set[str]:
     """Drop nodes whose induced-subgraph degree is below `min_degree`.
 
     Degree is counted on the undirected view of the subgraph induced by
@@ -434,9 +414,7 @@ def _select_and_expand(
     return kept, node_bc, edge_bc
 
 
-def _cache_key_for_conn(
-    conn: sqlite3.Connection, table_id: str, resolution: float
-) -> tuple[str, str, float] | None:
+def _cache_key_for_conn(conn: sqlite3.Connection, table_id: str, resolution: float) -> tuple[str, str, float] | None:
     """Stable cache key per (sqlite file path, table, resolution).
 
     Returns None for `:memory:` or other non-file backings — no point caching
@@ -474,9 +452,7 @@ def load_kg_graph(
     if table_id not in KG_TABLES:
         raise UnknownKGTable(f"unknown KG table: {table_id!r}. Expected one of {KG_TABLES}")
     if seed_metric not in VALID_SEED_METRICS:
-        raise ValueError(
-            f"invalid seed_metric {seed_metric!r}; expected one of {list(VALID_SEED_METRICS)}"
-        )
+        raise ValueError(f"invalid seed_metric {seed_metric!r}; expected one of {list(VALID_SEED_METRICS)}")
     if max_depth < 0:
         raise ValueError(f"max_depth must be >= 0, got {max_depth}")
     if min_degree < 0:

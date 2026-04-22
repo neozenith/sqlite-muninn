@@ -7,8 +7,8 @@ import pytest
 
 from server.db import open_demo_db
 from server.kg import (
-    KG_TABLES,
     DEFAULT_RESOLUTION,
+    KG_TABLES,
     KGDataMissing,
     UnknownKGTable,
     load_kg_graph,
@@ -172,10 +172,7 @@ def test_min_degree_also_prunes_communities() -> None:
 
 def test_min_degree_negative_raises() -> None:
     conn = sqlite3.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE leiden_communities "
-        "(node TEXT, resolution REAL, community_id INTEGER, modularity REAL)"
-    )
+    conn.execute("CREATE TABLE leiden_communities (node TEXT, resolution REAL, community_id INTEGER, modularity REAL)")
     conn.execute("INSERT INTO leiden_communities VALUES ('n', 0.25, 1, 0.0)")
     conn.execute("CREATE TABLE nodes (node_id INTEGER, name TEXT, entity_type TEXT, mention_count INTEGER)")
     conn.execute("CREATE TABLE edges (src TEXT, dst TEXT, rel_type TEXT, weight REAL)")

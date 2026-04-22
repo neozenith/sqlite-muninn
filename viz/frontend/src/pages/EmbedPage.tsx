@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { PanelSection, RightPanel } from '../components/RightPanel'
 import { ApiError, type EmbedPayload, type EmbedPoint, fetchEmbed } from '../lib/api-client'
-import { useTheme } from '../lib/ThemeProvider'
+import { useTheme } from '../lib/theme-context'
 
 type LoadState =
   | { status: 'loading' }
@@ -114,6 +114,9 @@ export function EmbedPage() {
 
   useEffect(() => {
     if (!databaseId || !tableId) return
+    // Reset to loading so the previous table's canvas doesn't flash while
+    // the new fetch is in flight; intentional "reset on deps change".
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState({ status: 'loading' })
     setSelected(new Set())
     fetchEmbed(databaseId, tableId)
@@ -139,10 +142,6 @@ export function EmbedPage() {
     return new Map(state.payload.points.map((p) => [p.id, p]))
   }, [state])
 
-  const baseRadius = Math.max(stats.extent * 0.012 * pointScale, 0.03)
-  const baseScale: [number, number, number] = [baseRadius, baseRadius, baseRadius]
-  const highlightScale: [number, number, number] = [baseRadius * 1.8, baseRadius * 1.8, baseRadius * 1.8]
-
   const handleClick = (info: PickingInfo, event: unknown) => {
     const shift = eventHasShift(event)
     const p = info.object as EmbedPoint | null | undefined
@@ -164,13 +163,15 @@ export function EmbedPage() {
 
   const layers = useMemo(() => {
     if (state.status !== 'ready') return []
+    const baseRadius = Math.max(stats.extent * 0.012 * pointScale, 0.03)
+    const baseScale: [number, number, number] = [baseRadius, baseRadius, baseRadius]
+    const highlightScale: [number, number, number] = [baseRadius * 1.8, baseRadius * 1.8, baseRadius * 1.8]
     const getPointColor = (p: EmbedPoint): [number, number, number, number] => {
       if (!colorByCategory || !p.category) return UNIFORM_COLOR
       const [r, g, b] = hueToRgb(hashHue(p.category))
       return [r, g, b, 255]
     }
-    const selectedPoints =
-      selected.size > 0 ? state.payload.points.filter((p) => selected.has(p.id)) : []
+    const selectedPoints = selected.size > 0 ? state.payload.points.filter((p) => selected.has(p.id)) : []
 
     const result = [
       new SimpleMeshLayer<EmbedPoint>({
@@ -206,7 +207,7 @@ export function EmbedPage() {
       )
     }
     return result
-  }, [state, stats, pointScale, colorByCategory, selected, baseScale, highlightScale])
+  }, [state, stats, pointScale, colorByCategory, selected])
 
   const initialViewState = useMemo<EmbedViewState>(() => {
     const zoom = Math.max(Math.log2(VIEWPORT_FALLBACK / (stats.extent * 2)) - 0.5, 0)
@@ -233,7 +234,9 @@ export function EmbedPage() {
     >
       <header className="shrink-0 border-b border-[var(--color-border-subtle)] p-4">
         <nav className="flex gap-4 text-sm">
-          <Link to="/" className="text-[var(--color-accent)] hover:underline">Home</Link>
+          <Link to="/" className="text-[var(--color-accent)] hover:underline">
+            Home
+          </Link>
           <Link to={`/${databaseId}/`} className="text-[var(--color-accent)] hover:underline">
             ← {databaseId}
           </Link>
@@ -242,16 +245,16 @@ export function EmbedPage() {
           3D UMAP: <span className="font-mono">{tableId}</span>
         </h1>
         {state.status === 'ready' && (
-          <p className="text-sm text-[var(--color-muted-foreground)]">
-            {state.payload.count.toLocaleString()} points
-          </p>
+          <p className="text-sm text-[var(--color-muted-foreground)]">{state.payload.count.toLocaleString()} points</p>
         )}
       </header>
 
       <section className="flex min-h-0 flex-1">
         <div className="relative flex-1">
           {state.status === 'loading' && (
-            <div data-testid="embed-loading" className="p-8">Loading embeddings…</div>
+            <div data-testid="embed-loading" className="p-8">
+              Loading embeddings…
+            </div>
           )}
           {state.status === 'error' && (
             <div
@@ -283,11 +286,7 @@ export function EmbedPage() {
                     : null
                 }
               />
-              <div
-                data-testid="embed-canvas-ready"
-                data-point-count={state.payload.count}
-                className="hidden"
-              />
+              <div data-testid="embed-canvas-ready" data-point-count={state.payload.count} className="hidden" />
             </div>
           )}
         </div>

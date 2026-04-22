@@ -78,14 +78,8 @@ describe('DatabasePage', () => {
     expect(screen.getByRole('heading', { name: 'Book 3300 + MiniLM (384d)' })).toBeInTheDocument()
 
     // Embed links
-    expect(screen.getByTestId('embed-link-chunks')).toHaveAttribute(
-      'href',
-      '/3300_MiniLM/embed/chunks/',
-    )
-    expect(screen.getByTestId('embed-link-entities')).toHaveAttribute(
-      'href',
-      '/3300_MiniLM/embed/entities/',
-    )
+    expect(screen.getByTestId('embed-link-chunks')).toHaveAttribute('href', '/3300_MiniLM/embed/chunks/')
+    expect(screen.getByTestId('embed-link-entities')).toHaveAttribute('href', '/3300_MiniLM/embed/entities/')
     // KG links
     expect(screen.getByTestId('kg-link-base')).toHaveAttribute('href', '/3300_MiniLM/kg/base/')
     expect(screen.getByTestId('kg-link-er')).toHaveAttribute('href', '/3300_MiniLM/kg/er/')

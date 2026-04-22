@@ -85,9 +85,7 @@ class TablesResponse(BaseModel):
 
 
 @app.get("/api/databases/{database_id}/tables")
-def get_tables(
-    database_id: str, demos_dir: Path = Depends(get_demos_dir)
-) -> TablesResponse:
+def get_tables(database_id: str, demos_dir: Path = Depends(get_demos_dir)) -> TablesResponse:
     """Discover which embed + kg tables exist for the given database."""
     try:
         with open_demo_db(demos_dir, database_id) as conn:
@@ -107,9 +105,7 @@ def get_tables(
             if table_exists(conn, "leiden_communities"):
                 resolutions = [
                     float(r[0])
-                    for r in conn.execute(
-                        "SELECT DISTINCT resolution FROM leiden_communities ORDER BY resolution"
-                    )
+                    for r in conn.execute("SELECT DISTINCT resolution FROM leiden_communities ORDER BY resolution")
                 ]
 
         return TablesResponse(

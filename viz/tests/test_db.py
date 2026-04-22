@@ -40,9 +40,7 @@ def test_open_demo_db_missing_file_raises(tmp_path: Path) -> None:
             pass
 
 
-def test_open_demo_db_missing_extension_raises(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_open_demo_db_missing_extension_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     (tmp_path / "empty.db").write_bytes(b"")
     monkeypatch.setenv("MUNINN_EXTENSION_PATH", str(tmp_path / "no_such_lib"))
     with pytest.raises(DatabaseConnectionError, match="failed to load muninn extension"):
@@ -50,9 +48,7 @@ def test_open_demo_db_missing_extension_raises(
             pass
 
 
-@pytest.mark.skipif(
-    not (DEMOS_DIR / f"{SAMPLE_DB_ID}.db").exists(), reason="sample demo db not available"
-)
+@pytest.mark.skipif(not (DEMOS_DIR / f"{SAMPLE_DB_ID}.db").exists(), reason="sample demo db not available")
 def test_open_demo_db_with_real_database() -> None:
     """Sanity-check the context manager against a real demo DB."""
     with open_demo_db(DEMOS_DIR, SAMPLE_DB_ID) as conn:

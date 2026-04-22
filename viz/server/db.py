@@ -16,9 +16,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-DEFAULT_EXTENSION_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "build" / "muninn"
-)
+DEFAULT_EXTENSION_PATH = Path(__file__).resolve().parent.parent.parent / "build" / "muninn"
 
 
 class DatabaseConnectionError(RuntimeError):
@@ -57,9 +55,7 @@ def open_demo_db(demos_dir: Path, db_id: str) -> Iterator[sqlite3.Connection]:
         conn.load_extension(str(get_extension_path()))
     except sqlite3.OperationalError as e:
         conn.close()
-        raise DatabaseConnectionError(
-            f"failed to load muninn extension from {get_extension_path()}: {e}"
-        ) from e
+        raise DatabaseConnectionError(f"failed to load muninn extension from {get_extension_path()}: {e}") from e
 
     try:
         yield conn

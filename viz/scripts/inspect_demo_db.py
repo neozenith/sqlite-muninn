@@ -40,7 +40,7 @@ def main() -> None:
         print(f"  {name:45s} ({ttype:5s})  {count} rows")
 
     print("\nCOLUMN DETAIL (non-shadow tables):")
-    for name, ttype in rows:
+    for name, _ttype in rows:
         if name.startswith("_") or "_config" in name or "_nodes" in name:
             continue
         try:

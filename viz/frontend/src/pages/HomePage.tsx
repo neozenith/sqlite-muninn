@@ -30,18 +30,13 @@ export function HomePage() {
   }, [])
 
   return (
-    <main
-      className="min-h-screen bg-[var(--color-surface)] p-8 text-[var(--color-foreground)]"
-      data-testid="home-page"
-    >
+    <main className="min-h-screen bg-[var(--color-surface)] p-8 text-[var(--color-foreground)]" data-testid="home-page">
       <header className="mb-8">
         <h1 className="text-4xl font-bold">muninn-viz</h1>
         <p className="text-[var(--color-muted-foreground)]">Select a database to explore.</p>
       </header>
 
-      {state.status === 'loading' && (
-        <p data-testid="home-loading">Loading databases…</p>
-      )}
+      {state.status === 'loading' && <p data-testid="home-loading">Loading databases…</p>}
 
       {state.status === 'error' && (
         <div

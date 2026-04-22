@@ -17,6 +17,7 @@ dev = [
     "httpx>=0.28",
     "ruff>=0.15.0",
     "mypy>=1.19.1",
+    "types-networkx>=3.6.1.20260408",
 ]
 
 [tool.pytest.ini_options]

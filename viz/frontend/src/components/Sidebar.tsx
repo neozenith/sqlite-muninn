@@ -1,12 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import {
-  ApiError,
-  type DatabaseInfo,
-  type TablesResponse,
-  fetchDatabases,
-  fetchTables,
-} from '../lib/api-client'
+import { ApiError, type DatabaseInfo, type TablesResponse, fetchDatabases, fetchTables } from '../lib/api-client'
 import { ThemeToggle } from './ThemeToggle'
 
 const COLLAPSE_KEY = 'muninn-viz:sidebar-collapsed'
@@ -75,11 +69,7 @@ export function Sidebar() {
       .then((databases) => setState({ status: 'ready', databases }))
       .catch((err: unknown) => {
         const message =
-          err instanceof ApiError
-            ? `API error ${err.status}`
-            : err instanceof Error
-              ? err.message
-              : 'unknown error'
+          err instanceof ApiError ? `API error ${err.status}` : err instanceof Error ? err.message : 'unknown error'
         setState({ status: 'error', message })
       })
   }, [])
@@ -186,9 +176,7 @@ export function Sidebar() {
         )}
 
         {embedItems.length === 0 && kgItems.length === 0 && (
-          <p className="px-1 text-[10px] text-[var(--color-muted-foreground)]">
-            No viz tables
-          </p>
+          <p className="px-1 text-[10px] text-[var(--color-muted-foreground)]">No viz tables</p>
         )}
       </div>
     )
@@ -272,7 +260,9 @@ export function Sidebar() {
         </div>
       )}
 
-      <div className={`border-t border-[var(--color-border-subtle)] p-2 ${collapsed ? 'flex justify-center' : 'flex items-center justify-between'}`}>
+      <div
+        className={`border-t border-[var(--color-border-subtle)] p-2 ${collapsed ? 'flex justify-center' : 'flex items-center justify-between'}`}
+      >
         {!collapsed && (
           <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted-foreground)]">Theme</span>
         )}

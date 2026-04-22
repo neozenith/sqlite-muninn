@@ -14,10 +14,7 @@ def main() -> None:
     conn.load_extension(EXT)
 
     leiden_nodes = {
-        row[0]
-        for row in conn.execute(
-            "SELECT DISTINCT node FROM leiden_communities WHERE resolution = 0.25"
-        )
+        row[0] for row in conn.execute("SELECT DISTINCT node FROM leiden_communities WHERE resolution = 0.25")
     }
     node_names = {row[0] for row in conn.execute("SELECT DISTINCT name FROM nodes")}
     edge_src = {row[0] for row in conn.execute("SELECT DISTINCT src FROM edges")}

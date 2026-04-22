@@ -76,10 +76,7 @@ def load_embed_points(conn: sqlite3.Connection, table_id: str) -> EmbedPayload:
             for r in rows
         ]
     else:  # entities
-        if (
-            not table_exists(conn, "entities_vec_umap")
-            or not table_exists(conn, "entity_vec_map")
-        ):
+        if not table_exists(conn, "entities_vec_umap") or not table_exists(conn, "entity_vec_map"):
             raise EmbedDataMissing("entities_vec_umap or entity_vec_map table missing")
         rows = conn.execute(
             "SELECT u.id, u.x3d AS x, u.y3d AS y, u.z3d AS z, m.name, n.entity_type "
