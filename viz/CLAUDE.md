@@ -38,7 +38,7 @@ communities, and entity resolution clusters.
 
 ```bash
 make -C viz install    # Install Python + npm deps
-make -C viz dev        # Start backend (8200) + frontend (5280)
+make -C viz dev        # Start backend (8290) + frontend (5282)
 make -C viz test       # Run pytest + vitest (unit + API tests)
 make -C viz test-e2e   # Run Playwright permutation + behavioral suite
 make -C viz lint       # ruff + eslint + prettier
@@ -49,9 +49,11 @@ make -C viz ci         # lint + typecheck + test + e2e
 ## Architecture
 
 - **Independent UV project** — `viz/.venv/` is separate from the repo root
-- **Backend**: `server/` package, run via `python -m server [--port 8200]`
+- **Backend**: `server/` package, run via `python -m server [--port 8290]`
 - **Frontend**: Vite + React 19 + TypeScript + Tailwind v4 + react-router-dom
-- **Ports**: backend 8200, frontend 5282. Vite proxies `/api/*` → backend.
+- **Ports**: backend 8290, frontend 5282. Vite proxies `/api/*` → backend.
+  Backend default was bumped from 8200 because that port collides with other
+  `python -m server` projects on dev machines (e.g. `carto-ada-gap-analysis`).
 - **Single API client** (`frontend/src/lib/api-client.ts`) is the only code
   path that talks to the backend. Components and pages never call `fetch`
   directly. All API types live in this file.

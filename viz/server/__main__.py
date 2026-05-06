@@ -1,11 +1,11 @@
-"""Entry point: python -m server [--port 8200]."""
+"""Entry point: python -m server [--port 8290]."""
 
 import argparse
 import logging
 
 import uvicorn
 
-DEFAULT_PORT = 8200
+DEFAULT_PORT = 8290
 
 logging.basicConfig(
     level=logging.INFO,
