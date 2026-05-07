@@ -277,9 +277,72 @@ TEST(test_g1_canonical_rename_cascades) {
     sqlite3_close(db);
 }
 
+/* T1.5 — entity_clusters INSERT/DELETE rebuild cascade. A full ER
+ * rebuild that does DELETE-all + INSERT-all of entity_clusters wouldn't
+ * fire UPDATE triggers and would silently leave provenance frozen at
+ * whatever canonical assignment was active before the rebuild. The
+ * INSERT/DELETE triggers fix this by remapping provenance rows on
+ * cluster lifecycle events.
+ *
+ * Round-trip: entity stored with raw-name canonical → cluster INSERT
+ * remaps to canonical → cluster DELETE reverts to raw. */
+TEST(test_g1_cluster_rebuild_cascade) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = provenance_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    seed_kg_schema(db);
+
+    rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE _gii USING gii_provenance()", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Seed event + chunk + entity *without* any cluster, so the entity's
+     * provenance row stores the raw name (COALESCE fallback). */
+    rc = sqlite3_exec(db,
+                      "INSERT INTO events(id, project_id, timestamp) "
+                      "  VALUES (1, 'proj_a', '2026-05-08T10:00:00Z');"
+                      "INSERT INTO event_message_chunks(chunk_id, event_id) "
+                      "  VALUES (42, 1);"
+                      "INSERT INTO entities(chunk_id, name) "
+                      "  VALUES (42, 'AcmeCorp');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Pre-cluster baseline: provenance has the raw name as canonical. */
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE canonical = 'AcmeCorp'"));
+
+    /* INSERT cluster → remap raw 'AcmeCorp' to canonical 'Acme Corp'. */
+    rc = sqlite3_exec(db,
+                      "INSERT INTO entity_clusters(name, canonical) "
+                      "  VALUES ('AcmeCorp', 'Acme Corp');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE canonical = 'AcmeCorp'"));
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE canonical = 'Acme Corp'"));
+
+    /* DELETE cluster → revert canonical back to the raw name. */
+    rc = sqlite3_exec(db, "DELETE FROM entity_clusters WHERE name = 'AcmeCorp';", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE canonical = 'AcmeCorp'"));
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE canonical = 'Acme Corp'"));
+
+    sqlite3_close(db);
+}
+
 void test_provenance(void) {
     RUN_TEST(test_g1_schema_creates_with_xcreate);
     RUN_TEST(test_g1_chunk_insert_populates_provenance);
     RUN_TEST(test_g1_entity_mutations_propagate);
     RUN_TEST(test_g1_canonical_rename_cascades);
+    RUN_TEST(test_g1_cluster_rebuild_cascade);
 }
