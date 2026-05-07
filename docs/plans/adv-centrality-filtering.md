@@ -26,21 +26,33 @@ The workload is asymmetric: bursty high-throughput **writes** during ingestion, 
 
 - **G1: Provenance Shadow Table** — Maintain a `_gii_provenance(namespace_id, chunk_id, canonical, project_id, timestamp)` table by triggers on source tables; collapses the 4-way filter join into a single indexed scan
 - **G2: Top-K Result Cache TVF** — A new `graph_topk_centrality` TVF that memoizes `(filter, query, generation)` → result; piggybacks on the existing GII generation counter for auto-invalidation
-- **G3: Filter-Aware Centrality (Deferred)** — A `node_filter_table=` hidden-column argument on `graph_node_betweenness` / `graph_edge_betweenness` so Brandes runs on the induced subgraph; documented but deferred until corpora exceed ~50K edges where Brandes itself becomes the bottleneck
+- **G3: Filter-Aware Centrality (Deferred)** — A `node_filter_table=` hidden-column argument on `graph_node_betweenness` / `graph_edge_betweenness` so Brandes runs on the induced subgraph; documented but deferred until empirical `brandes_share` crosses the inflection threshold (G3 ADR resolved with empirical-threshold + escape hatch)
 - **G4: Autoresearch Hill-Climbing Harness** — A markdown-prompt-driven orchestrator over `benchmarks/kg_perf` that generates new strategies, runs them, deduplicates by content signature, and ratchets toward Pareto-optimal (latency, fidelity) frontiers
+- **G5: SSSP Shadow Table Wiring (centrality acceleration)** — Wire `graph_node_betweenness`, `graph_edge_betweenness`, and `graph_closeness` to consume the SSSP shadow table specified by GII Phase 2 (`docs/plans/graph/01_gii_sssp_session_kg.md` §6.2). Replaces the direct `sssp_dijkstra`/`sssp_bfs` calls at `src/graph_centrality.c:443-445, 1411` with cache-aware lookups; cache misses pull through and write back via the GII delta-cascade pattern
+- **G6: Leiden Shadow Table Wiring (community-aware filtering)** — Wire `graph_leiden` to consume the resolution-keyed Leiden shadow table specified by GII Phase 4 (`docs/plans/graph/04_communities_shadow_tables.md`); add a `community_filter=` hidden-column argument to centrality TVFs so the dashboard can ask "top-K most central nodes *within community C* in this filter window" without re-running Leiden
 
 **Implementation dependencies (preview — full diagram in Gap Analysis):**
 
 ```mermaid
 flowchart LR
+    GII2["GII Phase 2<br/>SSSP shadow table<br/>(existing plan)"] --> G5["G5: SSSP<br/>wiring"]
+    GII4["GII Phase 4<br/>Leiden shadow table<br/>(existing plan)"] --> G6["G6: Leiden<br/>wiring"]
     G1["G1: Provenance<br/>Shadow Table"] --> G2["G2: Top-K Result<br/>Cache TVF"]
+    G1 --> G6
+    G5 --> G2
+    G5 -.feeds.-> G3
+    G6 --> G2
     G1 --> G4["G4: Autoresearch<br/>Orchestrator"]
     G2 --> G4
+    G5 --> G4
+    G6 --> G4
     G3["G3: Filter-Aware<br/>Brandes (deferred)"] -.measures.-> G4
     classDef gap fill:#6d28d9,stroke:#5b21b6,color:#ede9fe,stroke-width:2px
     classDef deferred fill:#6d28d955,stroke:#5b21b6,color:#ede9fe,stroke-width:2px,stroke-dasharray:5 5
-    class G1,G2,G4 gap
+    classDef external fill:#475569,stroke:#334155,color:#f1f5f9,stroke-width:1px,stroke-dasharray:5 5
+    class G1,G2,G4,G5,G6 gap
     class G3 deferred
+    class GII2,GII4 external
 ```
 
 ## Current State
@@ -245,8 +257,9 @@ This axiom resolves the eager-vs-lazy ambiguity for provenance maintenance, cach
 flowchart TD
     subgraph Curr [Current]
         C_JOIN["4-way Python JOIN<br/>builds allowed_canonicals"]
-        C_BREN["Brandes on full graph"]
+        C_BREN["Brandes recomputes<br/>SSSP every call"]
         C_PFLT["Python post-filter"]
+        C_LEID["Leiden recomputes<br/>per resolution"]
         C_RPT["Repeat queries pay full cost"]
         C_HRN["Manual strategy authoring"]
     end
@@ -256,6 +269,8 @@ flowchart TD
         G2G["G2: Top-K result<br/>cache TVF"]
         G3G["G3: Filter-aware<br/>Brandes (deferred)"]
         G4G["G4: Autoresearch<br/>orchestrator"]
+        G5G["G5: SSSP wiring"]
+        G6G["G6: Leiden wiring"]
     end
 
     subgraph Des [Desired]
@@ -264,20 +279,24 @@ flowchart TD
         D_NOFL["No post-filter needed"]
         D_CACHE["O(1) cache hit on repeat"]
         D_AUTO["Strategy proposals<br/>auto-evaluated"]
+        D_SSSP["Cached all-pairs SSSP<br/>shared by Brandes + closeness"]
+        D_COMM["Cached Leiden partitions;<br/>community-filtered centrality"]
     end
 
     C_JOIN --> G1G --> D_LOOK
     C_PFLT --> G1G --> D_NOFL
+    C_BREN --> G5G --> D_SSSP
     C_BREN --> G3G --> D_INDU
+    C_LEID --> G6G --> D_COMM
     C_RPT --> G2G --> D_CACHE
     C_HRN --> G4G --> D_AUTO
 
     classDef curr fill:#b45309,stroke:#92400e,color:#fef3c7,stroke-width:2px
     classDef gap fill:#6d28d9,stroke:#5b21b6,color:#ede9fe,stroke-width:2px
     classDef des fill:#047857,stroke:#065f46,color:#d1fae5,stroke-width:2px
-    class C_JOIN,C_BREN,C_PFLT,C_RPT,C_HRN curr
-    class G1G,G2G,G3G,G4G gap
-    class D_LOOK,D_INDU,D_NOFL,D_CACHE,D_AUTO des
+    class C_JOIN,C_BREN,C_PFLT,C_RPT,C_HRN,C_LEID curr
+    class G1G,G2G,G3G,G4G,G5G,G6G gap
+    class D_LOOK,D_INDU,D_NOFL,D_CACHE,D_AUTO,D_SSSP,D_COMM des
     style Curr fill:#92400e22,stroke:#b45309,color:#fbbf24
     style Gaps fill:#5b21b622,stroke:#6d28d9,color:#a78bfa
     style Des fill:#065f4622,stroke:#047857,color:#34d399
@@ -287,17 +306,27 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    G1["G1: Provenance<br/>Shadow Table"] --> G2["G2: Top-K Result<br/>Cache TVF"]
-    G1 --> G4["G4: Autoresearch<br/>Orchestrator"]
+    GII2["GII Phase 2<br/>SSSP shadow"] --> G5["G5: SSSP<br/>wiring"]
+    GII4["GII Phase 4<br/>Leiden shadow"] --> G6["G6: Leiden<br/>wiring"]
+    G1["G1: Provenance<br/>shadow table"] --> G2["G2: Top-K result<br/>cache TVF"]
+    G1 --> G6
+    G5 --> G2
+    G6 --> G2
+    G5 -.feeds when un-deferred.-> G3
+    G1 --> G4["G4: Autoresearch<br/>orchestrator"]
     G2 --> G4
-    G3["G3: Filter-Aware<br/>Brandes (deferred)"] -.exercised by.-> G4
+    G5 --> G4
+    G6 --> G4
+    G3["G3: Filter-aware<br/>Brandes (deferred)"] -.exercised by.-> G4
     classDef gap fill:#6d28d9,stroke:#5b21b6,color:#ede9fe,stroke-width:2px
     classDef deferred fill:#6d28d955,stroke:#5b21b6,color:#ede9fe,stroke-width:2px,stroke-dasharray:5 5
-    class G1,G2,G4 gap
+    classDef external fill:#475569,stroke:#334155,color:#f1f5f9,stroke-width:1px,stroke-dasharray:5 5
+    class G1,G2,G4,G5,G6 gap
     class G3 deferred
+    class GII2,GII4 external
 ```
 
-**Recommended implementation order:** G1 → G2 → G4 → (re-evaluate G3). G1 is the single biggest empirical win (6×–20×) and exercises the existing GII trigger / shadow-table / generation-counter machinery without inventing new patterns. G2 piggybacks on G1 (its signature includes `G_adj`, which only ticks on edge mutation; provenance changes don't need to invalidate G2 cache). G4 uses G1+G2 as the substrate it ratchets on. G3 stays deferred — Track B research confirms the literature (QUBE, Riondato-Kornaropoulos, KADABRA) is mature and cheap to land later if scale warrants, and the harness from G4 will tell us when scale warrants.
+**Recommended implementation order:** G1 → (G5, G6 in parallel with GII Phase 2/4 progression) → G2 → G4 → (re-evaluate G3 via empirical `brandes_share`). G1 is the single biggest empirical win (6×–20×) and exercises the existing GII trigger / shadow-table / generation-counter machinery without inventing new patterns. G5 and G6 are wiring layers that depend on the existing GII Phase 2 and Phase 4 plans landing — if those plans are ahead of this initiative, G5/G6 can ship immediately; if behind, they wait. G2 builds on G1 (provenance) and reads from G5 (SSSP cache) + G6 (Leiden cache) when present. G4 ratchets on the entire substrate. G3 stays deferred — the literature (QUBE, Riondato-Kornaropoulos, KADABRA) is mature; un-defer is governed by the empirical `brandes_share` ADR.
 
 ---
 
@@ -967,6 +996,168 @@ A 1f-B finding: a proposal that hits the 30s timeout records `wall_ms = 30000` a
 **Decision:** Two budget classes. Every LLM round-trip writes a ledger row with the resolved `status` enum. Free (don't decrement `max_experiments` or `max_cost_usd`): `parse_error`, `schema_violation` — the proposal never actually executed, so the LLM gets re-prompted with the failure reason for free. Metered: `ok`, `runtime_error`, `floor_failure`, `timeout` — the proposal consumed harness time and/or proposer cost.
 **Rationale:** Aligns with the status-field taxonomy (ADR above). Closes the "free pass for unparseable code" exploit while preserving the LLM's failure history as input for future prompts. Simple to implement: `parse_error` and `schema_violation` are detected by the AST validator before `time_one` is invoked, so they never touch the harness budget.
 
+---
+
+### G5: SSSP Shadow Table Wiring (centrality acceleration)
+
+**Current:** `graph_node_betweenness`, `graph_edge_betweenness`, and `graph_closeness` all run all-pairs SSSP from scratch on every TVF invocation. The static `sssp_bfs` and `sssp_dijkstra` functions live in `src/graph_centrality.c:261, 317` and are called inside `brandes_compute()` at lines 443-445 (with `auto_approx > 0` sampling sqrt(N) sources, otherwise full V) and inside the closeness TVF at line 1411. There is **no SSSP cache today** — every centrality call recomputes O(VE) for unweighted Brandes or O(VE log V) for weighted Dijkstra.
+
+The existing GII Phase 2 plan (`docs/plans/graph/01_gii_sssp_session_kg.md` §6.2 "SSSP Shadow Tables (Phase B)") fully specifies the shadow-table schema, delta-cascade semantics, and generation-counter integration for SSSP results. That plan is the prerequisite — it builds the cache tables. **What G5 adds is the wiring layer** that makes the centrality TVFs actually consume them.
+
+**Gap:** Modify the centrality TVFs to:
+1. On entry, check whether the GII VT named in `edge_table=` carries a fresh SSSP shadow table (per the existing GII detection pattern at `src/graph_centrality.c:654, 888, 1132, 1378` for graph_data_load_from_adjacency).
+2. If fresh: read `(dist[], sigma[], pred[])` per source from the shadow table; skip the corresponding `sssp_bfs`/`sssp_dijkstra` call.
+3. If stale or missing: call the existing SSSP function and write back the result through the GII delta-cascade pattern (writes go to a `_sssp_delta` queue; full materialization is lazy, per the architectural axiom).
+4. Brandes back-propagation and closeness aggregation operate identically on cached vs. fresh SSSP output (the data shape is the same).
+
+**Output(s):** When complete I will have:
+- **Modified C:** `src/graph_centrality.c` — replace direct `sssp_bfs`/`sssp_dijkstra` calls in `brandes_compute()` and the closeness TVF with cache-aware wrappers `sssp_bfs_cached()`/`sssp_dijkstra_cached()` that consult the SSSP shadow table first
+- **New helper:** `src/graph_centrality.c` static `int sssp_load_or_compute(const GiiContext *ctx, int source, double *dist, double *sigma, IntList *pred, int *stack, ...)` — the read-or-pull-through primitive
+- **Build glue:** none — the SSSP shadow-table schema and triggers come from GII Phase 2; G5 only adds read-side code
+- **C tests:** `test/test_centrality_sssp_cache.c` — verify (a) cold-call writes back to shadow table, (b) warm call returns identical `(dist, sigma, pred)` to fresh call, (c) generation-counter mismatch forces recompute, (d) `auto_approx` sampling reads only the sampled-source rows
+- **Python tests:** `pytests/test_centrality_sssp_cache.py` — cache hit measured at the harness level (centrality wall_ms drops by O(V) factor on cached graphs)
+- **Harness strategy:** `benchmarks/kg_perf/strategies/sssp_cached.py` — same baseline pipeline but with the new C wiring; expected significant speedup on closeness + edge_betweenness on graphs that have been queried before
+- **Doc updates:** `docs/centrality-cache.md` — document the cache-hit behavior; cross-reference GII Phase 2 plan
+
+**References:**
+
+Existing SSSP entry point at `src/graph_centrality.c:317`:
+
+```c
+static void sssp_dijkstra(const GraphData *g, int source, double *dist, double *sigma,
+                          IntList *pred, int *stack, int *stack_size, const char *direction);
+```
+
+Proposed cache-aware wrapper:
+
+```c
+static int sssp_load_or_compute(
+    const GiiContext *ctx,    /* GII context — has access to _sssp shadow table */
+    const GraphData *g,
+    int source,
+    double *dist, double *sigma, IntList *pred, int *stack, int *stack_size,
+    const char *direction)
+{
+    int64_t g_adj = config_get_int(ctx->db, ctx->vtab_name, "generation", 0);
+    int64_t cached_gen = sssp_shadow_get_generation(ctx, source);
+    if (cached_gen == g_adj) {
+        /* Cache hit: read (dist, sigma, pred) from _sssp shadow blocks. */
+        return sssp_shadow_read(ctx, source, dist, sigma, pred, stack, stack_size);
+    }
+    /* Cache miss: compute fresh, queue write-back via _sssp_delta. */
+    if (g->has_weights) {
+        sssp_dijkstra(g, source, dist, sigma, pred, stack, stack_size, direction);
+    } else {
+        sssp_bfs(g, source, dist, sigma, pred, stack, stack_size, direction);
+    }
+    sssp_shadow_queue_writeback(ctx, source, dist, sigma, pred, *stack_size, g_adj);
+    return SQLITE_OK;
+}
+```
+
+GII Phase 2 reference (existing plan):
+- `docs/plans/graph/01_gii_sssp_session_kg.md` §6.2 — schema for `_sssp_dist(namespace_id, source_idx, target_idx, dist)`, `_sssp_sigma(...)`, `_sssp_pred(...)`, plus the `_sssp_delta` queue
+- `docs/plans/graph/00_gap_analysis.md` Gap 2 — overall design rationale
+
+#### ADR: Cache-block granularity — per-source vs. all-pairs
+
+| Option | Pros | Cons |
+|---|---|---|
+| Per-source rows: each (namespace, source) is a row in `_sssp_dist`, `_sssp_sigma`, `_sssp_pred` | Fine-grained — cache hit even when only a subset of sources are warm | More rows per generation; `_sssp_delta` queue grows source-by-source |
+| Per-source BLOB: one row per source carrying packed `(dist[], sigma[], pred[])` BLOBs | Fewer rows; matches the blocked-CSR pattern | Decode cost per source — but only on the relevant source |
+| All-sources BLOB: one row per generation carrying the full O(V²) matrix | Simplest schema | Defeats the axiom — pulls more than the read needs |
+
+**Decision:** Per-source BLOB matching the existing CSR block format. One row per `(namespace_id, direction, source_idx, generation)` carrying packed `(dist[], sigma[], pred[])` BLOBs.
+**Rationale:** Axiom-derived — pull through only the source the read needs; storage layout mirrors `_csr_fwd` / `_csr_rev` blocked BLOBs in `src/graph_adjacency.c:182-198`. Per-source rows would explode the row count for full Brandes (V rows per generation per direction); all-pairs BLOB violates the axiom by loading more than any single source needs.
+
+---
+
+### G6: Leiden Shadow Table Wiring (community-aware filtering)
+
+**Current:** `graph_leiden` (registered via `community_register_tvfs` in `src/muninn.c:64`) runs the full Leiden algorithm on every TVF call. The downstream consumer `claude-code-sessions/.../sqlite/kg/communities.py:57-99` calls Leiden three times per build (resolutions 0.25, 1.0, 3.0) and persists the partition into `leiden_communities(node, resolution, community_id, modularity)`. There is **no community-aware filtering in centrality TVFs today** — to ask "top-K most central nodes within community C" the consumer has to filter the result set after running unfiltered centrality.
+
+The existing GII Phase 4 plan (`docs/plans/graph/04_communities_shadow_tables.md`) fully specifies the resolution-keyed Leiden shadow table with warm-start semantics, generation-counter integration, and `lei_filter()` cache-read decision flow. That plan is the prerequisite — it builds the cache and the warm-start machinery. **What G6 adds is the centrality-TVF wiring** that consumes the cache to enable community-filtered queries.
+
+**Gap:** Two pieces:
+1. **`graph_leiden` cache consumption** — modify `lei_filter()` per the GII Phase 4 plan to read from the `_communities` shadow table when fresh (already specified in §7); ensures that subsequent `graph_leiden` calls at the same resolution are O(1) lookups.
+2. **`community_filter=` hidden-column on centrality TVFs** — add an optional argument to `graph_node_betweenness`, `graph_edge_betweenness`, `graph_degree`, `graph_closeness`, and `graph_topk_centrality` (G2) that takes a `community_id` (or comma-separated list). When supplied, the TVF builds the induced subgraph from `_communities` rows matching that community at the requested `resolution=`, then runs centrality on it. Composable with the provenance filter from G1.
+
+**Output(s):** When complete I will have:
+- **Modified C:** `src/graph_community.c` — `lei_filter()` cache-read path per GII Phase 4 plan §7
+- **Modified C:** `src/graph_centrality.c` — `community_filter=` and `community_resolution=` hidden columns on each centrality TVF; xFilter builds induced subgraph from `_communities` shadow table when present
+- **Modified C:** `src/graph_topk_cache.c` (the G2 file) — signature includes `(community_filter, community_resolution)` so cache entries don't bleed across community queries
+- **C tests:** `test/test_community_filter.c` — verify (a) Leiden cache hit at matching resolution, (b) community_filter=C produces identical centrality results to "run unfiltered then post-filter by community", (c) cross-resolution community_filter requests don't share cache entries
+- **Python tests:** `pytests/test_community_centrality.py`
+- **Harness query shapes:** add new `QUERY_SHAPES` entries to `benchmarks/kg_perf/workload.py` covering community-filtered top-K (e.g., "top-3 node_betweenness within community 0 at resolution 1.0")
+- **Doc updates:** `docs/centrality-cache.md` — community-filter section; cross-reference GII Phase 4 plan
+
+**References:**
+
+GII Phase 4 reference (existing plan):
+- `docs/plans/graph/04_communities_shadow_tables.md` §2 — `_communities(namespace_id, resolution, node_idx, community_id, modularity)` schema and `_config(leiden_resolutions, leiden_generation)` entries
+- `docs/plans/graph/04_communities_shadow_tables.md` §7 — `lei_filter()` cache-read decision flow
+
+Proposed centrality TVF extension (sketch):
+
+```c
+/* In xBestIndex: declare two new HIDDEN columns on each centrality TVF */
+sqlite3_declare_vtab(db, "CREATE TABLE x("
+    "node TEXT, centrality REAL, "
+    "edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN, "
+    "direction TEXT HIDDEN, "
+    "community_filter TEXT HIDDEN, community_resolution REAL HIDDEN)");
+
+/* In xFilter, after loading the GraphData: */
+if (config.community_filter) {
+    /* Build induced subgraph from _communities shadow table */
+    int *node_keep_mask = build_community_mask(
+        ctx, config.community_filter, config.community_resolution);
+    GraphData g_induced;
+    induce_subgraph(&g, node_keep_mask, &g_induced);
+    /* Run Brandes on g_induced instead of g */
+    brandes_compute(&g_induced, ...);
+}
+```
+
+#### ADR: Multiple-community filter — AND, OR, or "any"?
+
+`community_filter='1,2,5'` could mean three things:
+
+| Option | Pros | Cons |
+|---|---|---|
+| OR: include any node in any of the named communities | Most useful for "show me nodes in these clusters" | Doesn't express "in BOTH cluster 1 and cluster 2" |
+| AND across resolutions: e.g., `community_filter='r1.0:1,r3.0:2'` requires both | Expresses cross-resolution constraints | Awkward syntax |
+| Single community only (no list) | Simplest API | Loses the multi-community use case |
+
+**Decision:** Inclusive-OR. `community_filter='1,2,5'` returns the union of nodes belonging to any of communities 1, 2, or 5 at the requested `community_resolution`.
+**Rationale:** Matches the natural Cytoscape interaction model — when a user multi-selects compound nodes representing communities (shift-click or rubber-band-select), they intuitively expect the union view. AND-across-resolutions is a graph-theory researcher's tool, not a dashboard primitive; ship the union now and add the AND form later if a measured workload demands it. Single-community-only forces N TVF calls + Python union, defeating the point of pushing community filtering into the C layer.
+
+#### ADR: Community-filter + provenance-filter composition order
+
+When both G1 (provenance filter via `_gii_provenance`) and G6 (community filter via `_communities`) are active on the same query, two valid composition orders:
+
+| Option | Pros | Cons |
+|---|---|---|
+| Provenance first, then intersect with community membership | Smaller intermediate set if provenance is the narrower filter | Wastes work if community is narrower |
+| Compute both filter sets, intersect at the end | Symmetric; can pick the cheaper path adaptively | Two table scans before intersection |
+| Cost-based optimizer picks the cheaper order per query | Optimal | Adds a small CBO surface inside the centrality TVF |
+
+**Decision:** Compute both filter sets, intersect at the end. Both are indexed lookups (`_gii_provenance.canonical` and `_communities.node_idx` per the existing GII Phase 2/4 plans), so the work is bounded and symmetric. Defer the cost-based optimizer until measurement shows asymmetric cost in practice.
+**Rationale:** Axiom-derived — both lookups are minimal work; preferring one over the other is premature optimization. The CBO would add a surface that can pick wrong on novel filter shapes; better to ship the symmetric form and add a chooser only if the autoresearch loop surfaces a workload where it matters.
+
+#### ADR: Resolution mismatch behavior
+
+The `_communities` cache is keyed by resolution (per GII Phase 4 plan). What happens if a centrality TVF requests `community_resolution=2.5` but only resolutions {0.25, 1.0, 3.0} are cached?
+
+| Option | Pros | Cons |
+|---|---|---|
+| Compute Leiden at the requested resolution on cache miss; warm-start from the nearest cached resolution | Always honors the requested resolution; uses warm-start to amortize cost | First-time use is expensive |
+| Reject with `SQLITE_ERROR`; require the caller to pre-cache the resolution they'll query | Predictable cost | Awkward UX; caller must know the cache state |
+| Snap to nearest cached resolution and warn | Convenient | Silently changes the user's query semantics — Type 2 failure risk |
+
+**Decision:** Compute the requested resolution on cache miss, warm-starting from the nearest cached resolution per the GII Phase 4 plan's warm-start machinery. The result is then written back to the `_communities` shadow table at the new resolution, so subsequent queries hit the cache.
+**Rationale:** muninn is a high-performance, high-accuracy developer library — correctness is non-negotiable. Reject-with-error is hostile UX for an interactive dashboard (forces the caller to know cache state). Snap-and-warn is the textbook silent Type 2 failure pattern `~/.claude/CLAUDE.md` rules explicitly forbid: the user thinks they're getting `2.5` semantics but they're actually getting `3.0`, and downstream automation treats SQL success as success. Compute-with-warm-start respects the user's request literally, leverages the GII Phase 4 plan's existing warm-start investment (typically 2-5× faster than cold Leiden), and converges to O(1) lookup once the resolution is cached.
+
 ## Success Measures
 
 ### Project Quality Bar (CI Gates)
@@ -1027,6 +1218,20 @@ Every gap MUST satisfy at least one mandatory, testable measure beyond the proje
 - **Status-field correctness**: every ledger row carries an explicit `status` (ok/timeout/runtime_error/parse_error/schema_violation); rows with non-ok status are excluded from the Pareto frontier.
 - **Composite fidelity**: every accepted proposal satisfies `min(seed_jaccard, node_jaccard, edge_jaccard) >= 0.95` (or the chosen per-component thresholds — see G4 fidelity ADR) on every cell.
 
+**G5: SSSP Shadow Table Wiring**
+- **Cache hit correctness**: `(dist, sigma, pred)` returned from `sssp_shadow_read` must be byte-identical to the output of a fresh `sssp_dijkstra`/`sssp_bfs` call on the same `(GraphData, source, direction)`. Tested via `test_centrality_sssp_cache.c::test_cache_parity_with_fresh`.
+- **Generation invalidation**: bumping `G_adj` (via an edge mutation) forces the next centrality call to recompute SSSP for affected sources; tested via `test_centrality_sssp_cache.c::test_generation_invalidates_sssp`.
+- **Closeness latency**: closeness TVF p50 on a warm cache must be ≥ 5× faster than on a cold cache for graphs with V > 1K. Measured by the kg_perf harness.
+- **Brandes latency**: betweenness TVF p50 on a warm cache must be ≥ 3× faster than on a cold cache (Brandes back-prop is itself non-trivial, so the speedup is bounded by the SSSP fraction, not the total).
+- **Pull-through respects axiom**: a query for source `S` must read only the rows for `S` (and write back only `S` on miss); not pre-load other sources.
+
+**G6: Leiden Shadow Table Wiring**
+- **Cache hit correctness**: a `graph_leiden` call at a cached resolution returns the identical `(node, community_id, modularity)` rows as the cached partition. Tested via `pytests/test_community_centrality.py::test_leiden_cache_hit`.
+- **Community-filter parity**: centrality TVF with `community_filter=C, community_resolution=R` returns rows that are equal-set to a reference query that runs unfiltered centrality and post-filters by community membership. Tested via `test_community_filter.c::test_filter_parity`.
+- **Cross-resolution isolation**: cache entries at resolution 1.0 do not satisfy queries at resolution 0.25; the resolution-mismatch ADR's chosen behavior is consistently observed.
+- **Composability with provenance filter (G1)**: a query with both `provenance_filter` (G1) and `community_filter` (G6) returns the intersection of the two membership sets; tested for parity against an unfiltered run with both filters applied in Python.
+- **Resolution coverage**: `kg_perf` workload matrix gains at least one query shape per cached resolution (0.25, 1.0, 3.0) so the cache hit path is exercised in CI.
+
 ## Negative Measures
 
 ### Quality Bar Violations
@@ -1058,3 +1263,7 @@ Type 2 failures specific to this initiative — scenarios where the system *pass
 - **G4 query-shape drift** — LLM mutates the underlying query (e.g., adds `LIMIT N OFFSET M` where baseline has none); strategies optimize different problems but compare via Jaccard. **Negative measure**: every Result carries `query_shape_hash`; assert all results in a single (filter, query) cell share that hash; reject otherwise.
 - **G4 frontier collapses to one point** — all proposals hit the same local minimum; no diversity. **Negative measure**: track frontier-size in the ledger; if size = 1 for N > 3 iterations, orchestrator switches to diversity-injection prompt mode (per the prior-art adaptation table).
 - **G4 LLM-generated strategy mutates global module state** — `setattr` on `STRATEGIES` dict pollutes subsequent runs. **Negative measure**: every proposal exec'd in an isolated namespace under `strategies/_proposed/<sig>.py`; module-level state inspection asserts no cross-pollution.
+- **G5 SSSP cache hit returns stale `pred[]` after a single edge insertion that happens to not affect the queried source** — the generation counter ticks on any edge mutation, but the read path may treat "generation matches but my source's SSSP wasn't recomputed because the change didn't reach it" as a hit. The pred[] could be stale relative to the new graph topology even if the source's distances are unchanged. **Negative measure**: cache lookup compares the cached entry's generation strictly against `G_adj`; a tick invalidates ALL cache entries (per the architectural axiom — partial caches may live forever, but a tick still bumps the staleness comparator). Tested via `test_centrality_sssp_cache.c::test_partial_recompute_safety` which inserts an edge that doesn't touch the queried source and verifies the next read recomputes (cache miss) rather than serving the pre-tick result.
+- **G5 sampled `auto_approx` writes corrupt the cache for full-V queries** — a sampled call with seed S writes back only sqrt(N) sources; a later full-V query reads a partially-populated cache and may compute Brandes on a mix of cached + freshly-computed SSSP, with subtle ordering bugs in the back-prop. **Negative measure**: the sampling ADR (G5) resolution must explicitly handle this; tested via `test_centrality_sssp_cache.c::test_sampled_then_full_safety`.
+- **G6 community-filter silently snaps to nearest cached resolution** — a query at `community_resolution=2.5` returns rows from the cached `resolution=3.0` partition without any signal to the caller. The user thinks they're getting `2.5` semantics but they're actually getting `3.0`. **Negative measure**: the resolution-mismatch ADR's chosen behavior is enforced in code; if the chosen behavior is "snap-and-warn", the warning surfaces via the prepared statement's `sqlite3_log` channel and is observable in `pytests/test_community_centrality.py::test_resolution_mismatch_signal`.
+- **G6 community-filter and provenance-filter intersection is empty but the TVF returns the unfiltered Brandes result** — a bug in the composition order (G6 ADR) could cause one filter to be silently skipped if the other is missing or empty. **Negative measure**: explicit test that asserts an empty intersection produces zero rows, not an unfiltered fallback; tested via `test_community_filter.c::test_empty_intersection_returns_zero_rows`.
