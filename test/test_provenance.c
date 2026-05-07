@@ -223,8 +223,63 @@ TEST(test_g1_entity_mutations_propagate) {
     sqlite3_close(db);
 }
 
+/* T1.4 — entity_clusters UPDATE-rename cascade. Renaming the canonical
+ * column on a cluster must remap every provenance row that points at
+ * the old canonical. Mirrors the realistic ER workflow where a manual
+ * canonicalization fix-up needs to propagate without rebuilding the
+ * whole shadow table. */
+TEST(test_g1_canonical_rename_cascades) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = provenance_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    seed_kg_schema(db);
+
+    rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE _gii USING gii_provenance()", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Seed two chunks under different events but the same cluster, so
+     * the rename has to touch multiple rows at once. */
+    rc = sqlite3_exec(db,
+                      "INSERT INTO events(id, project_id, timestamp) VALUES "
+                      "  (1, 'proj_a', '2026-05-08T10:00:00Z'),"
+                      "  (2, 'proj_a', '2026-05-08T11:00:00Z');"
+                      "INSERT INTO entity_clusters(name, canonical) "
+                      "  VALUES ('AcmeCorp', 'Acme Corp');"
+                      "INSERT INTO entities(chunk_id, name) VALUES "
+                      "  (42, 'AcmeCorp'), (99, 'AcmeCorp');"
+                      "INSERT INTO event_message_chunks(chunk_id, event_id) VALUES "
+                      "  (42, 1), (99, 2);",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Pre-rename baseline: two rows, both under canonical = 'Acme Corp'. */
+    ASSERT_EQ_INT(2, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE canonical = 'Acme Corp'"));
+
+    /* Rename the cluster's canonical. */
+    rc = sqlite3_exec(db,
+                      "UPDATE entity_clusters SET canonical = 'Acme Corporation' "
+                      "WHERE name = 'AcmeCorp';",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Both provenance rows must now point at the new canonical, none at
+     * the old one. */
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE canonical = 'Acme Corp'"));
+    ASSERT_EQ_INT(2, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE canonical = 'Acme Corporation'"));
+
+    sqlite3_close(db);
+}
+
 void test_provenance(void) {
     RUN_TEST(test_g1_schema_creates_with_xcreate);
     RUN_TEST(test_g1_chunk_insert_populates_provenance);
     RUN_TEST(test_g1_entity_mutations_propagate);
+    RUN_TEST(test_g1_canonical_rename_cascades);
 }
