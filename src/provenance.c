@@ -177,8 +177,12 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
     if (rc != SQLITE_OK)
         return rc;
 
-    /* Group 2b: AFTER DELETE on entities. Multi-entity-per-canonical
-     * edge case is deferred to T1.7's parity check. */
+    /* Group 2b: AFTER DELETE on entities. Count-aware DELETE: only
+     * remove the provenance row if NO OTHER entity in this chunk still
+     * resolves to the same canonical (multi-entity-per-canonical
+     * scenario surfaced by T1.7's parity test). The OLD row is already
+     * gone from `entities` when the body runs, so the NOT EXISTS scan
+     * sees only the remaining entities. */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ent_ad\" "
                           "AFTER DELETE ON \"entities\" BEGIN "
                           "  DELETE FROM \"%w_provenance\" "
@@ -186,14 +190,27 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
                           "    AND chunk_id = OLD.chunk_id "
                           "    AND canonical = COALESCE("
                           "      (SELECT canonical FROM entity_clusters WHERE name = OLD.name), "
-                          "      OLD.name); " PROV_BUMP_SQL "END",
+                          "      OLD.name) "
+                          "    AND NOT EXISTS ("
+                          "      SELECT 1 FROM entities ent "
+                          "      WHERE ent.chunk_id = OLD.chunk_id "
+                          "        AND COALESCE("
+                          "              (SELECT canonical FROM entity_clusters WHERE name = ent.name), "
+                          "              ent.name) "
+                          "          = COALESCE("
+                          "              (SELECT canonical FROM entity_clusters WHERE name = OLD.name), "
+                          "              OLD.name)); " PROV_BUMP_SQL "END",
                           name, name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* Group 2c: AFTER UPDATE on entities — DELETE-of-OLD + INSERT-of-NEW. */
+    /* Group 2c: AFTER UPDATE on entities — count-aware DELETE-of-OLD
+     * (same NOT EXISTS guard as _ent_ad — if NEW.name still resolves
+     * to OLD's canonical, or any other entity does, keep the row) +
+     * INSERT-of-NEW. Single trigger body so both writes share a
+     * transaction with the originating UPDATE. */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ent_au\" "
                           "AFTER UPDATE ON \"entities\" BEGIN "
                           "  DELETE FROM \"%w_provenance\" "
@@ -201,7 +218,16 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
                           "    AND chunk_id = OLD.chunk_id "
                           "    AND canonical = COALESCE("
                           "      (SELECT canonical FROM entity_clusters WHERE name = OLD.name), "
-                          "      OLD.name); "
+                          "      OLD.name) "
+                          "    AND NOT EXISTS ("
+                          "      SELECT 1 FROM entities ent "
+                          "      WHERE ent.chunk_id = OLD.chunk_id "
+                          "        AND COALESCE("
+                          "              (SELECT canonical FROM entity_clusters WHERE name = ent.name), "
+                          "              ent.name) "
+                          "          = COALESCE("
+                          "              (SELECT canonical FROM entity_clusters WHERE name = OLD.name), "
+                          "              OLD.name)); "
                           "  INSERT OR IGNORE INTO \"%w_provenance\""
                           "    (namespace_id, chunk_id, canonical, project_id, timestamp) "
                           "  SELECT 0, NEW.chunk_id, COALESCE(ec.canonical, NEW.name), "
