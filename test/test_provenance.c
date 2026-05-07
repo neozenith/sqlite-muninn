@@ -11,6 +11,28 @@
 
 extern int provenance_register_module(sqlite3 *db);
 
+/* Mirror the upstream knowledge-graph schema referenced by the trigger
+ * definitions in docs/plans/adv-centrality-filtering.md G1.
+ *
+ * Only the columns the triggers read are declared here — kept minimal so
+ * tests stay focused on provenance behavior rather than schema fidelity. */
+static void seed_kg_schema(sqlite3 *db) {
+    const char *ddl = "CREATE TABLE events ("
+                      "  id INTEGER PRIMARY KEY,"
+                      "  project_id TEXT,"
+                      "  timestamp TEXT);"
+                      "CREATE TABLE event_message_chunks ("
+                      "  chunk_id INTEGER PRIMARY KEY,"
+                      "  event_id INTEGER);"
+                      "CREATE TABLE entities ("
+                      "  chunk_id INTEGER,"
+                      "  name TEXT);"
+                      "CREATE TABLE entity_clusters ("
+                      "  name TEXT PRIMARY KEY,"
+                      "  canonical TEXT);";
+    sqlite3_exec(db, ddl, NULL, NULL, NULL);
+}
+
 /* T1.1 — provenance_register_module + xCreate produces the shadow table
  * with schema (namespace_id, chunk_id, canonical, project_id, timestamp,
  * PRIMARY KEY (namespace_id, chunk_id, canonical)) per
@@ -52,6 +74,80 @@ TEST(test_g1_schema_creates_with_xcreate) {
     sqlite3_close(db);
 }
 
+/* T1.2 — chunk-INSERT trigger group. Inserting a row into
+ * event_message_chunks must populate _gii_provenance for every entity
+ * already attached to that chunk_id, resolving canonical names through
+ * entity_clusters when present and falling back to ent.name otherwise. */
+TEST(test_g1_chunk_insert_populates_provenance) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = provenance_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    seed_kg_schema(db);
+
+    /* CREATE VIRTUAL TABLE installs the AFTER INSERT trigger on
+     * event_message_chunks (added by T1.2 GREEN). */
+    rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE _gii USING gii_provenance()", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Seed: one event, one cluster, two entities pointing at chunk 42.
+     * The first entity has a cluster (resolved canonical); the second
+     * has no cluster (fallback to ent.name). */
+    rc = sqlite3_exec(db,
+                      "INSERT INTO events(id, project_id, timestamp) "
+                      "  VALUES (1, 'proj_a', '2026-05-08T10:00:00Z');"
+                      "INSERT INTO entity_clusters(name, canonical) "
+                      "  VALUES ('AcmeCorp', 'Acme Corporation');"
+                      "INSERT INTO entities(chunk_id, name) "
+                      "  VALUES (42, 'AcmeCorp'), (42, 'Bob');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* This insert should fire the trigger and populate two rows. */
+    rc = sqlite3_exec(db, "INSERT INTO event_message_chunks(chunk_id, event_id) VALUES (42, 1);", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Verify rows: ordered alphabetically by canonical so the assertions
+     * have a stable shape regardless of trigger emission order. */
+    sqlite3_stmt *stmt = NULL;
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT namespace_id, chunk_id, canonical, project_id, timestamp "
+                            "FROM _gii_provenance "
+                            "WHERE chunk_id = 42 "
+                            "ORDER BY canonical",
+                            -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Row 1: cluster-resolved 'Acme Corporation' */
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ROW, rc);
+    ASSERT_EQ_INT(0, sqlite3_column_int(stmt, 0));
+    ASSERT_EQ_INT(42, sqlite3_column_int(stmt, 1));
+    const char *canonical = (const char *)sqlite3_column_text(stmt, 2);
+    ASSERT(canonical != NULL && strcmp(canonical, "Acme Corporation") == 0);
+    const char *project = (const char *)sqlite3_column_text(stmt, 3);
+    ASSERT(project != NULL && strcmp(project, "proj_a") == 0);
+    const char *ts = (const char *)sqlite3_column_text(stmt, 4);
+    ASSERT(ts != NULL && strcmp(ts, "2026-05-08T10:00:00Z") == 0);
+
+    /* Row 2: name-fallback 'Bob' (no cluster) */
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_ROW, rc);
+    canonical = (const char *)sqlite3_column_text(stmt, 2);
+    ASSERT(canonical != NULL && strcmp(canonical, "Bob") == 0);
+
+    /* Exactly two rows */
+    rc = sqlite3_step(stmt);
+    ASSERT_EQ_INT(SQLITE_DONE, rc);
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+}
+
 void test_provenance(void) {
     RUN_TEST(test_g1_schema_creates_with_xcreate);
+    RUN_TEST(test_g1_chunk_insert_populates_provenance);
 }
