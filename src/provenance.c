@@ -79,13 +79,34 @@ static int prov_create_shadow_tables(sqlite3 *db, const char *name) {
                           name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Config table — holds the G_prov generation counter (TEXT-typed
+     * value column matches graph_adjacency's convention). */
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_config\" "
+                          "(key TEXT PRIMARY KEY, value TEXT)",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    sql = sqlite3_mprintf("INSERT OR IGNORE INTO \"%w_config\"(key, value) "
+                          "VALUES ('generation', '0')",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
     return rc;
 }
 
 static void prov_drop_shadow_tables(sqlite3 *db, const char *name) {
-    char *sql = sqlite3_mprintf("DROP TABLE IF EXISTS \"%w_provenance\"", name);
-    sqlite3_exec(db, sql, NULL, NULL, NULL);
-    sqlite3_free(sql);
+    const char *suffixes[] = {"_provenance", "_config"};
+    for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
+        char *sql = sqlite3_mprintf("DROP TABLE IF EXISTS \"%w%s\"", name, suffixes[i]);
+        sqlite3_exec(db, sql, NULL, NULL, NULL);
+        sqlite3_free(sql);
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -95,9 +116,28 @@ static void prov_drop_shadow_tables(sqlite3 *db, const char *name) {
  * _<name>_provenance for every entity already attached to that chunk.
  * canonical names resolve through entity_clusters when present, fall
  * back to ent.name otherwise. Identifier %w_emc_ai = "emc + after-insert".
- * Groups 2..4 land in T1.3..T1.5 (entity mutations, cluster rename, full
- * cluster rebuild).
+ *
+ * Group 2 (T1.3): AFTER INSERT/DELETE/UPDATE on entities (_ent_ai,
+ * _ent_ad, _ent_au).
+ *
+ * Group 3 (T1.4): AFTER UPDATE OF canonical on entity_clusters
+ * (_ec_au). Canonical rename cascade.
+ *
+ * Group 4 (T1.5): AFTER INSERT/DELETE on entity_clusters (_ec_ai,
+ * _ec_ad). Cluster lifecycle remap.
+ *
+ * Every trigger body ends with PROV_BUMP_SQL which increments the
+ * G_prov generation counter in _<name>_config (T1.6). The counter
+ * over-invalidates: it ticks on every trigger fire even when zero
+ * rows changed, so caches err on the side of recompute over stale
+ * read. Each trigger string therefore takes one extra %w arg for
+ * the _<name>_config table.
  * ═══════════════════════════════════════════════════════════════ */
+
+#define PROV_BUMP_SQL                                                                                                  \
+    "  UPDATE \"%w_config\" "                                                                                          \
+    "  SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) "                                                          \
+    "  WHERE key = 'generation'; "
 
 static int prov_install_triggers(sqlite3 *db, const char *name) {
     char *sql;
@@ -113,17 +153,14 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
                           "  FROM entities ent "
                           "  JOIN events e ON e.id = NEW.event_id "
                           "  LEFT JOIN entity_clusters ec ON ec.name = ent.name "
-                          "  WHERE ent.chunk_id = NEW.chunk_id; "
-                          "END",
-                          name, name);
+                          "  WHERE ent.chunk_id = NEW.chunk_id; " PROV_BUMP_SQL "END",
+                          name, name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* Group 2a: AFTER INSERT on entities — emit one provenance row by
-     * joining the chunk's event for project_id/timestamp and resolving
-     * canonical through entity_clusters. */
+    /* Group 2a: AFTER INSERT on entities. */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ent_ai\" "
                           "AFTER INSERT ON \"entities\" BEGIN "
                           "  INSERT OR IGNORE INTO \"%w_provenance\""
@@ -133,19 +170,15 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
                           "  FROM event_message_chunks emc "
                           "  JOIN events e ON e.id = emc.event_id "
                           "  LEFT JOIN entity_clusters ec ON ec.name = NEW.name "
-                          "  WHERE emc.chunk_id = NEW.chunk_id; "
-                          "END",
-                          name, name);
+                          "  WHERE emc.chunk_id = NEW.chunk_id; " PROV_BUMP_SQL "END",
+                          name, name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* Group 2b: AFTER DELETE on entities — drop the corresponding
-     * provenance row by recomputing the canonical the deleted entity
-     * mapped to. Multi-entity-per-canonical edge case (two entities in
-     * the same chunk resolve to the same canonical) is deferred to
-     * T1.7's parity check. */
+    /* Group 2b: AFTER DELETE on entities. Multi-entity-per-canonical
+     * edge case is deferred to T1.7's parity check. */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ent_ad\" "
                           "AFTER DELETE ON \"entities\" BEGIN "
                           "  DELETE FROM \"%w_provenance\" "
@@ -153,18 +186,14 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
                           "    AND chunk_id = OLD.chunk_id "
                           "    AND canonical = COALESCE("
                           "      (SELECT canonical FROM entity_clusters WHERE name = OLD.name), "
-                          "      OLD.name); "
-                          "END",
-                          name, name);
+                          "      OLD.name); " PROV_BUMP_SQL "END",
+                          name, name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* Group 2c: AFTER UPDATE on entities — DELETE-of-OLD followed by
-     * INSERT-of-NEW (mirrors graph_adjacency.c:240-251's OLD/NEW
-     * symmetry). Combined into one trigger body so the two writes share
-     * a transaction with the originating UPDATE. */
+    /* Group 2c: AFTER UPDATE on entities — DELETE-of-OLD + INSERT-of-NEW. */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ent_au\" "
                           "AFTER UPDATE ON \"entities\" BEGIN "
                           "  DELETE FROM \"%w_provenance\" "
@@ -180,58 +209,46 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
                           "  FROM event_message_chunks emc "
                           "  JOIN events e ON e.id = emc.event_id "
                           "  LEFT JOIN entity_clusters ec ON ec.name = NEW.name "
-                          "  WHERE emc.chunk_id = NEW.chunk_id; "
-                          "END",
-                          name, name, name);
+                          "  WHERE emc.chunk_id = NEW.chunk_id; " PROV_BUMP_SQL "END",
+                          name, name, name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
         return rc;
 
     /* Group 3: AFTER UPDATE OF canonical on entity_clusters — canonical
-     * rename cascade. Single SQL UPDATE remaps every provenance row that
-     * was previously resolved to OLD.canonical. Column-scoped (UPDATE OF
-     * canonical) so renaming the cluster's name doesn't fire — provenance
-     * rows aren't keyed on cluster name. */
+     * rename cascade. Column-scoped so cluster name renames don't fire. */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ec_au\" "
                           "AFTER UPDATE OF canonical ON \"entity_clusters\" BEGIN "
                           "  UPDATE \"%w_provenance\" "
                           "  SET canonical = NEW.canonical "
-                          "  WHERE namespace_id = 0 AND canonical = OLD.canonical; "
-                          "END",
-                          name, name);
+                          "  WHERE namespace_id = 0 AND canonical = OLD.canonical; " PROV_BUMP_SQL "END",
+                          name, name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* Group 4a: AFTER INSERT on entity_clusters — when a new cluster
-     * arrives, any provenance row whose canonical equals the cluster's
-     * raw name (i.e. was stored via COALESCE fallback before the cluster
-     * existed) is remapped to NEW.canonical. */
+    /* Group 4a: AFTER INSERT on entity_clusters — raw-name → canonical
+     * remap (catches entities inserted before the cluster existed). */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ec_ai\" "
                           "AFTER INSERT ON \"entity_clusters\" BEGIN "
                           "  UPDATE \"%w_provenance\" "
                           "  SET canonical = NEW.canonical "
-                          "  WHERE namespace_id = 0 AND canonical = NEW.name; "
-                          "END",
-                          name, name);
+                          "  WHERE namespace_id = 0 AND canonical = NEW.name; " PROV_BUMP_SQL "END",
+                          name, name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
         return rc;
 
-    /* Group 4b: AFTER DELETE on entity_clusters — symmetric inverse of
-     * Group 4a. Remap rows whose canonical equals OLD.canonical back to
-     * OLD.name so they fall back to raw mode (which is what a fresh
-     * INSERT entity trigger would store with no cluster present). */
+    /* Group 4b: AFTER DELETE on entity_clusters — symmetric inverse. */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ec_ad\" "
                           "AFTER DELETE ON \"entity_clusters\" BEGIN "
                           "  UPDATE \"%w_provenance\" "
                           "  SET canonical = OLD.name "
-                          "  WHERE namespace_id = 0 AND canonical = OLD.canonical; "
-                          "END",
-                          name, name);
+                          "  WHERE namespace_id = 0 AND canonical = OLD.canonical; " PROV_BUMP_SQL "END",
+                          name, name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     return rc;
