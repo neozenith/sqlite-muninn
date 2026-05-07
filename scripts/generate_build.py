@@ -55,6 +55,7 @@ TEST_LINK_SOURCES = [
     "src/llama_embed.c",
     "src/llama_chat.c",
     "src/string_sim.c",
+    "src/provenance.c",
 ]
 
 # ── CMake flags ──────────────────────────────────────────────────────

@@ -3,9 +3,18 @@
  *
  * Each test module provides a run function that returns pass/fail counts.
  * We aggregate and report results.
+ *
+ * CLI:
+ *   test_runner [--filter=<prefix>]
+ *
+ * --filter=<prefix> restricts execution to tests whose name (the symbol passed
+ * to RUN_TEST) starts with <prefix>. Used by `make test-g1` etc. to run only
+ * the gap-tagged tests for a single gap (see docs/plans/adv-centrality-filtering.md
+ * Execution Plan, "Test tags").
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sqlite3.h>
 
 /*
@@ -30,6 +39,7 @@ static int total_passed = 0;
 static int total_failed = 0;
 static int cur_failed = 0; /* tracks if current test has failed */
 static const char *current_test = NULL;
+static const char *g_filter = NULL; /* --filter=<prefix>; NULL = run all */
 
 void test_begin(const char *name) {
     current_test = name;
@@ -51,6 +61,13 @@ int test_failed_flag(void) {
     return cur_failed;
 }
 
+int test_should_run(const char *name) {
+    if (g_filter == NULL) {
+        return 1;
+    }
+    return strncmp(name, g_filter, strlen(g_filter)) == 0;
+}
+
 /* Assertion macros (defined in test_main.h but inlined here for simplicity) */
 
 /* External test suites */
@@ -64,8 +81,16 @@ extern void test_graph_selector(void);
 extern void test_llama_embed(void);
 extern void test_llama_chat(void);
 extern void test_string_sim(void);
+extern void test_provenance(void);
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* Parse --filter=<prefix> */
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--filter=", 9) == 0) {
+            g_filter = argv[i] + 9;
+        }
+    }
+
     /* Capture the real sqlite3_api pointer so extension code works */
     sqlite3_auto_extension((void (*)(void))capture_sqlite3_api);
     {
@@ -75,7 +100,11 @@ int main(void) {
     }
     sqlite3_reset_auto_extension();
 
-    printf("=== sqlite-muninn test suite ===\n\n");
+    printf("=== sqlite-muninn test suite ===\n");
+    if (g_filter) {
+        printf("(filter: %s*)\n", g_filter);
+    }
+    printf("\n");
 
     printf("[vec_math]\n");
     test_vec_math();
@@ -106,6 +135,9 @@ int main(void) {
 
     printf("\n[string_sim]\n");
     test_string_sim();
+
+    printf("\n[provenance]\n");
+    test_provenance();
 
     printf("\n=== Results: %d passed, %d failed ===\n", total_passed, total_failed);
 
