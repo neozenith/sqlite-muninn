@@ -47,6 +47,26 @@ static int count_rows(sqlite3 *db, const char *sql) {
     return n;
 }
 
+/* Read the provenance VT's generation counter from its _config shadow.
+ * Returns -1 if the row is missing or the query fails. */
+static sqlite3_int64 get_generation(sqlite3 *db, const char *vt_name) {
+    char *sql = sqlite3_mprintf("SELECT CAST(value AS INTEGER) FROM \"%w_config\" "
+                                "WHERE key = 'generation'",
+                                vt_name);
+    if (!sql)
+        return -1;
+    sqlite3_stmt *stmt = NULL;
+    sqlite3_int64 g = -1;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            g = sqlite3_column_int64(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_free(sql);
+    return g;
+}
+
 /* T1.1 — provenance_register_module + xCreate produces the shadow table
  * with schema (namespace_id, chunk_id, canonical, project_id, timestamp,
  * PRIMARY KEY (namespace_id, chunk_id, canonical)) per
@@ -339,10 +359,84 @@ TEST(test_g1_cluster_rebuild_cascade) {
     sqlite3_close(db);
 }
 
+/* T1.6 — G_prov generation tick on every change. Each mutation that
+ * fires a provenance trigger must strictly increment the generation
+ * counter persisted in _<vt>_config. The counter is the cache-invalidation
+ * hook G2 (top-K result cache) and G7 (community filter) read.
+ *
+ * Walks all seven trigger groups in order so non-monotonic ticks fail at
+ * the offending mutation, not at a final aggregate check. */
+TEST(test_g1_generation_strictly_increases) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = provenance_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    seed_kg_schema(db);
+
+    rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE _gii USING gii_provenance()", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    sqlite3_int64 g0 = get_generation(db, "_gii");
+    ASSERT(g0 >= 0); /* xCreate must initialize the counter */
+
+    /* (1) AFTER INSERT on event_message_chunks fires _emc_ai. Generation
+     * ticks even though no entities exist yet — over-invalidate over
+     * under-invalidate. */
+    sqlite3_exec(db,
+                 "INSERT INTO events(id, project_id, timestamp) "
+                 "  VALUES (1, 'proj_a', '2026-05-08T10:00:00Z');"
+                 "INSERT INTO event_message_chunks(chunk_id, event_id) "
+                 "  VALUES (42, 1);",
+                 NULL, NULL, NULL);
+    sqlite3_int64 g1 = get_generation(db, "_gii");
+    ASSERT(g1 > g0);
+
+    /* (2) AFTER INSERT on entities fires _ent_ai. */
+    sqlite3_exec(db, "INSERT INTO entities(chunk_id, name) VALUES (42, 'AcmeCorp');", NULL, NULL, NULL);
+    sqlite3_int64 g2 = get_generation(db, "_gii");
+    ASSERT(g2 > g1);
+
+    /* (3) AFTER INSERT on entity_clusters fires _ec_ai (raw → canonical
+     * remap). */
+    sqlite3_exec(db, "INSERT INTO entity_clusters(name, canonical) VALUES ('AcmeCorp', 'Acme Corp');", NULL, NULL,
+                 NULL);
+    sqlite3_int64 g3 = get_generation(db, "_gii");
+    ASSERT(g3 > g2);
+
+    /* (4) AFTER UPDATE OF canonical on entity_clusters fires _ec_au
+     * (canonical rename). */
+    sqlite3_exec(db, "UPDATE entity_clusters SET canonical = 'Acme Corporation' WHERE name = 'AcmeCorp';", NULL, NULL,
+                 NULL);
+    sqlite3_int64 g4 = get_generation(db, "_gii");
+    ASSERT(g4 > g3);
+
+    /* (5) AFTER UPDATE on entities fires _ent_au (DELETE-OLD + INSERT-NEW). */
+    sqlite3_exec(db, "UPDATE entities SET name = 'Bob' WHERE chunk_id = 42 AND name = 'AcmeCorp';", NULL, NULL, NULL);
+    sqlite3_int64 g5 = get_generation(db, "_gii");
+    ASSERT(g5 > g4);
+
+    /* (6) AFTER DELETE on entities fires _ent_ad. */
+    sqlite3_exec(db, "DELETE FROM entities WHERE chunk_id = 42 AND name = 'Bob';", NULL, NULL, NULL);
+    sqlite3_int64 g6 = get_generation(db, "_gii");
+    ASSERT(g6 > g5);
+
+    /* (7) AFTER DELETE on entity_clusters fires _ec_ad (canonical → raw
+     * revert). */
+    sqlite3_exec(db, "DELETE FROM entity_clusters WHERE name = 'AcmeCorp';", NULL, NULL, NULL);
+    sqlite3_int64 g7 = get_generation(db, "_gii");
+    ASSERT(g7 > g6);
+
+    sqlite3_close(db);
+}
+
 void test_provenance(void) {
     RUN_TEST(test_g1_schema_creates_with_xcreate);
     RUN_TEST(test_g1_chunk_insert_populates_provenance);
     RUN_TEST(test_g1_entity_mutations_propagate);
     RUN_TEST(test_g1_canonical_rename_cascades);
     RUN_TEST(test_g1_cluster_rebuild_cascade);
+    RUN_TEST(test_g1_generation_strictly_increases);
 }
