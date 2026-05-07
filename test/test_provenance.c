@@ -45,6 +45,12 @@ TEST(test_g1_schema_creates_with_xcreate) {
     rc = provenance_register_module(db);
     ASSERT_EQ_INT(SQLITE_OK, rc);
 
+    /* Upstream KG schema must exist before xCreate — the trigger installer
+     * (T1.2) references event_message_chunks / entities / events /
+     * entity_clusters by name and SQLite validates source tables at
+     * trigger-creation time. */
+    seed_kg_schema(db);
+
     char *errmsg = NULL;
     rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE _gii USING gii_provenance()", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {

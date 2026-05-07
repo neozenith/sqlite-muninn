@@ -89,6 +89,48 @@ static void prov_drop_shadow_tables(sqlite3 *db, const char *name) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * Trigger Management
+ *
+ * Group 1 (T1.2): AFTER INSERT on event_message_chunks back-fills
+ * _<name>_provenance for every entity already attached to that chunk.
+ * canonical names resolve through entity_clusters when present, fall
+ * back to ent.name otherwise. Identifier %w_emc_ai = "emc + after-insert".
+ * Groups 2..4 land in T1.3..T1.5 (entity mutations, cluster rename, full
+ * cluster rebuild).
+ * ═══════════════════════════════════════════════════════════════ */
+
+static int prov_install_triggers(sqlite3 *db, const char *name) {
+    char *sql;
+    int rc;
+
+    /* Group 1: AFTER INSERT on event_message_chunks. */
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_emc_ai\" "
+                          "AFTER INSERT ON \"event_message_chunks\" BEGIN "
+                          "  INSERT OR IGNORE INTO \"%w_provenance\""
+                          "    (namespace_id, chunk_id, canonical, project_id, timestamp) "
+                          "  SELECT 0, NEW.chunk_id, COALESCE(ec.canonical, ent.name), "
+                          "         e.project_id, e.timestamp "
+                          "  FROM entities ent "
+                          "  JOIN events e ON e.id = NEW.event_id "
+                          "  LEFT JOIN entity_clusters ec ON ec.name = ent.name "
+                          "  WHERE ent.chunk_id = NEW.chunk_id; "
+                          "END",
+                          name, name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    return rc;
+}
+
+static void prov_remove_triggers(sqlite3 *db, const char *name) {
+    const char *suffixes[] = {"_emc_ai"};
+    for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
+        char *sql = sqlite3_mprintf("DROP TRIGGER IF EXISTS \"%w%s\"", name, suffixes[i]);
+        sqlite3_exec(db, sql, NULL, NULL, NULL);
+        sqlite3_free(sql);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * Module Methods
  * ═══════════════════════════════════════════════════════════════ */
 
@@ -128,6 +170,19 @@ static int prov_init(sqlite3 *db, void *pAux, int argc, const char *const *argv,
             sqlite3_free(vtab);
             return rc;
         }
+
+        /* Install triggers on upstream KG tables. event_message_chunks /
+         * entities / entity_clusters / events must already exist — the
+         * trigger references them by name and SQLite validates source
+         * tables at trigger-creation time. */
+        rc = prov_install_triggers(db, argv[2]);
+        if (rc != SQLITE_OK) {
+            *pzErr = sqlite3_mprintf("gii_provenance: failed to install triggers (%s)", sqlite3_errmsg(db));
+            prov_drop_shadow_tables(db, argv[2]);
+            sqlite3_free(vtab->vtab_name);
+            sqlite3_free(vtab);
+            return rc;
+        }
     }
 
     *ppVTab = &vtab->base;
@@ -153,6 +208,7 @@ static int prov_xDisconnect(sqlite3_vtab *pVTab) {
 
 static int prov_xDestroy(sqlite3_vtab *pVTab) {
     ProvVtab *vtab = (ProvVtab *)pVTab;
+    prov_remove_triggers(vtab->db, vtab->vtab_name);
     prov_drop_shadow_tables(vtab->db, vtab->vtab_name);
     return prov_xDisconnect(pVTab);
 }
