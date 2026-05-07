@@ -185,11 +185,28 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
                           name, name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Group 3: AFTER UPDATE OF canonical on entity_clusters — canonical
+     * rename cascade. Single SQL UPDATE remaps every provenance row that
+     * was previously resolved to OLD.canonical. Column-scoped (UPDATE OF
+     * canonical) so renaming the cluster's name doesn't fire — provenance
+     * rows aren't keyed on cluster name. */
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ec_au\" "
+                          "AFTER UPDATE OF canonical ON \"entity_clusters\" BEGIN "
+                          "  UPDATE \"%w_provenance\" "
+                          "  SET canonical = NEW.canonical "
+                          "  WHERE namespace_id = 0 AND canonical = OLD.canonical; "
+                          "END",
+                          name, name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
     return rc;
 }
 
 static void prov_remove_triggers(sqlite3 *db, const char *name) {
-    const char *suffixes[] = {"_emc_ai", "_ent_ai", "_ent_ad", "_ent_au"};
+    const char *suffixes[] = {"_emc_ai", "_ent_ai", "_ent_ad", "_ent_au", "_ec_au"};
     for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
         char *sql = sqlite3_mprintf("DROP TRIGGER IF EXISTS \"%w%s\"", name, suffixes[i]);
         sqlite3_exec(db, sql, NULL, NULL, NULL);
