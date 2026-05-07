@@ -33,6 +33,20 @@ static void seed_kg_schema(sqlite3 *db) {
     sqlite3_exec(db, ddl, NULL, NULL, NULL);
 }
 
+/* Count rows returned by sql. Returns -1 on prepare/step failure. */
+static int count_rows(sqlite3 *db, const char *sql) {
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    int n = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        n = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return n;
+}
+
 /* T1.1 — provenance_register_module + xCreate produces the shadow table
  * with schema (namespace_id, chunk_id, canonical, project_id, timestamp,
  * PRIMARY KEY (namespace_id, chunk_id, canonical)) per
@@ -153,7 +167,64 @@ TEST(test_g1_chunk_insert_populates_provenance) {
     sqlite3_close(db);
 }
 
+/* T1.3 — entity INSERT/DELETE/UPDATE trigger group. Mutating the
+ * `entities` table after the chunk is already in event_message_chunks
+ * must keep _gii_provenance in sync without a manual rebuild. */
+TEST(test_g1_entity_mutations_propagate) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = provenance_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    seed_kg_schema(db);
+
+    rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE _gii USING gii_provenance()", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Setup: event + cluster + chunk (no entities yet). The chunk-INSERT
+     * trigger from T1.2 fires here but emits zero rows — there are no
+     * entities to project. */
+    rc = sqlite3_exec(db,
+                      "INSERT INTO events(id, project_id, timestamp) "
+                      "  VALUES (1, 'proj_a', '2026-05-08T10:00:00Z');"
+                      "INSERT INTO entity_clusters(name, canonical) "
+                      "  VALUES ('AcmeCorp', 'Acme Corp');"
+                      "INSERT INTO event_message_chunks(chunk_id, event_id) "
+                      "  VALUES (42, 1);",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance"));
+
+    /* INSERT entity → provenance row appears, canonical resolved through
+     * entity_clusters. */
+    rc = sqlite3_exec(db, "INSERT INTO entities(chunk_id, name) VALUES (42, 'AcmeCorp');", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE chunk_id = 42 AND canonical = 'Acme Corp' "
+                                    "  AND project_id = 'proj_a'"));
+
+    /* UPDATE entity name → old provenance row removed, new row appears.
+     * The new name 'Bob' has no cluster, so it falls through to ent.name. */
+    rc = sqlite3_exec(db, "UPDATE entities SET name = 'Bob' WHERE chunk_id = 42 AND name = 'AcmeCorp';", NULL, NULL,
+                      NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(0,
+                  count_rows(db, "SELECT COUNT(*) FROM _gii_provenance WHERE canonical = 'Acme Corp'"));
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
+                                    "WHERE chunk_id = 42 AND canonical = 'Bob'"));
+
+    /* DELETE entity → provenance row removed; provenance is back to empty. */
+    rc = sqlite3_exec(db, "DELETE FROM entities WHERE chunk_id = 42 AND name = 'Bob';", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance"));
+
+    sqlite3_close(db);
+}
+
 void test_provenance(void) {
     RUN_TEST(test_g1_schema_creates_with_xcreate);
     RUN_TEST(test_g1_chunk_insert_populates_provenance);
+    RUN_TEST(test_g1_entity_mutations_propagate);
 }
