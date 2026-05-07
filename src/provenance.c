@@ -202,11 +202,43 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
                           name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Group 4a: AFTER INSERT on entity_clusters — when a new cluster
+     * arrives, any provenance row whose canonical equals the cluster's
+     * raw name (i.e. was stored via COALESCE fallback before the cluster
+     * existed) is remapped to NEW.canonical. */
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ec_ai\" "
+                          "AFTER INSERT ON \"entity_clusters\" BEGIN "
+                          "  UPDATE \"%w_provenance\" "
+                          "  SET canonical = NEW.canonical "
+                          "  WHERE namespace_id = 0 AND canonical = NEW.name; "
+                          "END",
+                          name, name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Group 4b: AFTER DELETE on entity_clusters — symmetric inverse of
+     * Group 4a. Remap rows whose canonical equals OLD.canonical back to
+     * OLD.name so they fall back to raw mode (which is what a fresh
+     * INSERT entity trigger would store with no cluster present). */
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ec_ad\" "
+                          "AFTER DELETE ON \"entity_clusters\" BEGIN "
+                          "  UPDATE \"%w_provenance\" "
+                          "  SET canonical = OLD.name "
+                          "  WHERE namespace_id = 0 AND canonical = OLD.canonical; "
+                          "END",
+                          name, name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
     return rc;
 }
 
 static void prov_remove_triggers(sqlite3 *db, const char *name) {
-    const char *suffixes[] = {"_emc_ai", "_ent_ai", "_ent_ad", "_ent_au", "_ec_au"};
+    const char *suffixes[] = {"_emc_ai", "_ent_ai", "_ent_ad", "_ent_au", "_ec_au", "_ec_ai", "_ec_ad"};
     for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
         char *sql = sqlite3_mprintf("DROP TRIGGER IF EXISTS \"%w%s\"", name, suffixes[i]);
         sqlite3_exec(db, sql, NULL, NULL, NULL);
