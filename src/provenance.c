@@ -118,11 +118,78 @@ static int prov_install_triggers(sqlite3 *db, const char *name) {
                           name, name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Group 2a: AFTER INSERT on entities — emit one provenance row by
+     * joining the chunk's event for project_id/timestamp and resolving
+     * canonical through entity_clusters. */
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ent_ai\" "
+                          "AFTER INSERT ON \"entities\" BEGIN "
+                          "  INSERT OR IGNORE INTO \"%w_provenance\""
+                          "    (namespace_id, chunk_id, canonical, project_id, timestamp) "
+                          "  SELECT 0, NEW.chunk_id, COALESCE(ec.canonical, NEW.name), "
+                          "         e.project_id, e.timestamp "
+                          "  FROM event_message_chunks emc "
+                          "  JOIN events e ON e.id = emc.event_id "
+                          "  LEFT JOIN entity_clusters ec ON ec.name = NEW.name "
+                          "  WHERE emc.chunk_id = NEW.chunk_id; "
+                          "END",
+                          name, name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Group 2b: AFTER DELETE on entities — drop the corresponding
+     * provenance row by recomputing the canonical the deleted entity
+     * mapped to. Multi-entity-per-canonical edge case (two entities in
+     * the same chunk resolve to the same canonical) is deferred to
+     * T1.7's parity check. */
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ent_ad\" "
+                          "AFTER DELETE ON \"entities\" BEGIN "
+                          "  DELETE FROM \"%w_provenance\" "
+                          "  WHERE namespace_id = 0 "
+                          "    AND chunk_id = OLD.chunk_id "
+                          "    AND canonical = COALESCE("
+                          "      (SELECT canonical FROM entity_clusters WHERE name = OLD.name), "
+                          "      OLD.name); "
+                          "END",
+                          name, name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Group 2c: AFTER UPDATE on entities — DELETE-of-OLD followed by
+     * INSERT-of-NEW (mirrors graph_adjacency.c:240-251's OLD/NEW
+     * symmetry). Combined into one trigger body so the two writes share
+     * a transaction with the originating UPDATE. */
+    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ent_au\" "
+                          "AFTER UPDATE ON \"entities\" BEGIN "
+                          "  DELETE FROM \"%w_provenance\" "
+                          "  WHERE namespace_id = 0 "
+                          "    AND chunk_id = OLD.chunk_id "
+                          "    AND canonical = COALESCE("
+                          "      (SELECT canonical FROM entity_clusters WHERE name = OLD.name), "
+                          "      OLD.name); "
+                          "  INSERT OR IGNORE INTO \"%w_provenance\""
+                          "    (namespace_id, chunk_id, canonical, project_id, timestamp) "
+                          "  SELECT 0, NEW.chunk_id, COALESCE(ec.canonical, NEW.name), "
+                          "         e.project_id, e.timestamp "
+                          "  FROM event_message_chunks emc "
+                          "  JOIN events e ON e.id = emc.event_id "
+                          "  LEFT JOIN entity_clusters ec ON ec.name = NEW.name "
+                          "  WHERE emc.chunk_id = NEW.chunk_id; "
+                          "END",
+                          name, name, name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
     return rc;
 }
 
 static void prov_remove_triggers(sqlite3 *db, const char *name) {
-    const char *suffixes[] = {"_emc_ai"};
+    const char *suffixes[] = {"_emc_ai", "_ent_ai", "_ent_ad", "_ent_au"};
     for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
         char *sql = sqlite3_mprintf("DROP TRIGGER IF EXISTS \"%w%s\"", name, suffixes[i]);
         sqlite3_exec(db, sql, NULL, NULL, NULL);
