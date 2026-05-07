@@ -47,6 +47,33 @@ static int count_rows(sqlite3 *db, const char *sql) {
     return n;
 }
 
+/* Symmetric-difference count between _gii_provenance and the
+ * hand-rolled 4-way JOIN that mirrors payload.py:_allowed_canonicals.
+ * Zero means perfect parity. */
+static int parity_diff_count(sqlite3 *db) {
+    const char *sql = "SELECT "
+                      "(SELECT COUNT(*) FROM ("
+                      "  SELECT * FROM _gii_provenance "
+                      "  EXCEPT "
+                      "  SELECT 0, emc.chunk_id, COALESCE(ec.canonical, ent.name), "
+                      "         e.project_id, e.timestamp "
+                      "  FROM entities ent "
+                      "  JOIN event_message_chunks emc ON emc.chunk_id = ent.chunk_id "
+                      "  JOIN events e ON e.id = emc.event_id "
+                      "  LEFT JOIN entity_clusters ec ON ec.name = ent.name)) "
+                      "+ "
+                      "(SELECT COUNT(*) FROM ("
+                      "  SELECT 0, emc.chunk_id, COALESCE(ec.canonical, ent.name), "
+                      "         e.project_id, e.timestamp "
+                      "  FROM entities ent "
+                      "  JOIN event_message_chunks emc ON emc.chunk_id = ent.chunk_id "
+                      "  JOIN events e ON e.id = emc.event_id "
+                      "  LEFT JOIN entity_clusters ec ON ec.name = ent.name "
+                      "  EXCEPT "
+                      "  SELECT * FROM _gii_provenance))";
+    return count_rows(db, sql);
+}
+
 /* Read the provenance VT's generation counter from its _config shadow.
  * Returns -1 if the row is missing or the query fails. */
 static sqlite3_int64 get_generation(sqlite3 *db, const char *vt_name) {
@@ -432,6 +459,77 @@ TEST(test_g1_generation_strictly_increases) {
     sqlite3_close(db);
 }
 
+/* T1.7 — row parity between the maintained _gii_provenance shadow and
+ * the canonical 4-way JOIN over events × event_message_chunks ×
+ * entities × entity_clusters. The trigger maintenance must exactly
+ * reproduce what a hand-rolled JOIN would compute, otherwise the
+ * shadow is silently wrong and any downstream cache (G2, G7) inherits
+ * that wrongness.
+ *
+ * Fixture exercises the multi-entity-per-canonical case deferred
+ * during T1.3: two clusters share the same canonical, and two
+ * entities under one chunk both resolve through them. PK constraint
+ * collapses them to one provenance row (matching 4-way JOIN's set
+ * semantics). Deleting one of those entities is what surfaces the
+ * simple-DELETE bug — the other entity still resolves to that
+ * canonical so the row should remain. */
+TEST(test_g1_provenance_parity_with_4way_join) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = provenance_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    seed_kg_schema(db);
+
+    rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE _gii USING gii_provenance()", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Non-trivial KG fixture across two events / three chunks / five
+     * entities / three clusters. Two clusters intentionally share
+     * canonical = 'Acme Corp' so chunk 100 has two entities mapping
+     * to the same canonical — exposing the count-aware-DELETE
+     * requirement. */
+    rc = sqlite3_exec(db,
+                      "INSERT INTO events(id, project_id, timestamp) VALUES "
+                      "  (1, 'proj_a', '2026-05-08T10:00:00Z'),"
+                      "  (2, 'proj_b', '2026-05-08T11:00:00Z');"
+                      "INSERT INTO entity_clusters(name, canonical) VALUES "
+                      "  ('AcmeCorp',    'Acme Corp'),"
+                      "  ('AcmeCorpInc', 'Acme Corp'),"
+                      "  ('Charlie',     'C-Charlie');"
+                      "INSERT INTO event_message_chunks(chunk_id, event_id) VALUES "
+                      "  (100, 1), (101, 2), (102, 2);"
+                      "INSERT INTO entities(chunk_id, name) VALUES "
+                      "  (100, 'AcmeCorp'),"
+                      "  (100, 'AcmeCorpInc')," /* same canonical as above */
+                      "  (101, 'AcmeCorp'),"
+                      "  (101, 'Bob')," /* no cluster — name fallback */
+                      "  (102, 'Charlie');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* After all inserts: provenance must match the 4-way JOIN exactly. */
+    ASSERT_EQ_INT(0, parity_diff_count(db));
+
+    /* DELETE one of the two entities sharing 'Acme Corp' on chunk 100.
+     * The 4-way JOIN still includes (0, 100, 'Acme Corp', ...) because
+     * the OTHER entity ('AcmeCorp') still resolves there. The trigger
+     * must keep the provenance row alive — count-aware DELETE. */
+    rc = sqlite3_exec(db, "DELETE FROM entities WHERE chunk_id = 100 AND name = 'AcmeCorpInc';", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(0, parity_diff_count(db));
+
+    /* Sanity: deleting the last entity that maps to a canonical does
+     * remove the provenance row. */
+    rc = sqlite3_exec(db, "DELETE FROM entities WHERE chunk_id = 101 AND name = 'Bob';", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(0, parity_diff_count(db));
+
+    sqlite3_close(db);
+}
+
 void test_provenance(void) {
     RUN_TEST(test_g1_schema_creates_with_xcreate);
     RUN_TEST(test_g1_chunk_insert_populates_provenance);
@@ -439,4 +537,5 @@ void test_provenance(void) {
     RUN_TEST(test_g1_canonical_rename_cascades);
     RUN_TEST(test_g1_cluster_rebuild_cascade);
     RUN_TEST(test_g1_generation_strictly_increases);
+    RUN_TEST(test_g1_provenance_parity_with_4way_join);
 }
