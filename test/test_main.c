@@ -85,6 +85,7 @@ extern void test_provenance(void);
 extern void test_gii_sssp_shadow(void);
 extern void test_gii_communities_shadow(void);
 extern void test_gii_communities_consume(void);
+extern void test_topk_cache(void);
 
 int main(int argc, char **argv) {
     /* Parse --filter=<prefix> */
@@ -150,6 +151,9 @@ int main(int argc, char **argv) {
 
     printf("\n[gii_communities_consume]\n");
     test_gii_communities_consume();
+
+    printf("\n[topk_cache]\n");
+    test_topk_cache();
 
     printf("\n=== Results: %d passed, %d failed ===\n", total_passed, total_failed);
 
