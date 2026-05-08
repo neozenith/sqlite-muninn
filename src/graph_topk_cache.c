@@ -168,3 +168,32 @@ unsigned int topk_signature(const char *provenance_table, const char *filter_pre
     free(canonical);
     return h;
 }
+
+/* G2 T2.2 — cache put/get STUBS. Real implementations land in T2.2 GREEN. */
+
+int topk_cache_put(sqlite3 *db, unsigned int signature, const char *seeds_json, const char *nodes_json,
+                   const char *edges_json, int64_t edge_generation, int64_t prov_generation) {
+    (void)db;
+    (void)signature;
+    (void)seeds_json;
+    (void)nodes_json;
+    (void)edges_json;
+    (void)edge_generation;
+    (void)prov_generation;
+    return SQLITE_ERROR;
+}
+
+int topk_cache_get(sqlite3 *db, unsigned int signature, int64_t edge_generation, int64_t prov_generation,
+                   char **out_seeds_json, char **out_nodes_json, char **out_edges_json) {
+    (void)db;
+    (void)signature;
+    (void)edge_generation;
+    (void)prov_generation;
+    if (out_seeds_json)
+        *out_seeds_json = NULL;
+    if (out_nodes_json)
+        *out_nodes_json = NULL;
+    if (out_edges_json)
+        *out_edges_json = NULL;
+    return SQLITE_ERROR;
+}
