@@ -158,33 +158,32 @@ Gap G is DONE iff:
 2. `make test-g<N>` exits 0
 3. Every test name listed in the gap's Success Measures section has a corresponding implementation in the suite (no orphan references)
 
-### `/schedule` contract — 30-minute pulse
+### `/loop` contract — sole execution driver
 
-```
-/schedule add adv-cent-pulse cron "*/30 * * * *"
-prompt: "Read docs/plans/adv-centrality-filtering.md Execution Plan.
-Run `make test-all-gates` from repo root; capture pass/fail per gap.
-Run `git log --since='35 min ago' --oneline` on the current branch.
-Decide:
-- If a new T<N>.<i> commit appeared in the last 35 min: reply 'PROGRESSING — last commit <hash> <subject>; next ticket per execution plan: T<X>.<j>'.
-- If no new commit AND make test-all-gates is still incomplete: reply 'STALLED — last commit <hash> at <time>; resume at T<X>.<j>'.
-- If make test-all-gates exits 0 across all gaps: reply 'CONVERGED — all gates pass'.
-Read-only — never edit code, never bump any version."
-```
-
-The schedule's job is liveness + drift detection, nothing else. The spec doc above and the test-suite output below are its only inputs.
-
-### `/loop` contract — active implementation
+This plan is driven entirely by a single self-paced `/loop`. There is no `/schedule` companion — drift detection, progress reporting, and convergence checks are folded into the loop body itself, since each iteration already touches the test suite and git log.
 
 ```
 /loop self-paced
-prompt: "Implement the next unfinished ticket from docs/plans/adv-centrality-filtering.md Execution Plan, in order.
-Each iteration: ONE ticket, RED → GREEN → REFACTOR, commit at every phase boundary.
-After GREEN: run `make test-g<N>` for the current gap. Do NOT proceed if it regresses any other test.
-Exit the loop when every ticket in the current gap has a GREEN commit AND `make test-g<N>` exits 0.
-Stop and ask the human if: (a) a design decision not covered by an existing ADR comes up, OR (b) 3 consecutive failures on the same ticket.
-The spec is authoritative. If you find yourself wanting to do something not in the ticket list, stop — the plan needs an ADR addition first."
+prompt: "Drive docs/plans/adv-centrality-filtering.md Execution Plan to convergence.
+
+Each iteration:
+1. Identify the next unfinished ticket in the Execution Plan, in order. The next ticket is the lowest T<N>.<i> whose RED test name does not yet have a matching GREEN commit (`git log --grep='T<N>\.<i> GREEN'` empty).
+2. Implement ONE ticket only: RED → GREEN → REFACTOR. Commit at every phase boundary with the conventional subject (`T<N>.<i> RED: …`, `T<N>.<i> GREEN: …`, `T<N>.<i> REFACTOR: …`).
+3. After GREEN: run `make test-g<N>` for the current gap. If it regresses any other gate (`make test-all-gates`), revert the change and stop.
+4. After every iteration, log a one-line status to stdout matching the drift contract:
+   - 'PROGRESSING — <hash> <subject>; next ticket: T<X>.<j>' when a new GREEN commit was created.
+   - 'STALLED — last commit <hash> at <time>; same ticket pending: T<X>.<j>' when the iteration produced no new GREEN commit.
+   - 'CONVERGED — make test-all-gates exits 0' when every gate passes.
+
+Exit conditions:
+- CONVERGED — `make test-all-gates` exits 0.
+- BLOCKED — 3 consecutive STALLED iterations on the same ticket.
+- ADR-NEEDED — a design decision not covered by an existing ADR is required to proceed.
+
+The spec is authoritative. If you find yourself wanting to do something not in the ticket list, stop — the plan needs an ADR addition first. Never edit this plan document from inside the loop; ADR additions are a human-in-the-loop step."
 ```
+
+Self-pacing rationale: `ScheduleWakeup` between iterations should stay under 5 minutes (270s) when a build is mid-flight to keep the prompt cache warm, and stretch to 20–30 min only when waiting on a long `make test-all-gates` run. The loop is the only execution surface, so it owns both the active TDD work and the lightweight liveness reporting that `/schedule` would otherwise provide.
 
 ### Per-gap tickets
 
