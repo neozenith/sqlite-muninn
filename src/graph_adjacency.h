@@ -31,6 +31,18 @@ int sssp_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int sour
                     double **out_sigma, int *out_n);
 int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx);
 
+/* G4 threshold-based rebuild dispatch. Pure classifier — given the
+ * change ratio |delta|/total_edges and the two configured thresholds,
+ * pick which rebuild strategy to run. The actual cascade behavior is
+ * wired in T4.4. */
+typedef enum {
+    REBUILD_SELECTIVE = 0,   /* ratio < theta_selective: per-block rebuild */
+    REBUILD_DELTA_FLUSH = 1, /* ratio in [theta_selective, theta_full): namespace flush */
+    REBUILD_FULL = 2         /* ratio >= theta_full or total==0: full rebuild + gen++ */
+} SsspRebuildStrategy;
+
+SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edges, double theta_selective, double theta_full);
+
 /*
  * Check if a name corresponds to a graph_adjacency virtual table.
  * Returns 1 if yes, 0 if no.

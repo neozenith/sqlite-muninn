@@ -1837,6 +1837,18 @@ int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, 
     return rc == SQLITE_DONE ? SQLITE_OK : rc;
 }
 
+/* Classifier stub for T4.3 RED — always returns REBUILD_SELECTIVE so
+ * the test fails at the first DELTA_FLUSH / FULL band assertion. T4.3
+ * GREEN replaces this with the real ratio comparison. */
+SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edges, double theta_selective,
+                                          double theta_full) {
+    (void)delta_count;
+    (void)total_edges;
+    (void)theta_selective;
+    (void)theta_full;
+    return REBUILD_SELECTIVE;
+}
+
 int adjacency_register_module(sqlite3 *db) {
     return sqlite3_create_module(db, "graph_adjacency", &adjacency_module, NULL);
 }
