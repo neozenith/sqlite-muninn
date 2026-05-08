@@ -9,6 +9,8 @@ import sqlite3
 import statistics
 import subprocess
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from shlex import split
@@ -20,6 +22,50 @@ from benchmarks.kg_perf.strategies._base import Result, Strategy
 from benchmarks.kg_perf.workload import Workload
 
 log = logging.getLogger(__name__)
+
+
+# G3 T3.1 — Per-component timing. Strategies that opt in stuff a
+# PhaseTimings into Result.extras["phases"]; bench.py reads it,
+# computes brandes_share, and includes both in the JSONL record.
+# The un-defer trigger fires on three consecutive runs where
+# brandes_share > MUNINN_BRANDES_SHARE_THRESHOLD (T3.3).
+@dataclass
+class PhaseTimings:
+    """Per-component wall-clock breakdown for one strategy.run() call.
+
+    Phases are arbitrary string keys; the only one bench.py treats
+    specially is ``centrality_call``, which becomes the numerator of
+    brandes_share. Strategies use the ``measure(name)`` context manager
+    to accumulate elapsed time per phase across multiple invocations.
+    """
+
+    phases_ms: dict[str, float] = field(default_factory=dict)
+
+    @contextmanager
+    def measure(self, name: str):
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.phases_ms[name] = self.phases_ms.get(name, 0.0) + (time.perf_counter() - t0) * 1000.0
+
+    def total_ms(self) -> float:
+        return sum(self.phases_ms.values())
+
+    def brandes_share(self) -> float:
+        """Ratio of centrality_call time to total. Returns 0.0 if no
+        centrality phase was recorded — strategies that don't run
+        Brandes (e.g., degree-only strategies) should land here."""
+        total = self.total_ms()
+        if total <= 0.0:
+            return 0.0
+        return self.phases_ms.get("centrality_call", 0.0) / total
+
+    def sums_to(self, expected_total_ms: float, tol_ms: float = 1.0) -> bool:
+        """Consistency check used by T3.1's property test: the sum of
+        per-component times must match the externally-measured total
+        within tolerance (small slack for context-manager overhead)."""
+        return abs(self.total_ms() - expected_total_ms) <= tol_ms
 
 
 def open_db(db_path: Path) -> sqlite3.Connection:
@@ -104,6 +150,15 @@ def time_one(strategy: Strategy, workload: Workload) -> dict[str, object]:
         "timestamp": datetime.now(UTC).isoformat(),
         "repetitions": REPETITIONS,
     }
+
+    # G3 T3.1 — record phase breakdown when the strategy provided it.
+    # Strategies opt in by stashing a PhaseTimings into
+    # Result.extras["phases"]; missing extras leaves the fields absent
+    # so legacy strategies aren't disturbed.
+    phases = last_result.extras.get("phases") if last_result else None
+    if isinstance(phases, PhaseTimings) and phases.phases_ms:
+        record["phases_ms"] = {k: round(v, 3) for k, v in phases.phases_ms.items()}
+        record["brandes_share"] = round(phases.brandes_share(), 6)
     return record
 
 
@@ -142,4 +197,4 @@ def fidelity_against(record: dict[str, object], baseline: dict[str, object]) -> 
 from typing import cast  # placed after definition to keep diff minimal  # noqa: E402
 
 
-__all__ = ["append_record", "fidelity_against", "open_db", "time_one"]
+__all__ = ["PhaseTimings", "append_record", "fidelity_against", "open_db", "time_one"]
