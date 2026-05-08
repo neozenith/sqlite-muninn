@@ -39,6 +39,7 @@ typedef struct {
     char *dst_col;
     char *weight_col;   /* NULL if unweighted */
     int64_t generation; /* increments on each rebuild */
+    int has_sssp;       /* features='sssp' opt-in (G4: SSSP shadow tables) */
 } AdjVtab;
 
 typedef struct {
@@ -68,7 +69,40 @@ typedef struct {
     char *src_col;
     char *dst_col;
     char *weight_col;
+    char *features; /* Optional comma-separated feature flags (G4: 'sssp', G6: 'communities'). */
 } AdjParams;
+
+/* Returns 1 if `features` (NULL or comma-separated) contains the token
+ * `feat` (whitespace-trimmed), else 0. Forward-compatible parsing for
+ * features='sssp,communities,...' lists. */
+static int features_contains(const char *features, const char *feat) {
+    if (!features) {
+        return 0;
+    }
+    size_t flen = strlen(feat);
+    const char *p = features;
+    while (*p) {
+        while (*p == ' ' || *p == ',') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        const char *start = p;
+        while (*p && *p != ',') {
+            p++;
+        }
+        size_t tlen = (size_t)(p - start);
+        /* Trim trailing whitespace from token. */
+        while (tlen > 0 && start[tlen - 1] == ' ') {
+            tlen--;
+        }
+        if (tlen == flen && strncmp(start, feat, flen) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* Strip surrounding quotes from a string value (single or double quotes) */
 static const char *strip_quotes(const char *val, char *buf, int bufsize) {
@@ -103,6 +137,9 @@ static int parse_adjacency_params(int argc, const char *const *argv, AdjParams *
         } else if (strncmp(arg, "weight_col=", 11) == 0) {
             const char *val = strip_quotes(arg + 11, buf, (int)sizeof(buf));
             params->weight_col = sqlite3_mprintf("%s", val);
+        } else if (strncmp(arg, "features=", 9) == 0) {
+            const char *val = strip_quotes(arg + 9, buf, (int)sizeof(buf));
+            params->features = sqlite3_mprintf("%s", val);
         } else {
             *errmsg = sqlite3_mprintf("graph_adjacency: unknown parameter '%s'", arg);
             return SQLITE_ERROR;
@@ -115,6 +152,7 @@ static int parse_adjacency_params(int argc, const char *const *argv, AdjParams *
         sqlite3_free(params->src_col);
         sqlite3_free(params->dst_col);
         sqlite3_free(params->weight_col);
+        sqlite3_free(params->features);
         memset(params, 0, sizeof(AdjParams));
         return SQLITE_ERROR;
     }
@@ -127,6 +165,7 @@ static int parse_adjacency_params(int argc, const char *const *argv, AdjParams *
         sqlite3_free(params->src_col);
         sqlite3_free(params->dst_col);
         sqlite3_free(params->weight_col);
+        sqlite3_free(params->features);
         memset(params, 0, sizeof(AdjParams));
         return SQLITE_ERROR;
     }
@@ -136,6 +175,7 @@ static int parse_adjacency_params(int argc, const char *const *argv, AdjParams *
         sqlite3_free(params->src_col);
         sqlite3_free(params->dst_col);
         sqlite3_free(params->weight_col);
+        sqlite3_free(params->features);
         memset(params, 0, sizeof(AdjParams));
         return SQLITE_ERROR;
     }
@@ -206,9 +246,41 @@ static int adjacency_create_shadow_tables(sqlite3 *db, const char *name) {
     return rc;
 }
 
+/* Optional SSSP shadow tables created when features='sssp' is set. Schema
+ * is the contract documented in docs/plans/adv-centrality-filtering.md G4
+ * ("Schema (verbatim — this is the contract; G5 reads from it)"). */
+static int adjacency_create_sssp_tables(sqlite3 *db, const char *name) {
+    char *sql;
+    int rc;
+
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_sssp\" ("
+                          "namespace_id INTEGER NOT NULL, "
+                          "source_idx INTEGER NOT NULL, "
+                          "distances BLOB NOT NULL, "
+                          "sigma BLOB, "
+                          "PRIMARY KEY (namespace_id, source_idx))",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_sssp_delta\" ("
+                          "namespace_id INTEGER NOT NULL, "
+                          "source_idx INTEGER NOT NULL, "
+                          "PRIMARY KEY (namespace_id, source_idx))",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    return rc;
+}
+
 static int drop_shadow_tables(sqlite3 *db, const char *name) {
-    const char *suffixes[] = {"_config", "_nodes", "_degree", "_csr_fwd", "_csr_rev", "_delta"};
-    for (int i = 0; i < 6; i++) {
+    /* Drop _sssp/_sssp_delta unconditionally with IF EXISTS — handles
+     * both the features='sssp' and the default case. */
+    const char *suffixes[] = {"_config",  "_nodes", "_degree",     "_csr_fwd",
+                              "_csr_rev", "_delta", "_sssp_delta", "_sssp"};
+    for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
         char *sql = sqlite3_mprintf("DROP TABLE IF EXISTS \"%w%s\"", name, suffixes[i]);
         sqlite3_exec(db, sql, NULL, NULL, NULL);
         sqlite3_free(sql);
@@ -1070,6 +1142,7 @@ static int adj_init(sqlite3 *db, void *pAux, int argc, const char *const *argv, 
         sqlite3_free(params.src_col);
         sqlite3_free(params.dst_col);
         sqlite3_free(params.weight_col);
+        sqlite3_free(params.features);
         return SQLITE_NOMEM;
     }
     memset(vtab, 0, sizeof(AdjVtab));
@@ -1079,6 +1152,8 @@ static int adj_init(sqlite3 *db, void *pAux, int argc, const char *const *argv, 
     vtab->src_col = params.src_col;
     vtab->dst_col = params.dst_col;
     vtab->weight_col = params.weight_col;
+    vtab->has_sssp = features_contains(params.features, "sssp");
+    sqlite3_free(params.features); /* parsed value not stored on vtab */
 
     if (is_create) {
         /* Create shadow tables */
@@ -1092,6 +1167,21 @@ static int adj_init(sqlite3 *db, void *pAux, int argc, const char *const *argv, 
             sqlite3_free(vtab->weight_col);
             sqlite3_free(vtab);
             return rc;
+        }
+
+        if (vtab->has_sssp) {
+            rc = adjacency_create_sssp_tables(db, argv[2]);
+            if (rc != SQLITE_OK) {
+                *pzErr = sqlite3_mprintf("graph_adjacency: failed to create SSSP shadow tables");
+                drop_shadow_tables(db, argv[2]);
+                sqlite3_free(vtab->vtab_name);
+                sqlite3_free(vtab->edge_table);
+                sqlite3_free(vtab->src_col);
+                sqlite3_free(vtab->dst_col);
+                sqlite3_free(vtab->weight_col);
+                sqlite3_free(vtab);
+                return rc;
+            }
         }
 
         /* Save config */
