@@ -86,6 +86,7 @@ extern void test_gii_sssp_shadow(void);
 extern void test_gii_communities_shadow(void);
 extern void test_gii_communities_consume(void);
 extern void test_topk_cache(void);
+extern void test_brandes_share(void);
 
 int main(int argc, char **argv) {
     /* Parse --filter=<prefix> */
@@ -154,6 +155,9 @@ int main(int argc, char **argv) {
 
     printf("\n[topk_cache]\n");
     test_topk_cache();
+
+    printf("\n[brandes_share]\n");
+    test_brandes_share();
 
     printf("\n=== Results: %d passed, %d failed ===\n", total_passed, total_failed);
 

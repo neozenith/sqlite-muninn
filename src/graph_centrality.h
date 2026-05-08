@@ -91,6 +91,32 @@ void intlist_destroy(IntList *l);
 int reconstruct_pred_from_dist(const GraphData *g, int source, const double *dist, IntList *pred, int *stack,
                                int *stack_size, const char *direction, int weighted);
 
+/* G3 un-defer trigger threshold (T3.3).
+ *
+ * brandes_share = centrality_call_time / total_pipeline_time per
+ * (filter, query) cell in the kg_perf harness. When this ratio
+ * exceeds the threshold for 3 consecutive runs on the leading
+ * strategy, G3 (filter-aware Brandes / induced-subgraph TVF) becomes
+ * worth implementing — at that point Brandes dominates the pipeline
+ * and the filter-aware optimization pays off.
+ *
+ * Default chosen to align with theta_full's 30% rebuild-strategy
+ * threshold from G4: a workload where centrality is 30%+ of total
+ * time has crossed the empirical "Brandes-dominates" boundary in
+ * the kg_perf measurements that informed G2. Future un-defer
+ * decisions should re-derive from a fresh sweep
+ * (benchmarks/kg_perf/sweeps/g3_brandes_share.py, T3.2).
+ *
+ * Per the plan's ADR (line 909), the constant is overridable per
+ * deployment via the kg_perf harness configuration — this is the
+ * shipped default, not a hard-coded contract. */
+#define MUNINN_BRANDES_SHARE_THRESHOLD 0.30
+
+/* Accessor for the un-defer threshold so test code (and future kg_perf
+ * harness callers) don't need to include this header just for the
+ * macro value. Returns the compile-time MUNINN_BRANDES_SHARE_THRESHOLD. */
+double muninn_brandes_share_threshold(void);
+
 /*
  * Cache-aware Brandes (G5 T5.4).
  *

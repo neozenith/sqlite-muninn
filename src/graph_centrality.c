@@ -681,6 +681,14 @@ cleanup:
     return rc;
 }
 
+/* G3 T3.3 — un-defer trigger threshold accessor. Returns the
+ * compile-time MUNINN_BRANDES_SHARE_THRESHOLD so callers don't have
+ * to include graph_centrality.h (which pulls sqlite3ext.h) just to
+ * read the constant. */
+double muninn_brandes_share_threshold(void) {
+    return MUNINN_BRANDES_SHARE_THRESHOLD;
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * pred / stack reconstruction from cached dist[] (G5 T5.2)
  *
