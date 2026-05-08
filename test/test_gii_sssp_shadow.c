@@ -6,6 +6,7 @@
  *   `make test-g4` → ./build/test_runner --filter=test_g4_
  */
 #include "test_common.h"
+#include <math.h>
 #include <sqlite3.h>
 #include <stdlib.h>
 #include <string.h>
@@ -438,10 +439,82 @@ TEST(test_g4_namespace_isolation) {
     sqlite3_close(db);
 }
 
+/* T4.6 — threshold defaults match the documented empirical sweep.
+ *
+ * The defaults seeded by adjacency_create_sssp_tables (graph_adjacency.c)
+ * are theta_selective=0.05 and theta_full=0.30. Per
+ * docs/plans/adv-centrality-filtering.md G4 ("Threshold-based rebuild
+ * strategy"), these are the empirical optimum from the kg_perf
+ * benchmark sweep — banding the change ratio at 5% and 30% minimizes
+ * total rebuild work across the observed workload distribution.
+ *
+ * This test is the lockstep contract: if a future sweep re-tunes the
+ * thresholds, both the seed in graph_adjacency.c AND the EXPECTED_*
+ * constants below must be updated together. Drift between code and
+ * documentation otherwise becomes a silent regression.
+ *
+ * The actual sweep harness lives outside the unit-test gate (in
+ * benchmarks/kg_perf/). What lives here is the floor: defaults match
+ * what the docs claim; band ordering invariants hold. */
+TEST(test_g4_threshold_defaults_match_sweep) {
+    const double EXPECTED_THETA_SELECTIVE = 0.05;
+    const double EXPECTED_THETA_FULL = 0.30;
+
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db, "CREATE TABLE edges(src TEXT, dst TEXT)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='sssp')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    char *theta_sel_text = config_get_text(db, "g", "theta_selective");
+    char *theta_full_text = config_get_text(db, "g", "theta_full");
+    ASSERT(theta_sel_text != NULL);
+    ASSERT(theta_full_text != NULL);
+
+    double theta_sel = atof(theta_sel_text);
+    double theta_full = atof(theta_full_text);
+
+    /* Numeric match against the documented sweep optimum. 1e-9
+     * tolerance covers atof-roundtrip slop for short decimal
+     * fractions. */
+    ASSERT(fabs(theta_sel - EXPECTED_THETA_SELECTIVE) < 1e-9);
+    ASSERT(fabs(theta_full - EXPECTED_THETA_FULL) < 1e-9);
+
+    /* Band-ordering invariants — theta_selective < theta_full
+     * enforces the three-band scheme; 0 < theta_selective makes the
+     * SELECTIVE band non-empty; theta_full < 1 keeps the FULL band
+     * from collapsing to "all edges changed". */
+    ASSERT(theta_sel > 0.0);
+    ASSERT(theta_sel < theta_full);
+    ASSERT(theta_full < 1.0);
+
+    /* Cross-check against the classifier: a ratio just below
+     * theta_selective must dispatch SELECTIVE; just above theta_full
+     * must dispatch FULL. Locks the boundaries against accidental
+     * drift in either the constants or the classifier. */
+    ASSERT_EQ_INT(REBUILD_SELECTIVE,
+                  (int)sssp_classify_rebuild(/*delta=*/(int)((theta_sel - 0.001) * 1000),
+                                             /*total=*/1000, theta_sel, theta_full));
+    ASSERT_EQ_INT(REBUILD_FULL, (int)sssp_classify_rebuild(/*delta=*/(int)((theta_full + 0.001) * 1000),
+                                                           /*total=*/1000, theta_sel, theta_full));
+
+    sqlite3_free(theta_sel_text);
+    sqlite3_free(theta_full_text);
+    sqlite3_close(db);
+}
+
 void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_schema_creates_with_feature_flag);
     RUN_TEST(test_g4_blob_round_trip);
     RUN_TEST(test_g4_threshold_dispatch);
     RUN_TEST(test_g4_cascade_emit_per_strategy);
     RUN_TEST(test_g4_namespace_isolation);
+    RUN_TEST(test_g4_threshold_defaults_match_sweep);
 }
