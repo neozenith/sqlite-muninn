@@ -1828,6 +1828,16 @@ int sssp_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int sour
     return SQLITE_OK;
 }
 
+/* sssp_shadow_is_stale stub for T5.3 RED — always returns 0 (never
+ * stale). T5.3 GREEN replaces this with a real EXISTS lookup. */
+int sssp_shadow_is_stale(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx) {
+    (void)db;
+    (void)vt_name;
+    (void)namespace_id;
+    (void)source_idx;
+    return 0;
+}
+
 int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx) {
     if (!db || !vt_name) {
         return SQLITE_MISUSE;

@@ -35,6 +35,7 @@ extern int sssp_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, i
 extern int sssp_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, double **out_dist,
                            double **out_sigma, int *out_n);
 extern int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx);
+extern int sssp_shadow_is_stale(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx);
 
 /* Threshold dispatch — see graph_adjacency.h for the full enum and
  * function declaration. */
@@ -723,6 +724,105 @@ TEST(test_g5_pred_reconstruction_parity) {
     sqlite3_close(db);
 }
 
+/* T5.3 — partial-recompute safety. When a cache row exists but the
+ * (namespace, source) is in _sssp_delta (marked stale by a previous
+ * SELECTIVE/DELTA_FLUSH cascade), the wrapper must NOT trust the
+ * stale dist[]. It must recompute, write back fresh values, and
+ * clear the delta entry so subsequent reads hit the now-current
+ * cache.
+ *
+ * The test plants poisoned dist[] values in _sssp, marks source 0
+ * stale, then asserts the wrapper returns the mathematically-correct
+ * BFS distances (not the poisoned values), updates the cache to
+ * match, and clears _sssp_delta. */
+TEST(test_g5_partial_recompute_safety) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE edges(src TEXT, dst TEXT);"
+                      "INSERT INTO edges(src, dst) VALUES ('a','b'),('b','c');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='sssp')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    GraphData graph;
+    graph_data_init(&graph);
+    GraphLoadConfig config = {.edge_table = "edges",
+                              .src_col = "src",
+                              .dst_col = "dst",
+                              .weight_col = NULL,
+                              .direction = "forward",
+                              .timestamp_col = NULL,
+                              .time_start = NULL,
+                              .time_end = NULL};
+    char *errmsg = NULL;
+    rc = graph_data_load(db, &config, &graph, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(3, graph.node_count);
+
+    /* Poison the cache with values that are clearly wrong (correct
+     * BFS would produce [0,1,2]). */
+    const double poisoned[3] = {99.0, 99.0, 99.0};
+    const double poisoned_sigma[3] = {99.0, 99.0, 99.0};
+    rc = sssp_shadow_put(db, "g", 0, /*source=*/0, poisoned, poisoned_sigma, 3);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Mark source 0 stale via _sssp_delta. */
+    rc = sqlite3_exec(db, "INSERT INTO g_sssp_delta(namespace_id, source_idx) VALUES (0, 0)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(1, sssp_shadow_is_stale(db, "g", 0, 0));
+
+    /* Wrapper must detect staleness and recompute. The returned dist
+     * must be the mathematically-correct BFS values, NOT the poison. */
+    int N = graph.node_count;
+    double *dist = (double *)malloc((size_t)N * sizeof(double));
+    double *sigma = (double *)malloc((size_t)N * sizeof(double));
+    rc = sssp_load_or_compute(db, "g", 0, &graph, /*source=*/0, /*weighted=*/0, dist, sigma, "forward");
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Real BFS values from source 0: [0, 1, 2]. */
+    ASSERT(dist[0] == 0.0);
+    ASSERT(dist[1] == 1.0);
+    ASSERT(dist[2] == 2.0);
+
+    /* Cache row was overwritten with the correct values (next reader
+     * sees the fresh cache, not the poison). */
+    double *cached_dist = NULL;
+    double *cached_sigma = NULL;
+    int cached_n = 0;
+    rc = sssp_shadow_get(db, "g", 0, 0, &cached_dist, &cached_sigma, &cached_n);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(3, cached_n);
+    ASSERT(cached_dist[0] == 0.0);
+    ASSERT(cached_dist[1] == 1.0);
+    ASSERT(cached_dist[2] == 2.0);
+    free(cached_dist);
+    free(cached_sigma);
+
+    /* Delta entry consumed and cleared. Subsequent reads should now
+     * hit the (correct) cache without recomputing. */
+    ASSERT_EQ_INT(0, sssp_shadow_is_stale(db, "g", 0, 0));
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta "
+                                    "WHERE namespace_id = 0 AND source_idx = 0"));
+
+    free(dist);
+    free(sigma);
+    graph_data_destroy(&graph);
+    sqlite3_close(db);
+}
+
 void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_schema_creates_with_feature_flag);
     RUN_TEST(test_g4_blob_round_trip);
@@ -732,4 +832,5 @@ void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_threshold_defaults_match_sweep);
     RUN_TEST(test_g5_load_or_compute_writes_back_on_miss);
     RUN_TEST(test_g5_pred_reconstruction_parity);
+    RUN_TEST(test_g5_partial_recompute_safety);
 }

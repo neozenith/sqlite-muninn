@@ -31,6 +31,12 @@ int sssp_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int sour
                     double **out_sigma, int *out_n);
 int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx);
 
+/* Returns 1 if (namespace_id, source_idx) is present in <vt>_sssp_delta
+ * (the source's cached SSSP is stale and must be recomputed before
+ * use), 0 if absent, or a negative SQLite error code on query failure.
+ * G5's read path consults this before trusting a cache hit. */
+int sssp_shadow_is_stale(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx);
+
 /* G4 threshold-based rebuild dispatch. Pure classifier — given the
  * change ratio |delta|/total_edges and the two configured thresholds,
  * pick which rebuild strategy to run. The actual cascade behavior is
