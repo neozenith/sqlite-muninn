@@ -264,18 +264,18 @@ int *build_community_mask(const GraphData *g, const int *partition, int target_c
     return mask;
 }
 
-/* G7 T7.5 intersect_masks — STUB.
- * Returns a's contents as-is, ignoring b. Test fails because the
- * intersected mask doesn't match a logical AND. */
+/* G7 T7.5 intersect_masks. Logical AND with truthy/falsy semantics:
+ * out[i] = 1 iff a[i] != 0 AND b[i] != 0, else 0. Both inputs treated
+ * as truthy/falsy so a future caller passing positive counts (e.g.,
+ * a per-node provenance hit count) still produces the right mask. */
 int *intersect_masks(const int *a, const int *b, int n) {
-    (void)b;
-    if (!a || n <= 0)
+    if (!a || !b || n <= 0)
         return NULL;
     int *out = (int *)malloc((size_t)n * sizeof(int));
     if (!out)
         return NULL;
     for (int i = 0; i < n; i++) {
-        out[i] = a[i] ? 1 : 0;
+        out[i] = (a[i] && b[i]) ? 1 : 0;
     }
     return out;
 }
