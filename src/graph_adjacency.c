@@ -459,13 +459,17 @@ int64_t config_get_int64_public(sqlite3 *db, const char *name, const char *key, 
     return config_get_int(db, name, key, def);
 }
 
-/* config_set_double — STUB for T6.3 RED.
- *
- * Uses lossy %g (6 significant digits) so the round-trip test fails
- * for a value like 0.1 + 0.2. T6.3 GREEN switches to %.17g. */
+/* Write a double to <vt>_config with full IEEE 754 binary64 round-trip
+ * precision. %.17g is the minimum precision that guarantees every bit
+ * of a binary64 round-trips through atof. Lower precision drops ULPs
+ * — a re-read no longer compares bit-equal to the original. The 1e-10
+ * tolerance in check_communities_cache hides divergence between
+ * 'close' values, but a user re-issuing the EXACT gamma they cached
+ * at must round-trip cleanly, otherwise the cache state machine
+ * spuriously routes them to WARM_START / COLD_START. */
 int config_set_double(sqlite3 *db, const char *name, const char *key, double value) {
     char buf[64];
-    snprintf(buf, sizeof(buf), "%g", value);
+    snprintf(buf, sizeof(buf), "%.17g", value);
     return config_set(db, name, key, buf);
 }
 
