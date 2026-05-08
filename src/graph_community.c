@@ -662,16 +662,38 @@ static sqlite3_module graph_leiden_module = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
- * Communities cache state machine (G6 T6.2) — STUB
+ * Communities cache state machine (G6 T6.2)
  *
- * T6.2 GREEN replaces this with the real four-branch decision tree
- * documented in graph_community.h.
+ * Decision order matters:
+ *
+ *   1. G_comm < 0       → COLD_START (never computed; resolution irrelevant)
+ *   2. resolution drift ≥ 1e-10 from cached value → COLD_START
+ *      (the cached partition is for a different gamma, can't warm-start)
+ *   3. G_comm < G_adj   → WARM_START (resolution matches but adjacency moved)
+ *   4. otherwise        → HIT
+ *
+ * Resolution comparison uses fabs(diff) < 1e-10. The sentinel
+ * communities_resolution = -1.0 (set by xCreate) ensures any positive
+ * gamma diverges by far more than 1e-10, so case 2 catches first-read
+ * COLD_START even when generation values happen to coincide.
  * ═══════════════════════════════════════════════════════════════ */
 
 CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, double requested_resolution) {
-    (void)db;
-    (void)vtab_name;
-    (void)requested_resolution;
+    int64_t G_comm = config_get_int64_public(db, vtab_name, "communities_generation", -1);
+    if (G_comm < 0) {
+        return COMM_CACHE_COLD_START;
+    }
+
+    double cached_res = config_get_double(db, vtab_name, "communities_resolution", -1.0);
+    if (fabs(cached_res - requested_resolution) >= 1e-10) {
+        return COMM_CACHE_COLD_START;
+    }
+
+    int64_t G_adj = config_get_int64_public(db, vtab_name, "generation", 0);
+    if (G_comm < G_adj) {
+        return COMM_CACHE_WARM_START;
+    }
+
     return COMM_CACHE_HIT;
 }
 
