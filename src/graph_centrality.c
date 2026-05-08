@@ -509,25 +509,176 @@ int brandes_compute(const GraphData *g, const char *direction, int auto_approx, 
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * Cache-aware Brandes wrapper (G5 T5.4) — STUB
+ * Cache-aware Brandes wrapper (G5 T5.4)
  *
- * T5.4 GREEN replaces this with a copy of brandes_compute's body,
- * but routes per-source SSSP through sssp_load_or_compute and
- * recovers pred[]/stack[] via reconstruct_pred_from_dist.
+ * Mirrors brandes_compute's structure but:
+ *   - per-source SSSP runs through sssp_load_or_compute (cache hit
+ *     when fresh; compute + write-back on miss / staleness)
+ *   - pred[] and stack[] are rebuilt via reconstruct_pred_from_dist
+ *     instead of filled by sssp_bfs / sssp_dijkstra
+ *
+ * Back-prop / scaling / normalization are byte-identical to the
+ * uncached path; Brandes back-prop is associative+commutative so
+ * any pred[] ordering difference washes out in CB[].
  * ═══════════════════════════════════════════════════════════════ */
 
 int brandes_compute_cached(const GraphData *g, sqlite3 *db, const char *gii_vt_name, int namespace_id,
                            const char *direction, int auto_approx, int normalized, double *CB, double *EB) {
-    (void)g;
-    (void)db;
-    (void)gii_vt_name;
-    (void)namespace_id;
-    (void)direction;
-    (void)auto_approx;
-    (void)normalized;
-    (void)CB;
-    (void)EB;
-    return SQLITE_ERROR;
+    if (!g || !db || !gii_vt_name || !CB) {
+        return SQLITE_MISUSE;
+    }
+    int N = g->node_count;
+
+    double *dist = (double *)malloc((size_t)N * sizeof(double));
+    double *sigma = (double *)malloc((size_t)N * sizeof(double));
+    double *delta = (double *)malloc((size_t)N * sizeof(double));
+    int *stack = (int *)malloc((size_t)N * sizeof(int));
+    IntList *pred = (IntList *)calloc((size_t)N, sizeof(IntList));
+    if (!dist || !sigma || !delta || !stack || !pred) {
+        free(dist);
+        free(sigma);
+        free(delta);
+        free(stack);
+        free(pred);
+        return SQLITE_NOMEM;
+    }
+    for (int i = 0; i < N; i++) {
+        intlist_init(&pred[i]);
+    }
+
+    /* Source set (same exact / approx logic as brandes_compute). */
+    int n_sources = N;
+    int *sources = (int *)malloc((size_t)N * sizeof(int));
+    double scale = 1.0;
+    if (auto_approx > 0 && N > auto_approx) {
+        n_sources = (int)ceil(sqrt((double)N));
+        if (n_sources < 1) {
+            n_sources = 1;
+        }
+        int step = N / n_sources;
+        if (step < 1) {
+            step = 1;
+        }
+        n_sources = 0;
+        for (int i = 0; i < N && n_sources < (int)ceil(sqrt((double)N)); i += step) {
+            sources[n_sources++] = i;
+        }
+        scale = (double)N / (double)n_sources;
+    } else {
+        for (int i = 0; i < N; i++) {
+            sources[i] = i;
+        }
+    }
+
+    int weighted = g->has_weights;
+    int rc = SQLITE_OK;
+    for (int si = 0; si < n_sources; si++) {
+        int s = sources[si];
+        int stack_size = 0;
+
+        /* Cache-aware SSSP populates dist/sigma. */
+        rc = sssp_load_or_compute(db, gii_vt_name, namespace_id, g, s, weighted, dist, sigma, direction);
+        if (rc != SQLITE_OK) {
+            goto cleanup;
+        }
+
+        /* sigma may be all-zero if the cached row was dist-only — that
+         * would break back-prop. Recompute sigma from scratch by
+         * forcing a fresh BFS/Dijkstra into local buffers. T5.1's
+         * write-back stores both dist and sigma now, so this is a
+         * defensive fallback for older cache rows. */
+        int sigma_seen_nonzero = 0;
+        for (int i = 0; i < N; i++) {
+            if (sigma[i] != 0.0) {
+                sigma_seen_nonzero = 1;
+                break;
+            }
+        }
+        if (!sigma_seen_nonzero) {
+            int dummy_stack_size = 0;
+            if (weighted) {
+                sssp_dijkstra(g, s, dist, sigma, pred, stack, &dummy_stack_size, direction);
+            } else {
+                sssp_bfs(g, s, dist, sigma, pred, stack, &dummy_stack_size, direction);
+            }
+        }
+
+        /* Rebuild pred[] / stack[] from the (now-correct) dist[]. */
+        rc = reconstruct_pred_from_dist(g, s, dist, pred, stack, &stack_size, direction, weighted);
+        if (rc != SQLITE_OK) {
+            goto cleanup;
+        }
+
+        /* Backward accumulation — byte-identical to brandes_compute. */
+        for (int i = 0; i < N; i++) {
+            delta[i] = 0.0;
+        }
+        while (stack_size > 0) {
+            int w = stack[--stack_size];
+            for (int pi = 0; pi < pred[w].count; pi++) {
+                int v = pred[w].items[pi];
+                if (sigma[w] > 0) {
+                    double flow = (sigma[v] / sigma[w]) * (1.0 + delta[w]);
+                    delta[v] += flow;
+                    if (EB) {
+                        EB[v * N + w] += flow;
+                    }
+                }
+            }
+            if (w != s) {
+                CB[w] += delta[w];
+            }
+        }
+    }
+
+    /* Scaling + undirected halve + normalize — identical to brandes_compute. */
+    if (scale != 1.0) {
+        for (int i = 0; i < N; i++) {
+            CB[i] *= scale;
+        }
+        if (EB) {
+            int NN = N * N;
+            for (int i = 0; i < NN; i++) {
+                EB[i] *= scale;
+            }
+        }
+    }
+    int undirected = direction && strcmp(direction, "both") == 0;
+    if (undirected) {
+        for (int i = 0; i < N; i++) {
+            CB[i] /= 2.0;
+        }
+        if (EB) {
+            int NN = N * N;
+            for (int i = 0; i < NN; i++) {
+                EB[i] /= 2.0;
+            }
+        }
+    }
+    if (normalized && N > 2) {
+        double norm_factor = undirected ? (double)(N - 1) * (double)(N - 2) / 2.0 : (double)(N - 1) * (double)(N - 2);
+        for (int i = 0; i < N; i++) {
+            CB[i] /= norm_factor;
+        }
+        if (EB) {
+            int NN = N * N;
+            for (int i = 0; i < NN; i++) {
+                EB[i] /= norm_factor;
+            }
+        }
+    }
+
+cleanup:
+    for (int i = 0; i < N; i++) {
+        intlist_destroy(&pred[i]);
+    }
+    free(pred);
+    free(dist);
+    free(sigma);
+    free(delta);
+    free(stack);
+    free(sources);
+    return rc;
 }
 
 /* ═══════════════════════════════════════════════════════════════
