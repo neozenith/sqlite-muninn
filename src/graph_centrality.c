@@ -509,27 +509,112 @@ int brandes_compute(const GraphData *g, const char *direction, int auto_approx, 
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * pred / stack reconstruction from cached dist[] (G5 T5.2) — STUB
+ * pred / stack reconstruction from cached dist[] (G5 T5.2)
  *
- * T5.2 GREEN replaces this with: scan in-edges to each w (out-edges
- * for reverse direction), test dist[u] + weight(u, w) == dist[w],
- * push u onto pred[w]; sort reachable indices by dist ascending into
- * stack[].
+ * Inverse of sssp_bfs/dijkstra's expansion. For each w with finite
+ * dist[w], scan edges (u, w) — that's g->in[w] when use_out, g->out[w]
+ * when use_in (the dual of the expansion direction). u is a predecessor
+ * of w iff dist[u] + weight(u, w) == dist[w]. stack[] is filled with
+ * reachable indices sorted by dist ascending so Brandes back-prop
+ * pops in non-decreasing distance order from the end.
  * ═══════════════════════════════════════════════════════════════ */
+
+typedef struct {
+    int idx;
+    double dist;
+} DistIdxPair;
+
+static int compare_distidx(const void *a, const void *b) {
+    const DistIdxPair *pa = (const DistIdxPair *)a;
+    const DistIdxPair *pb = (const DistIdxPair *)b;
+    if (pa->dist < pb->dist)
+        return -1;
+    if (pa->dist > pb->dist)
+        return 1;
+    /* Tie-break by idx so the order is deterministic — same-distance
+     * nodes don't depend on each other in Brandes back-prop, but a
+     * stable order makes parity tests reproducible. */
+    return pa->idx - pb->idx;
+}
 
 int reconstruct_pred_from_dist(const GraphData *g, int source, const double *dist, IntList *pred, int *stack,
                                int *stack_size, const char *direction, int weighted) {
-    (void)g;
-    (void)source;
-    (void)dist;
-    (void)pred;
-    (void)stack;
-    (void)direction;
-    (void)weighted;
-    if (stack_size) {
-        *stack_size = 0;
+    if (!g || !dist || !pred || !stack || !stack_size) {
+        return SQLITE_MISUSE;
     }
-    return SQLITE_ERROR;
+    if (source < 0 || source >= g->node_count) {
+        return SQLITE_RANGE;
+    }
+    int N = g->node_count;
+
+    int use_out = !direction || strcmp(direction, "reverse") != 0;
+    int use_in = direction && (strcmp(direction, "reverse") == 0 || strcmp(direction, "both") == 0);
+
+    /* Pred[]: iterate the same edge set sssp_bfs / sssp_dijkstra
+     * traverses (g->out[u] for use_out, g->in[u] for use_in) and use
+     * the SSSP optimality condition `dist[u] + w(u,v) == dist[v]` to
+     * mark u as a predecessor of v.
+     *
+     * Iterating via the EXPANSION direction (out[] not in[]) is load-
+     * compatible with graph_data_load's direction='forward' setting,
+     * which populates only g->out[] and leaves g->in[] empty. The
+     * same predicate applied edge-by-edge produces the same
+     * predecessor sets without depending on the reverse adjacency. */
+    for (int w = 0; w < N; w++) {
+        intlist_clear(&pred[w]);
+    }
+    for (int u = 0; u < N; u++) {
+        if (dist[u] < 0) {
+            continue;
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            const GraphAdjList *adj;
+            if (pass == 0) {
+                adj = use_out ? &g->out[u] : NULL;
+            } else {
+                adj = use_in ? &g->in[u] : NULL;
+            }
+            if (!adj) {
+                continue;
+            }
+            for (int e = 0; e < adj->count; e++) {
+                int v = adj->edges[e].target;
+                if (dist[v] < 0 || v == source) {
+                    continue;
+                }
+                double w_uv = weighted ? adj->edges[e].weight : 1.0;
+                if (double_eq(dist[u] + w_uv, dist[v])) {
+                    /* Adjacent-dedup so multi-edges or out[]+in[]
+                     * traversal don't create back-to-back duplicates. */
+                    if (pred[v].count == 0 || pred[v].items[pred[v].count - 1] != u) {
+                        intlist_push(&pred[v], u);
+                    }
+                }
+            }
+        }
+    }
+
+    /* stack[]: reachable indices sorted by dist ascending. */
+    DistIdxPair *pairs = (DistIdxPair *)malloc((size_t)N * sizeof(DistIdxPair));
+    if (!pairs) {
+        return SQLITE_NOMEM;
+    }
+    int n_reachable = 0;
+    for (int i = 0; i < N; i++) {
+        if (dist[i] >= 0) {
+            pairs[n_reachable].idx = i;
+            pairs[n_reachable].dist = dist[i];
+            n_reachable++;
+        }
+    }
+    qsort(pairs, (size_t)n_reachable, sizeof(DistIdxPair), compare_distidx);
+    for (int i = 0; i < n_reachable; i++) {
+        stack[i] = pairs[i].idx;
+    }
+    *stack_size = n_reachable;
+    free(pairs);
+
+    return SQLITE_OK;
 }
 
 /* ═══════════════════════════════════════════════════════════════
