@@ -1686,44 +1686,155 @@ static sqlite3_module adjacency_module = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
- * SSSP Shadow API (G4) — STUBS for T4.2 RED.
+ * SSSP Shadow API (G4) — BLOB read/write/clear-delta helpers.
  *
- * Real implementations land in T4.2 GREEN (BLOB bind/column round-trip)
- * and T4.4 GREEN (cascade emit / clear). Returning SQLITE_ERROR until
- * then makes the round-trip test fail at the put-step rather than at
- * link time.
+ * The cache stores one row per (namespace_id, source_idx) carrying
+ * dist[V] and (optionally) sigma[V] as native-byte-order BLOBs. See
+ * docs/plans/adv-centrality-filtering.md G4 ("BLOB encoding contract").
+ *
+ * Return codes:
+ *   put / clear_delta — SQLITE_OK on success, SQLite error code otherwise
+ *   get               — SQLITE_OK if the row was found and the out
+ *                       buffers were populated;
+ *                       SQLITE_NOTFOUND if no row exists for the key
+ *                       (G5's pull-through path uses this to decide
+ *                       whether to compute and write back);
+ *                       any other SQLite error code on prepare/step
+ *                       failure.
+ *
+ * Memory: get() allocates *out_dist (always when row found) and
+ * *out_sigma (only when the sigma column is non-NULL) via malloc;
+ * caller must free() both.
  * ═══════════════════════════════════════════════════════════════ */
 
 int sssp_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, const double *dist,
                     const double *sigma, int n) {
-    (void)db;
-    (void)vt_name;
-    (void)namespace_id;
-    (void)source_idx;
-    (void)dist;
-    (void)sigma;
-    (void)n;
-    return SQLITE_ERROR;
+    if (!db || !vt_name || !dist || n <= 0) {
+        return SQLITE_MISUSE;
+    }
+    char *sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_sssp\""
+                                "  (namespace_id, source_idx, distances, sigma) "
+                                "VALUES (?, ?, ?, ?)",
+                                vt_name);
+    if (!sql) {
+        return SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+    int n_bytes = n * (int)sizeof(double);
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    sqlite3_bind_int(stmt, 2, source_idx);
+    sqlite3_bind_blob(stmt, 3, dist, n_bytes, SQLITE_TRANSIENT);
+    if (sigma) {
+        sqlite3_bind_blob(stmt, 4, sigma, n_bytes, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 4);
+    }
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? SQLITE_OK : rc;
 }
 
 int sssp_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, double **out_dist,
                     double **out_sigma, int *out_n) {
-    (void)db;
-    (void)vt_name;
-    (void)namespace_id;
-    (void)source_idx;
-    (void)out_dist;
-    (void)out_sigma;
-    (void)out_n;
-    return SQLITE_ERROR;
+    if (!db || !vt_name || !out_dist || !out_sigma || !out_n) {
+        return SQLITE_MISUSE;
+    }
+    *out_dist = NULL;
+    *out_sigma = NULL;
+    *out_n = 0;
+
+    char *sql = sqlite3_mprintf("SELECT distances, sigma FROM \"%w_sssp\" "
+                                "WHERE namespace_id = ? AND source_idx = ?",
+                                vt_name);
+    if (!sql) {
+        return SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    sqlite3_bind_int(stmt, 2, source_idx);
+
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        return SQLITE_NOTFOUND;
+    }
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return rc;
+    }
+
+    /* dist column — always present (NOT NULL by schema). */
+    const void *dist_blob = sqlite3_column_blob(stmt, 0);
+    int dist_bytes = sqlite3_column_bytes(stmt, 0);
+    if (dist_bytes <= 0 || (dist_bytes % (int)sizeof(double)) != 0) {
+        sqlite3_finalize(stmt);
+        return SQLITE_CORRUPT;
+    }
+    int n_doubles = dist_bytes / (int)sizeof(double);
+    double *dist_buf = (double *)malloc((size_t)dist_bytes);
+    if (!dist_buf) {
+        sqlite3_finalize(stmt);
+        return SQLITE_NOMEM;
+    }
+    memcpy(dist_buf, dist_blob, (size_t)dist_bytes);
+
+    /* sigma column — may be SQL NULL. */
+    double *sigma_buf = NULL;
+    if (sqlite3_column_type(stmt, 1) != SQLITE_NULL) {
+        const void *sigma_blob = sqlite3_column_blob(stmt, 1);
+        int sigma_bytes = sqlite3_column_bytes(stmt, 1);
+        if (sigma_bytes != dist_bytes) {
+            free(dist_buf);
+            sqlite3_finalize(stmt);
+            return SQLITE_CORRUPT;
+        }
+        sigma_buf = (double *)malloc((size_t)sigma_bytes);
+        if (!sigma_buf) {
+            free(dist_buf);
+            sqlite3_finalize(stmt);
+            return SQLITE_NOMEM;
+        }
+        memcpy(sigma_buf, sigma_blob, (size_t)sigma_bytes);
+    }
+
+    sqlite3_finalize(stmt);
+    *out_dist = dist_buf;
+    *out_sigma = sigma_buf;
+    *out_n = n_doubles;
+    return SQLITE_OK;
 }
 
 int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx) {
-    (void)db;
-    (void)vt_name;
-    (void)namespace_id;
-    (void)source_idx;
-    return SQLITE_ERROR;
+    if (!db || !vt_name) {
+        return SQLITE_MISUSE;
+    }
+    char *sql = sqlite3_mprintf("DELETE FROM \"%w_sssp_delta\" "
+                                "WHERE namespace_id = ? AND source_idx = ?",
+                                vt_name);
+    if (!sql) {
+        return SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    sqlite3_bind_int(stmt, 2, source_idx);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? SQLITE_OK : rc;
 }
 
 int adjacency_register_module(sqlite3 *db) {
