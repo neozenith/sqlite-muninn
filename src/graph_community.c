@@ -893,25 +893,165 @@ int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * Cascade emit (G6 T6.6) — STUB
+ * Cascade emit (G6 T6.6)
  *
- * T6.6 GREEN replaces this with strategy-driven emission:
- *   SELECTIVE / DELTA_FLUSH: changed_nodes + 1-hop neighbors into
- *                            <vt>_comm_delta via INSERT OR IGNORE.
- *   FULL:                    DELETE _communities + _comm_delta for
- *                            the namespace, reset communities_generation.
+ * Same three-band strategy as sssp_cascade_emit (G4 T4.4). The
+ * SELECTIVE / DELTA_FLUSH path adds the documented 1-hop extension:
+ * Leiden's local-moving phase only re-evaluates nodes against their
+ * neighbors, so a changed node's neighbors must also be marked stale
+ * for the warm-start to capture the moved boundary correctly.
+ *
+ * SAVEPOINT-wrapped so failure mid-batch rolls back atomically.
  * ═══════════════════════════════════════════════════════════════ */
 
 int comm_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
                       const GraphData *g, const int *changed_nodes, int n_changed) {
-    (void)db;
-    (void)vt_name;
-    (void)namespace_id;
-    (void)strategy;
-    (void)g;
-    (void)changed_nodes;
-    (void)n_changed;
-    return SQLITE_ERROR;
+    if (!db || !vt_name) {
+        return SQLITE_MISUSE;
+    }
+    int rc;
+    char *sql = NULL;
+    sqlite3_stmt *stmt = NULL;
+
+    sqlite3_exec(db, "SAVEPOINT comm_cascade", NULL, NULL, NULL);
+
+    if (strategy == REBUILD_SELECTIVE || strategy == REBUILD_DELTA_FLUSH) {
+        if (n_changed > 0 && (!g || !changed_nodes)) {
+            rc = SQLITE_MISUSE;
+            goto rollback;
+        }
+        sql = sqlite3_mprintf("INSERT OR IGNORE INTO \"%w_comm_delta\""
+                              "(namespace_id, node_idx) VALUES (?, ?)",
+                              vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+
+        for (int i = 0; i < n_changed; i++) {
+            int u = changed_nodes[i];
+            if (u < 0 || u >= g->node_count) {
+                rc = SQLITE_RANGE;
+                sqlite3_finalize(stmt);
+                stmt = NULL;
+                goto rollback;
+            }
+
+            /* The changed node itself. */
+            sqlite3_bind_int(stmt, 1, namespace_id);
+            sqlite3_bind_int(stmt, 2, u);
+            int step = sqlite3_step(stmt);
+            sqlite3_reset(stmt);
+            if (step != SQLITE_DONE) {
+                rc = step;
+                sqlite3_finalize(stmt);
+                stmt = NULL;
+                goto rollback;
+            }
+
+            /* Out-neighbors. */
+            for (int e = 0; e < g->out[u].count; e++) {
+                int v = g->out[u].edges[e].target;
+                sqlite3_bind_int(stmt, 1, namespace_id);
+                sqlite3_bind_int(stmt, 2, v);
+                step = sqlite3_step(stmt);
+                sqlite3_reset(stmt);
+                if (step != SQLITE_DONE) {
+                    rc = step;
+                    sqlite3_finalize(stmt);
+                    stmt = NULL;
+                    goto rollback;
+                }
+            }
+
+            /* In-neighbors. */
+            for (int e = 0; e < g->in[u].count; e++) {
+                int v = g->in[u].edges[e].target;
+                sqlite3_bind_int(stmt, 1, namespace_id);
+                sqlite3_bind_int(stmt, 2, v);
+                step = sqlite3_step(stmt);
+                sqlite3_reset(stmt);
+                if (step != SQLITE_DONE) {
+                    rc = step;
+                    sqlite3_finalize(stmt);
+                    stmt = NULL;
+                    goto rollback;
+                }
+            }
+        }
+        sqlite3_finalize(stmt);
+        stmt = NULL;
+    } else if (strategy == REBUILD_FULL) {
+        /* DELETE _communities + _comm_delta scoped to the namespace,
+         * then reset communities_generation = -1 so
+         * check_communities_cache routes the next read to COLD_START. */
+        sql = sqlite3_mprintf("DELETE FROM \"%w_communities\" WHERE namespace_id = ?", vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        stmt = NULL;
+        if (rc != SQLITE_DONE)
+            goto rollback;
+
+        sql = sqlite3_mprintf("DELETE FROM \"%w_comm_delta\" WHERE namespace_id = ?", vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        stmt = NULL;
+        if (rc != SQLITE_DONE)
+            goto rollback;
+
+        sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_config\"(key, value) "
+                              "VALUES ('communities_generation', '-1')",
+                              vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+    } else {
+        rc = SQLITE_MISUSE;
+        goto rollback;
+    }
+
+    sqlite3_exec(db, "RELEASE comm_cascade", NULL, NULL, NULL);
+    return SQLITE_OK;
+
+rollback:
+    if (stmt)
+        sqlite3_finalize(stmt);
+    if (sql)
+        sqlite3_free(sql);
+    sqlite3_exec(db, "ROLLBACK TO comm_cascade", NULL, NULL, NULL);
+    sqlite3_exec(db, "RELEASE comm_cascade", NULL, NULL, NULL);
+    return rc;
 }
 
 /* ═══════════════════════════════════════════════════════════════
