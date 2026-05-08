@@ -82,6 +82,7 @@ extern void test_llama_embed(void);
 extern void test_llama_chat(void);
 extern void test_string_sim(void);
 extern void test_provenance(void);
+extern void test_gii_sssp_shadow(void);
 
 int main(int argc, char **argv) {
     /* Parse --filter=<prefix> */
@@ -138,6 +139,9 @@ int main(int argc, char **argv) {
 
     printf("\n[provenance]\n");
     test_provenance();
+
+    printf("\n[gii_sssp_shadow]\n");
+    test_gii_sssp_shadow();
 
     printf("\n=== Results: %d passed, %d failed ===\n", total_passed, total_failed);
 

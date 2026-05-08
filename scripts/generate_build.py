@@ -56,6 +56,7 @@ TEST_LINK_SOURCES = [
     "src/llama_chat.c",
     "src/string_sim.c",
     "src/provenance.c",
+    "src/graph_adjacency.c",
 ]
 
 # ── CMake flags ──────────────────────────────────────────────────────
