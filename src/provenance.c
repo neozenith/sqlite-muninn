@@ -330,6 +330,17 @@ static int prov_init(sqlite3 *db, void *pAux, int argc, const char *const *argv,
             return rc;
         }
 
+        /* Helper index on the user's entities table so the chunk-INSERT
+         * trigger's `WHERE ent.chunk_id = NEW.chunk_id` filter uses a
+         * logarithmic lookup instead of a full scan. Without this the
+         * ingest cost is O(N^2) — see T1.8. Name is unprefixed by the
+         * VT name so multiple gii_provenance VTs share a single index
+         * rather than each maintaining their own. */
+        sqlite3_exec(db,
+                     "CREATE INDEX IF NOT EXISTS _gii_provenance_entities_chunk_id "
+                     "ON entities(chunk_id)",
+                     NULL, NULL, NULL);
+
         /* Install triggers on upstream KG tables. event_message_chunks /
          * entities / entity_clusters / events must already exist — the
          * trigger references them by name and SQLite validates source
