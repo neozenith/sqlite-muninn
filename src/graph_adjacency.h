@@ -22,6 +22,15 @@
 /* Register the graph_adjacency virtual table module with db. */
 int adjacency_register_module(sqlite3 *db);
 
+/* G4 SSSP shadow API — read/write/clear one source's dist[]+sigma[] BLOBs.
+ * Only meaningful when the VT was created with features='sssp'. See
+ * docs/plans/adv-centrality-filtering.md G4 for the BLOB contract. */
+int sssp_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, const double *dist,
+                    const double *sigma, int n);
+int sssp_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, double **out_dist,
+                    double **out_sigma, int *out_n);
+int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx);
+
 /*
  * Check if a name corresponds to a graph_adjacency virtual table.
  * Returns 1 if yes, 0 if no.

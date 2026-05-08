@@ -1685,6 +1685,47 @@ static sqlite3_module adjacency_module = {
     .xShadowName = adj_xShadowName,
 };
 
+/* ═══════════════════════════════════════════════════════════════
+ * SSSP Shadow API (G4) — STUBS for T4.2 RED.
+ *
+ * Real implementations land in T4.2 GREEN (BLOB bind/column round-trip)
+ * and T4.4 GREEN (cascade emit / clear). Returning SQLITE_ERROR until
+ * then makes the round-trip test fail at the put-step rather than at
+ * link time.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int sssp_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, const double *dist,
+                    const double *sigma, int n) {
+    (void)db;
+    (void)vt_name;
+    (void)namespace_id;
+    (void)source_idx;
+    (void)dist;
+    (void)sigma;
+    (void)n;
+    return SQLITE_ERROR;
+}
+
+int sssp_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, double **out_dist,
+                    double **out_sigma, int *out_n) {
+    (void)db;
+    (void)vt_name;
+    (void)namespace_id;
+    (void)source_idx;
+    (void)out_dist;
+    (void)out_sigma;
+    (void)out_n;
+    return SQLITE_ERROR;
+}
+
+int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx) {
+    (void)db;
+    (void)vt_name;
+    (void)namespace_id;
+    (void)source_idx;
+    return SQLITE_ERROR;
+}
+
 int adjacency_register_module(sqlite3 *db) {
     return sqlite3_create_module(db, "graph_adjacency", &adjacency_module, NULL);
 }
