@@ -594,8 +594,48 @@ static int lei_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
         return SQLITE_OK;
     }
 
-    int *community = (int *)malloc((size_t)N * sizeof(int));
-    double Q = run_leiden(&g, community, resolution, config.direction);
+    /* G7 T7.1: cache dispatch. Only GII-backed edge tables have a
+     * _config shadow with the communities cache. For non-GII tables
+     * we fall through to the unconditional run_leiden path below. */
+    int has_cache = (config.edge_table != NULL && is_graph_adjacency(vtab->db, config.edge_table));
+    int *community = NULL;
+    double Q = 0.0;
+
+    if (has_cache) {
+        CommCacheState state = check_communities_cache(vtab->db, config.edge_table, resolution);
+        if (state == COMM_CACHE_HIT) {
+            int cached_n = 0;
+            int rc_get = leiden_shadow_get(vtab->db, config.edge_table, /*ns=*/0, &community, &cached_n);
+            if (rc_get == SQLITE_OK && cached_n == N) {
+                Q = config_get_double(vtab->db, config.edge_table, "communities_modularity", 0.0);
+                comr_init(&cur->results);
+                for (int i = 0; i < N; i++) {
+                    comr_add(&cur->results, g.ids[i], community[i], Q);
+                }
+                free(community);
+                graph_data_destroy(&g);
+                cur->current = 0;
+                cur->eof = (cur->results.count == 0);
+                return SQLITE_OK;
+            }
+            /* Size mismatch or fetch failure → fall through to compute. */
+            free(community);
+            community = NULL;
+        }
+        /* WARM_START / COLD_START → compute path; warm-start optimization
+         * (using cached partition as initial) is deferred to T7.7. For now
+         * both states route through run_leiden + write-back. */
+    }
+
+    community = (int *)malloc((size_t)N * sizeof(int));
+    Q = run_leiden(&g, community, resolution, config.direction);
+
+    /* T7.1 write-back: persist the freshly-computed partition so the
+     * next read at the same generation/resolution hits the cache. */
+    if (has_cache) {
+        sqlite3_int64 G_adj = config_get_int64_public(vtab->db, config.edge_table, "generation", 0);
+        leiden_shadow_put(vtab->db, config.edge_table, /*ns=*/0, community, N, resolution, Q, G_adj);
+    }
 
     comr_init(&cur->results);
     for (int i = 0; i < N; i++) {
