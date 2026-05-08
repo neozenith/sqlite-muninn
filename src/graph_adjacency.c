@@ -272,6 +272,20 @@ static int adjacency_create_sssp_tables(sqlite3 *db, const char *name) {
                           name);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Seed the threshold defaults so consumers (T4.4 cascade emit, G5
+     * read path) can read them from _config without a separate init
+     * step. INSERT OR IGNORE leaves any user-tuned values intact when
+     * xConnect-then-xCreate sequences run on an existing DB. T4.6
+     * may revise these defaults based on an empirical sweep. */
+    sql = sqlite3_mprintf("INSERT OR IGNORE INTO \"%w_config\"(key, value) VALUES "
+                          "  ('theta_selective', '0.05'),"
+                          "  ('theta_full', '0.30')",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
     return rc;
 }
 
@@ -1837,16 +1851,30 @@ int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, 
     return rc == SQLITE_DONE ? SQLITE_OK : rc;
 }
 
-/* Classifier stub for T4.3 RED — always returns REBUILD_SELECTIVE so
- * the test fails at the first DELTA_FLUSH / FULL band assertion. T4.3
- * GREEN replaces this with the real ratio comparison. */
+/* Classify the change ratio |delta|/total_edges into a rebuild
+ * strategy. Bands are closed-open on the lower side, open-closed-
+ * downward on the upper:
+ *
+ *   ratio < theta_selective                       → REBUILD_SELECTIVE
+ *   theta_selective ≤ ratio < theta_full          → REBUILD_DELTA_FLUSH
+ *   ratio ≥ theta_full   OR   total_edges == 0    → REBUILD_FULL
+ *
+ * The empty-graph case routes to REBUILD_FULL because the ratio is
+ * undefined and any rebuild on an empty graph is logically a
+ * fresh-start anyway. */
 SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edges, double theta_selective,
                                           double theta_full) {
-    (void)delta_count;
-    (void)total_edges;
-    (void)theta_selective;
-    (void)theta_full;
-    return REBUILD_SELECTIVE;
+    if (total_edges <= 0) {
+        return REBUILD_FULL;
+    }
+    double ratio = (double)delta_count / (double)total_edges;
+    if (ratio < theta_selective) {
+        return REBUILD_SELECTIVE;
+    }
+    if (ratio < theta_full) {
+        return REBUILD_DELTA_FLUSH;
+    }
+    return REBUILD_FULL;
 }
 
 int adjacency_register_module(sqlite3 *db) {
