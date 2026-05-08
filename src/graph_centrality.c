@@ -908,15 +908,17 @@ enum {
     DEG_COL_OUT_DEGREE,
     DEG_COL_DEGREE,
     DEG_COL_CENTRALITY,
-    DEG_COL_EDGE_TABLE,    /* hidden */
-    DEG_COL_SRC_COL,       /* hidden */
-    DEG_COL_DST_COL,       /* hidden */
-    DEG_COL_WEIGHT_COL,    /* hidden */
-    DEG_COL_NORMALIZED,    /* hidden */
-    DEG_COL_DIRECTION,     /* hidden */
-    DEG_COL_TIMESTAMP_COL, /* hidden */
-    DEG_COL_TIME_START,    /* hidden */
-    DEG_COL_TIME_END,      /* hidden */
+    DEG_COL_EDGE_TABLE,           /* hidden */
+    DEG_COL_SRC_COL,              /* hidden */
+    DEG_COL_DST_COL,              /* hidden */
+    DEG_COL_WEIGHT_COL,           /* hidden */
+    DEG_COL_NORMALIZED,           /* hidden */
+    DEG_COL_DIRECTION,            /* hidden */
+    DEG_COL_TIMESTAMP_COL,        /* hidden */
+    DEG_COL_TIME_START,           /* hidden */
+    DEG_COL_TIME_END,             /* hidden */
+    DEG_COL_COMMUNITY_FILTER,     /* hidden — G7 T7.2 */
+    DEG_COL_COMMUNITY_RESOLUTION, /* hidden — G7 T7.2 */
 };
 
 typedef struct {
@@ -937,7 +939,8 @@ static int deg_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
                                       "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
                                       "  weight_col TEXT HIDDEN, normalized INTEGER HIDDEN,"
                                       "  direction TEXT HIDDEN, timestamp_col TEXT HIDDEN,"
-                                      "  time_start HIDDEN, time_end HIDDEN"
+                                      "  time_start HIDDEN, time_end HIDDEN,"
+                                      "  community_filter INTEGER HIDDEN, community_resolution REAL HIDDEN"
                                       ")");
     if (rc != SQLITE_OK)
         return rc;
@@ -953,7 +956,7 @@ static int deg_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int deg_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_common(pIdxInfo, DEG_COL_EDGE_TABLE, DEG_COL_TIME_END, 0x7, 1000.0);
+    return graph_best_index_common(pIdxInfo, DEG_COL_EDGE_TABLE, DEG_COL_COMMUNITY_RESOLUTION, 0x7, 1000.0);
 }
 
 static int deg_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -992,7 +995,7 @@ static int deg_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
     int normalized = 0;
     int pos = 0;
 
-#define DEG_N_HIDDEN (DEG_COL_TIME_END - DEG_COL_EDGE_TABLE + 1)
+#define DEG_N_HIDDEN (DEG_COL_COMMUNITY_RESOLUTION - DEG_COL_EDGE_TABLE + 1)
     for (int bit = 0; bit < DEG_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit)))
             continue;
@@ -1138,16 +1141,18 @@ static sqlite3_module graph_degree_module = {
 enum {
     BET_COL_NODE = 0,
     BET_COL_CENTRALITY,
-    BET_COL_EDGE_TABLE,    /* hidden */
-    BET_COL_SRC_COL,       /* hidden */
-    BET_COL_DST_COL,       /* hidden */
-    BET_COL_WEIGHT_COL,    /* hidden */
-    BET_COL_NORMALIZED,    /* hidden */
-    BET_COL_DIRECTION,     /* hidden */
-    BET_COL_AUTO_APPROX,   /* hidden */
-    BET_COL_TIMESTAMP_COL, /* hidden */
-    BET_COL_TIME_START,    /* hidden */
-    BET_COL_TIME_END,      /* hidden */
+    BET_COL_EDGE_TABLE,           /* hidden */
+    BET_COL_SRC_COL,              /* hidden */
+    BET_COL_DST_COL,              /* hidden */
+    BET_COL_WEIGHT_COL,           /* hidden */
+    BET_COL_NORMALIZED,           /* hidden */
+    BET_COL_DIRECTION,            /* hidden */
+    BET_COL_AUTO_APPROX,          /* hidden */
+    BET_COL_TIMESTAMP_COL,        /* hidden */
+    BET_COL_TIME_START,           /* hidden */
+    BET_COL_TIME_END,             /* hidden */
+    BET_COL_COMMUNITY_FILTER,     /* hidden — G7 T7.2 */
+    BET_COL_COMMUNITY_RESOLUTION, /* hidden — G7 T7.2 */
 };
 
 typedef struct {
@@ -1168,7 +1173,8 @@ static int bet_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
                                       "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
                                       "  weight_col TEXT HIDDEN, normalized INTEGER HIDDEN,"
                                       "  direction TEXT HIDDEN, auto_approx_threshold INTEGER HIDDEN,"
-                                      "  timestamp_col TEXT HIDDEN, time_start HIDDEN, time_end HIDDEN"
+                                      "  timestamp_col TEXT HIDDEN, time_start HIDDEN, time_end HIDDEN,"
+                                      "  community_filter INTEGER HIDDEN, community_resolution REAL HIDDEN"
                                       ")");
     if (rc != SQLITE_OK)
         return rc;
@@ -1184,7 +1190,7 @@ static int bet_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int bet_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_common(pIdxInfo, BET_COL_EDGE_TABLE, BET_COL_TIME_END, 0x7, 1000.0);
+    return graph_best_index_common(pIdxInfo, BET_COL_EDGE_TABLE, BET_COL_COMMUNITY_RESOLUTION, 0x7, 1000.0);
 }
 
 static int bet_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -1223,7 +1229,7 @@ static int bet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
     int auto_approx = 50000;
     int pos = 0;
 
-#define BET_N_HIDDEN (BET_COL_TIME_END - BET_COL_EDGE_TABLE + 1)
+#define BET_N_HIDDEN (BET_COL_COMMUNITY_RESOLUTION - BET_COL_EDGE_TABLE + 1)
     for (int bit = 0; bit < BET_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit)))
             continue;
@@ -1381,16 +1387,18 @@ enum {
     EBET_COL_SRC = 0,
     EBET_COL_DST,
     EBET_COL_CENTRALITY,
-    EBET_COL_EDGE_TABLE,    /* hidden */
-    EBET_COL_SRC_COL,       /* hidden */
-    EBET_COL_DST_COL,       /* hidden */
-    EBET_COL_WEIGHT_COL,    /* hidden */
-    EBET_COL_NORMALIZED,    /* hidden */
-    EBET_COL_DIRECTION,     /* hidden */
-    EBET_COL_AUTO_APPROX,   /* hidden */
-    EBET_COL_TIMESTAMP_COL, /* hidden */
-    EBET_COL_TIME_START,    /* hidden */
-    EBET_COL_TIME_END,      /* hidden */
+    EBET_COL_EDGE_TABLE,           /* hidden */
+    EBET_COL_SRC_COL,              /* hidden */
+    EBET_COL_DST_COL,              /* hidden */
+    EBET_COL_WEIGHT_COL,           /* hidden */
+    EBET_COL_NORMALIZED,           /* hidden */
+    EBET_COL_DIRECTION,            /* hidden */
+    EBET_COL_AUTO_APPROX,          /* hidden */
+    EBET_COL_TIMESTAMP_COL,        /* hidden */
+    EBET_COL_TIME_START,           /* hidden */
+    EBET_COL_TIME_END,             /* hidden */
+    EBET_COL_COMMUNITY_FILTER,     /* hidden — G7 T7.2 */
+    EBET_COL_COMMUNITY_RESOLUTION, /* hidden — G7 T7.2 */
 };
 
 typedef struct {
@@ -1411,7 +1419,8 @@ static int ebet_connect(sqlite3 *db, void *pAux, int argc, const char *const *ar
                                       "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
                                       "  weight_col TEXT HIDDEN, normalized INTEGER HIDDEN,"
                                       "  direction TEXT HIDDEN, auto_approx_threshold INTEGER HIDDEN,"
-                                      "  timestamp_col TEXT HIDDEN, time_start HIDDEN, time_end HIDDEN"
+                                      "  timestamp_col TEXT HIDDEN, time_start HIDDEN, time_end HIDDEN,"
+                                      "  community_filter INTEGER HIDDEN, community_resolution REAL HIDDEN"
                                       ")");
     if (rc != SQLITE_OK)
         return rc;
@@ -1427,7 +1436,7 @@ static int ebet_connect(sqlite3 *db, void *pAux, int argc, const char *const *ar
 
 static int ebet_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_common(pIdxInfo, EBET_COL_EDGE_TABLE, EBET_COL_TIME_END, 0x7, 2000.0);
+    return graph_best_index_common(pIdxInfo, EBET_COL_EDGE_TABLE, EBET_COL_COMMUNITY_RESOLUTION, 0x7, 2000.0);
 }
 
 static int ebet_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -1467,7 +1476,8 @@ static int ebet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idx
     int auto_approx = 0;
     int pos = 0;
 
-    for (int bit = 0; bit < 12; bit++) {
+#define EBET_N_HIDDEN (EBET_COL_COMMUNITY_RESOLUTION - EBET_COL_EDGE_TABLE + 1)
+    for (int bit = 0; bit < EBET_N_HIDDEN; bit++) {
         if (!(idxNum & (1 << bit)))
             continue;
         int col = bit + EBET_COL_EDGE_TABLE;
@@ -1501,6 +1511,11 @@ static int ebet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idx
             break;
         case EBET_COL_TIME_END:
             config.time_end = argv[pos];
+            break;
+        /* T7.2: community_filter / community_resolution declared but
+         * not yet wired — T7.3 lights up the filtering. */
+        case EBET_COL_COMMUNITY_FILTER:
+        case EBET_COL_COMMUNITY_RESOLUTION:
             break;
         }
         pos++;
@@ -1633,15 +1648,17 @@ static sqlite3_module graph_edge_betweenness_module = {
 enum {
     CLO_COL_NODE = 0,
     CLO_COL_CENTRALITY,
-    CLO_COL_EDGE_TABLE,    /* hidden */
-    CLO_COL_SRC_COL,       /* hidden */
-    CLO_COL_DST_COL,       /* hidden */
-    CLO_COL_WEIGHT_COL,    /* hidden */
-    CLO_COL_NORMALIZED,    /* hidden */
-    CLO_COL_DIRECTION,     /* hidden */
-    CLO_COL_TIMESTAMP_COL, /* hidden */
-    CLO_COL_TIME_START,    /* hidden */
-    CLO_COL_TIME_END,      /* hidden */
+    CLO_COL_EDGE_TABLE,           /* hidden */
+    CLO_COL_SRC_COL,              /* hidden */
+    CLO_COL_DST_COL,              /* hidden */
+    CLO_COL_WEIGHT_COL,           /* hidden */
+    CLO_COL_NORMALIZED,           /* hidden */
+    CLO_COL_DIRECTION,            /* hidden */
+    CLO_COL_TIMESTAMP_COL,        /* hidden */
+    CLO_COL_TIME_START,           /* hidden */
+    CLO_COL_TIME_END,             /* hidden */
+    CLO_COL_COMMUNITY_FILTER,     /* hidden — G7 T7.2 */
+    CLO_COL_COMMUNITY_RESOLUTION, /* hidden — G7 T7.2 */
 };
 
 typedef struct {
@@ -1662,7 +1679,8 @@ static int clo_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
                                       "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
                                       "  weight_col TEXT HIDDEN, normalized INTEGER HIDDEN,"
                                       "  direction TEXT HIDDEN, timestamp_col TEXT HIDDEN,"
-                                      "  time_start HIDDEN, time_end HIDDEN"
+                                      "  time_start HIDDEN, time_end HIDDEN,"
+                                      "  community_filter INTEGER HIDDEN, community_resolution REAL HIDDEN"
                                       ")");
     if (rc != SQLITE_OK)
         return rc;
@@ -1678,7 +1696,7 @@ static int clo_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int clo_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_common(pIdxInfo, CLO_COL_EDGE_TABLE, CLO_COL_TIME_END, 0x7, 1000.0);
+    return graph_best_index_common(pIdxInfo, CLO_COL_EDGE_TABLE, CLO_COL_COMMUNITY_RESOLUTION, 0x7, 1000.0);
 }
 
 static int clo_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -1716,7 +1734,7 @@ static int clo_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
     int normalized = 1; /* default ON for closeness */
     int pos = 0;
 
-#define CLO_N_HIDDEN (CLO_COL_TIME_END - CLO_COL_EDGE_TABLE + 1)
+#define CLO_N_HIDDEN (CLO_COL_COMMUNITY_RESOLUTION - CLO_COL_EDGE_TABLE + 1)
     for (int bit = 0; bit < CLO_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit)))
             continue;
