@@ -14,6 +14,7 @@
 
 extern int adjacency_register_module(sqlite3 *db);
 extern int community_register_tvfs(sqlite3 *db);
+extern int centrality_register_tvfs(sqlite3 *db);
 extern sqlite3_int64 config_get_int64_public(sqlite3 *db, const char *name, const char *key, sqlite3_int64 def);
 
 /* Count rows produced by sql. Returns -1 on prepare/step failure. */
@@ -136,6 +137,51 @@ TEST(test_g7_leiden_cache_hit) {
     sqlite3_close(db);
 }
 
+/* T7.2 — every centrality TVF declares community_filter and
+ * community_resolution as hidden columns.
+ *
+ * Hidden columns aren't visible in SELECT * or PRAGMA table_info,
+ * but referencing them in a WHERE clause triggers SQLite's
+ * column-name validation against sqlite3_declare_vtab. If the
+ * column isn't in the schema string, sqlite3_prepare_v2 fails.
+ * That's the cheapest "column declared on VT" probe available. */
+TEST(test_g7_hidden_cols_declared) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = centrality_register_tvfs(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* All four centrality TVFs must accept community_filter and
+     * community_resolution in WHERE. The values bound aren't
+     * exercised by T7.2 — only that prepare succeeds (the columns
+     * exist in the declared schema). */
+    const char *queries[] = {
+        "SELECT * FROM graph_node_betweenness "
+        "WHERE edge_table = 'e' AND src_col = 's' AND dst_col = 'd' "
+        "  AND community_filter = 0 AND community_resolution = 1.0",
+        "SELECT * FROM graph_edge_betweenness "
+        "WHERE edge_table = 'e' AND src_col = 's' AND dst_col = 'd' "
+        "  AND community_filter = 0 AND community_resolution = 1.0",
+        "SELECT * FROM graph_closeness "
+        "WHERE edge_table = 'e' AND src_col = 's' AND dst_col = 'd' "
+        "  AND community_filter = 0 AND community_resolution = 1.0",
+        "SELECT * FROM graph_degree "
+        "WHERE edge_table = 'e' AND src_col = 's' AND dst_col = 'd' "
+        "  AND community_filter = 0 AND community_resolution = 1.0",
+    };
+
+    for (size_t i = 0; i < sizeof(queries) / sizeof(queries[0]); i++) {
+        sqlite3_stmt *stmt = NULL;
+        int prc = sqlite3_prepare_v2(db, queries[i], -1, &stmt, NULL);
+        ASSERT_EQ_INT(SQLITE_OK, prc);
+        sqlite3_finalize(stmt);
+    }
+
+    sqlite3_close(db);
+}
+
 void test_gii_communities_consume(void) {
     RUN_TEST(test_g7_leiden_cache_hit);
+    RUN_TEST(test_g7_hidden_cols_declared);
 }
