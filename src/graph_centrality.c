@@ -512,25 +512,88 @@ int brandes_compute(const GraphData *g, const char *direction, int auto_approx, 
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * SSSP load-or-compute wrapper (G5 T5.1) — STUB
+ * SSSP load-or-compute wrapper (G5 T5.1)
  *
- * Real implementation lands in T5.1 GREEN (cache-hit fast path,
- * compute + write-back on miss). Returning SQLITE_ERROR until then
- * makes the test fail at the wrapper call rather than at link time.
+ * Cache-hit path: sssp_shadow_get reads dist[]/sigma[] BLOBs, copy
+ * into output buffers, return SQLITE_OK.
+ *
+ * Cache-miss path: allocate scratch pred[]/stack[], run sssp_bfs or
+ * sssp_dijkstra, write back via sssp_shadow_put, free scratch,
+ * return SQLITE_OK.
+ *
+ * pred[]/stack[] reconstruction from cached dist[] is T5.2's
+ * territory. T5.1's wrapper produces dist[] and sigma[] only.
  * ═══════════════════════════════════════════════════════════════ */
 
 int sssp_load_or_compute(sqlite3 *db, const char *gii_vt_name, int namespace_id, const GraphData *g, int source,
                          int weighted, double *dist, double *sigma, const char *direction) {
-    (void)db;
-    (void)gii_vt_name;
-    (void)namespace_id;
-    (void)g;
-    (void)source;
-    (void)weighted;
-    (void)dist;
-    (void)sigma;
-    (void)direction;
-    return SQLITE_ERROR;
+    if (!db || !gii_vt_name || !g || !dist || !sigma) {
+        return SQLITE_MISUSE;
+    }
+    if (source < 0 || source >= g->node_count) {
+        return SQLITE_RANGE;
+    }
+    int N = g->node_count;
+
+    /* Try cache first. */
+    double *cached_dist = NULL;
+    double *cached_sigma = NULL;
+    int cached_n = 0;
+    int rc = sssp_shadow_get(db, gii_vt_name, namespace_id, source, &cached_dist, &cached_sigma, &cached_n);
+    if (rc == SQLITE_OK) {
+        if (cached_n != N) {
+            free(cached_dist);
+            free(cached_sigma);
+            return SQLITE_CORRUPT;
+        }
+        memcpy(dist, cached_dist, sizeof(double) * (size_t)N);
+        if (cached_sigma) {
+            memcpy(sigma, cached_sigma, sizeof(double) * (size_t)N);
+        } else {
+            /* Cache stored dist-only (closeness-only callsite). T5.1
+             * fills sigma with zeros so the output buffer is fully
+             * defined. Brandes consumers that need real sigma will
+             * be on the recompute path until a future refinement
+             * forces a sigma column populate. */
+            memset(sigma, 0, sizeof(double) * (size_t)N);
+        }
+        free(cached_dist);
+        free(cached_sigma);
+        return SQLITE_OK;
+    }
+    if (rc != SQLITE_NOTFOUND) {
+        return rc;
+    }
+
+    /* Miss path. sssp_bfs / sssp_dijkstra need scratch pred[]+stack[]
+     * buffers even though the cache doesn't store them. */
+    int *stack = (int *)malloc((size_t)N * sizeof(int));
+    IntList *pred = (IntList *)calloc((size_t)N, sizeof(IntList));
+    if (!stack || !pred) {
+        free(stack);
+        free(pred);
+        return SQLITE_NOMEM;
+    }
+    for (int i = 0; i < N; i++) {
+        intlist_init(&pred[i]);
+    }
+
+    int stack_size = 0;
+    if (weighted) {
+        sssp_dijkstra(g, source, dist, sigma, pred, stack, &stack_size, direction);
+    } else {
+        sssp_bfs(g, source, dist, sigma, pred, stack, &stack_size, direction);
+    }
+
+    /* Free scratch before write-back so a write failure doesn't leak. */
+    for (int i = 0; i < N; i++) {
+        intlist_destroy(&pred[i]);
+    }
+    free(pred);
+    free(stack);
+
+    /* Persist for the next reader. */
+    return sssp_shadow_put(db, gii_vt_name, namespace_id, source, dist, sigma, N);
 }
 
 /* ═══════════════════════════════════════════════════════════════
