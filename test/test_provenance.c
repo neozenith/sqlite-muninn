@@ -7,7 +7,9 @@
  */
 #include "test_common.h"
 #include <sqlite3.h>
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 extern int provenance_register_module(sqlite3 *db);
 
@@ -72,6 +74,82 @@ static int parity_diff_count(sqlite3 *db) {
                       "  EXCEPT "
                       "  SELECT * FROM _gii_provenance))";
     return count_rows(db, sql);
+}
+
+/* Wall-clock seconds since some monotonic epoch — for T1.8's overhead
+ * measurement. Resolution is sub-millisecond on every platform muninn
+ * targets (Linux/macOS/Windows-via-MinGW). */
+static double seconds_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+/* Insert n events + n chunks + 2n entities through prepared statements,
+ * wrapped in one transaction. Caller controls whether triggers are
+ * active by creating (or not) the gii_provenance VT before calling.
+ * Returns elapsed seconds. */
+static double time_ingest(sqlite3 *db, int n) {
+    int rc;
+    sqlite3_stmt *ins_event = NULL;
+    sqlite3_stmt *ins_chunk = NULL;
+    sqlite3_stmt *ins_entity = NULL;
+
+    /* One cluster matches half the entity names — the other half take
+     * the COALESCE fallback. Realistic mix of trigger paths. */
+    sqlite3_exec(db,
+                 "INSERT INTO entity_clusters(name, canonical) "
+                 "VALUES ('Foo', 'FooCo');",
+                 NULL, NULL, NULL);
+
+    sqlite3_exec(db, "BEGIN", NULL, NULL, NULL);
+
+    rc = sqlite3_prepare_v2(db, "INSERT INTO events(id, project_id, timestamp) VALUES (?,?,?)", -1, &ins_event, NULL);
+    if (rc != SQLITE_OK)
+        return -1.0;
+    rc = sqlite3_prepare_v2(db, "INSERT INTO event_message_chunks(chunk_id, event_id) VALUES (?,?)", -1, &ins_chunk,
+                            NULL);
+    if (rc != SQLITE_OK)
+        return -1.0;
+    rc = sqlite3_prepare_v2(db, "INSERT INTO entities(chunk_id, name) VALUES (?,?)", -1, &ins_entity, NULL);
+    if (rc != SQLITE_OK)
+        return -1.0;
+
+    double t0 = seconds_now();
+
+    for (int i = 1; i <= n; i++) {
+        sqlite3_bind_int(ins_event, 1, i);
+        sqlite3_bind_text(ins_event, 2, "proj_a", -1, SQLITE_STATIC);
+        sqlite3_bind_text(ins_event, 3, "2026-05-08T10:00:00Z", -1, SQLITE_STATIC);
+        sqlite3_step(ins_event);
+        sqlite3_reset(ins_event);
+
+        sqlite3_bind_int(ins_chunk, 1, i);
+        sqlite3_bind_int(ins_chunk, 2, i);
+        sqlite3_step(ins_chunk);
+        sqlite3_reset(ins_chunk);
+
+        /* Entity 1: matches the 'Foo' cluster. */
+        sqlite3_bind_int(ins_entity, 1, i);
+        sqlite3_bind_text(ins_entity, 2, "Foo", -1, SQLITE_STATIC);
+        sqlite3_step(ins_entity);
+        sqlite3_reset(ins_entity);
+
+        /* Entity 2: no cluster, COALESCE fallback. */
+        sqlite3_bind_int(ins_entity, 1, i);
+        sqlite3_bind_text(ins_entity, 2, "Bar", -1, SQLITE_STATIC);
+        sqlite3_step(ins_entity);
+        sqlite3_reset(ins_entity);
+    }
+
+    double t1 = seconds_now();
+
+    sqlite3_finalize(ins_event);
+    sqlite3_finalize(ins_chunk);
+    sqlite3_finalize(ins_entity);
+
+    sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
+    return t1 - t0;
 }
 
 /* Read the provenance VT's generation counter from its _config shadow.
@@ -530,6 +608,46 @@ TEST(test_g1_provenance_parity_with_4way_join) {
     sqlite3_close(db);
 }
 
+/* T1.8 — ingest overhead within 2× of the no-trigger baseline. The
+ * provenance shadow buys downstream cache invalidation, but the
+ * trigger maintenance must not dominate ingestion cost. Two :memory:
+ * databases on the same schema; one has the gii_provenance VT
+ * installed (triggers fire), the other does not (bare INSERTs).
+ *
+ * Test reports the measured ratio when bound is exceeded so a
+ * timing-noise failure shows the actual numbers. */
+TEST(test_g1_ingest_overhead_bounded) {
+    const int N = 2000;
+
+    /* Baseline: schema only, no VT, no triggers. */
+    sqlite3 *db_baseline = NULL;
+    int rc = sqlite3_open(":memory:", &db_baseline);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    seed_kg_schema(db_baseline);
+    double baseline = time_ingest(db_baseline, N);
+    sqlite3_close(db_baseline);
+    ASSERT(baseline > 0.0);
+
+    /* With triggers: schema + VT installed. */
+    sqlite3 *db_triggered = NULL;
+    rc = sqlite3_open(":memory:", &db_triggered);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = provenance_register_module(db_triggered);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    seed_kg_schema(db_triggered);
+    rc = sqlite3_exec(db_triggered, "CREATE VIRTUAL TABLE _gii USING gii_provenance()", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    double triggered = time_ingest(db_triggered, N);
+    sqlite3_close(db_triggered);
+    ASSERT(triggered > 0.0);
+
+    double ratio = triggered / baseline;
+    if (ratio > 2.0) {
+        printf("    (ingest overhead %.2fx — baseline=%.4fs, triggered=%.4fs)\n", ratio, baseline, triggered);
+    }
+    ASSERT(ratio <= 2.0);
+}
+
 void test_provenance(void) {
     RUN_TEST(test_g1_schema_creates_with_xcreate);
     RUN_TEST(test_g1_chunk_insert_populates_provenance);
@@ -538,4 +656,5 @@ void test_provenance(void) {
     RUN_TEST(test_g1_cluster_rebuild_cascade);
     RUN_TEST(test_g1_generation_strictly_increases);
     RUN_TEST(test_g1_provenance_parity_with_4way_join);
+    RUN_TEST(test_g1_ingest_overhead_bounded);
 }
