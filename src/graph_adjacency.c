@@ -311,6 +311,21 @@ static int adjacency_create_communities_tables(sqlite3 *db, const char *name) {
     if (rc != SQLITE_OK)
         return rc;
 
+    /* _comm_delta: stale-source queue for the Leiden cache (analog of
+     * _sssp_delta). One row per (namespace, node) marks a node whose
+     * community membership must be re-evaluated on the next warm-start.
+     * Populated by comm_cascade_emit (T6.6) under the SELECTIVE /
+     * DELTA_FLUSH bands. */
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_comm_delta\" ("
+                          "namespace_id INTEGER NOT NULL, "
+                          "node_idx INTEGER NOT NULL, "
+                          "PRIMARY KEY (namespace_id, node_idx))",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
     /* Seed sentinel defaults so check_communities_cache's first read
      * deterministically routes to COLD_START. INSERT OR IGNORE keeps
      * any user-tuned values intact across xConnect/xCreate cycles. */

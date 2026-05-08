@@ -9,6 +9,7 @@
 
 #include "sqlite3ext.h"
 #include "graph_load.h"
+#include "graph_adjacency.h"
 #include <stdint.h>
 
 int community_register_tvfs(sqlite3 *db);
@@ -90,5 +91,26 @@ double run_leiden_warm(const GraphData *g, int *community, double resolution, co
 int leiden_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, const int *community, int n,
                       double resolution, double modularity, int64_t generation);
 int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **out_community, int *out_n);
+
+/* Cascade-emit per rebuild strategy (G6 T6.6).
+ *
+ *   REBUILD_SELECTIVE / REBUILD_DELTA_FLUSH:
+ *     For each node in changed_nodes, INSERT OR IGNORE the node AND
+ *     its 1-hop neighbors (out + in) into <vt>_comm_delta. The 1-hop
+ *     extension is the Leiden warm-start boundary — neighbors of a
+ *     changed node need their community membership re-evaluated even
+ *     if they themselves weren't changed.
+ *
+ *   REBUILD_FULL:
+ *     DELETE all rows from <vt>_communities and <vt>_comm_delta for
+ *     the namespace; reset communities_generation = -1 (sentinel) so
+ *     check_communities_cache routes the next read to COLD_START.
+ *     changed_nodes is ignored.
+ *
+ * Strategy enum is reused from graph_adjacency.h since the same three
+ * bands govern both _sssp_delta and _comm_delta cascades (plan section
+ * 1044). */
+int comm_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
+                      const GraphData *g, const int *changed_nodes, int n_changed);
 
 #endif /* GRAPH_COMMUNITY_H */

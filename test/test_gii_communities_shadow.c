@@ -33,6 +33,17 @@ extern int leiden_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id,
                              double resolution, double modularity, sqlite3_int64 generation);
 extern int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **out_community, int *out_n);
 
+/* Layout-compatible mirror of graph_adjacency.h's SsspRebuildStrategy
+ * — the comm_cascade_emit signature reuses the same enum. */
+typedef enum {
+    REBUILD_SELECTIVE = 0,
+    REBUILD_DELTA_FLUSH = 1,
+    REBUILD_FULL = 2
+} SsspRebuildStrategy;
+
+extern int comm_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
+                             const GraphData *g, const int *changed_nodes, int n_changed);
+
 /* count_rows helper — duplicate of the one in test_provenance.c. */
 static int count_rows(sqlite3 *db, const char *sql) {
     sqlite3_stmt *stmt = NULL;
@@ -518,10 +529,97 @@ TEST(test_g6_concurrent_read_during_write) {
     sqlite3_close(db);
 }
 
+/* T6.6 — comm_cascade_emit SELECTIVE includes 1-hop neighbors.
+ *
+ * Chain 0—1—2—3 plus an isolated node 4. With direction='both' both
+ * adjacency arrays are populated so 1-hop traversal is symmetric.
+ * Marking node 1 as changed must land 0, 1, 2 in _comm_delta:
+ *   - 1 itself (the changed node)
+ *   - 0 (in-neighbor of 1 via 0→1)
+ *   - 2 (out-neighbor of 1 via 1→2)
+ * Nodes 3 (2-hop from 1) and 4 (disconnected) MUST NOT appear. */
+TEST(test_g6_comm_delta_includes_1hop) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* The chain plus an isolated node. The isolated node must still
+     * be referenced as src or dst in `edges` for graph_data_load /
+     * graph_adjacency to know it exists, so we self-loop it via a
+     * separate disconnected component (a self-edge would also work
+     * but degenerate; use a real-but-separated edge instead). */
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE edges(src TEXT, dst TEXT);"
+                      "INSERT INTO edges(src, dst) VALUES "
+                      "  ('n0','n1'),('n1','n2'),('n2','n3'),"
+                      "  ('n4','n4');" /* self-loop puts n4 in the node registry */
+                      ,
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='communities')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    GraphData graph;
+    graph_data_init(&graph);
+    GraphLoadConfig config = {.edge_table = "edges",
+                              .src_col = "src",
+                              .dst_col = "dst",
+                              .weight_col = NULL,
+                              .direction = "both",
+                              .timestamp_col = NULL,
+                              .time_start = NULL,
+                              .time_end = NULL};
+    char *errmsg = NULL;
+    rc = graph_data_load(db, &config, &graph, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(5, graph.node_count);
+
+    /* Pre-condition: _comm_delta empty. */
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_comm_delta"));
+
+    /* Mark node 1 as changed → 1-hop closure includes 0 and 2. */
+    int changed[1] = {1};
+    rc = comm_cascade_emit(db, "g", 0, REBUILD_SELECTIVE, &graph, changed, 1);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Three rows: node_idx ∈ {0, 1, 2}. */
+    ASSERT_EQ_INT(3, count_rows(db, "SELECT COUNT(*) FROM g_comm_delta"));
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_comm_delta "
+                                    "WHERE namespace_id = 0 AND node_idx = 0"));
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_comm_delta "
+                                    "WHERE namespace_id = 0 AND node_idx = 1"));
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_comm_delta "
+                                    "WHERE namespace_id = 0 AND node_idx = 2"));
+    /* 2-hop and disconnected nodes must NOT appear. */
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_comm_delta "
+                                    "WHERE namespace_id = 0 AND node_idx = 3"));
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_comm_delta "
+                                    "WHERE namespace_id = 0 AND node_idx = 4"));
+
+    /* Repeat-emit with the same changed node is idempotent (INSERT OR
+     * IGNORE on PK conflict). */
+    rc = comm_cascade_emit(db, "g", 0, REBUILD_SELECTIVE, &graph, changed, 1);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(3, count_rows(db, "SELECT COUNT(*) FROM g_comm_delta"));
+
+    graph_data_destroy(&graph);
+    sqlite3_close(db);
+}
+
 void test_gii_communities_shadow(void) {
     RUN_TEST(test_g6_schema_and_config_keys);
     RUN_TEST(test_g6_cache_state_truth_table);
     RUN_TEST(test_g6_resolution_round_trip);
     RUN_TEST(test_g6_warm_with_singletons_equivalent_to_cold);
     RUN_TEST(test_g6_concurrent_read_during_write);
+    RUN_TEST(test_g6_comm_delta_includes_1hop);
 }

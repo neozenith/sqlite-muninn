@@ -893,6 +893,28 @@ int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * Cascade emit (G6 T6.6) — STUB
+ *
+ * T6.6 GREEN replaces this with strategy-driven emission:
+ *   SELECTIVE / DELTA_FLUSH: changed_nodes + 1-hop neighbors into
+ *                            <vt>_comm_delta via INSERT OR IGNORE.
+ *   FULL:                    DELETE _communities + _comm_delta for
+ *                            the namespace, reset communities_generation.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int comm_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
+                      const GraphData *g, const int *changed_nodes, int n_changed) {
+    (void)db;
+    (void)vt_name;
+    (void)namespace_id;
+    (void)strategy;
+    (void)g;
+    (void)changed_nodes;
+    (void)n_changed;
+    return SQLITE_ERROR;
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * Communities cache state machine (G6 T6.2)
  *
  * Decision order matters:
