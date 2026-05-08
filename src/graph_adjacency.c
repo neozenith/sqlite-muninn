@@ -1851,18 +1851,109 @@ int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, 
     return rc == SQLITE_DONE ? SQLITE_OK : rc;
 }
 
-/* sssp_cascade_emit stub for T4.4 RED. Returns SQLITE_ERROR so the
- * test fails at the first call. T4.4 GREEN replaces this with the
- * real per-strategy emission logic. */
+/* Cascade-emit per rebuild strategy. See graph_adjacency.h for the
+ * full contract. Wrapped in a SAVEPOINT so a partial failure rolls
+ * back the entire batch — important for FULL where a successful
+ * _sssp DELETE followed by a failing generation update would leave
+ * the cache empty without invalidating consumers. */
 int sssp_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
                       const int *affected_source_idxs, int n) {
-    (void)db;
-    (void)vt_name;
-    (void)namespace_id;
-    (void)strategy;
-    (void)affected_source_idxs;
-    (void)n;
-    return SQLITE_ERROR;
+    if (!db || !vt_name) {
+        return SQLITE_MISUSE;
+    }
+    char *sql = NULL;
+    int rc;
+
+    sqlite3_exec(db, "SAVEPOINT sssp_cascade", NULL, NULL, NULL);
+
+    if (strategy == REBUILD_SELECTIVE || strategy == REBUILD_DELTA_FLUSH) {
+        /* Append affected source_idxs to _sssp_delta. PK collision is
+         * silent (already-stale source stays stale). */
+        if (n > 0 && !affected_source_idxs) {
+            rc = SQLITE_MISUSE;
+            goto rollback;
+        }
+        sql = sqlite3_mprintf("INSERT OR IGNORE INTO \"%w_sssp_delta\""
+                              "(namespace_id, source_idx) VALUES (?, ?)",
+                              vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        sqlite3_stmt *stmt = NULL;
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK) {
+            goto rollback;
+        }
+        for (int i = 0; i < n; i++) {
+            sqlite3_bind_int(stmt, 1, namespace_id);
+            sqlite3_bind_int(stmt, 2, affected_source_idxs[i]);
+            int step = sqlite3_step(stmt);
+            sqlite3_reset(stmt);
+            if (step != SQLITE_DONE) {
+                sqlite3_finalize(stmt);
+                rc = step;
+                goto rollback;
+            }
+        }
+        sqlite3_finalize(stmt);
+    } else if (strategy == REBUILD_FULL) {
+        /* Physical clear of _sssp + _sssp_delta then bump generation.
+         * Schema has no per-row generation, so logical invalidation
+         * isn't enough — we must DELETE so future cache lookups miss. */
+        sql = sqlite3_mprintf("DELETE FROM \"%w_sssp\" WHERE namespace_id = ?", vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        sqlite3_stmt *stmt = NULL;
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE)
+            goto rollback;
+
+        sql = sqlite3_mprintf("DELETE FROM \"%w_sssp_delta\" WHERE namespace_id = ?", vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE)
+            goto rollback;
+
+        /* Bump generation. Read current value, increment, write back.
+         * TEXT-typed value column matches graph_adjacency's convention. */
+        sqlite3_int64 current = config_get_int(db, vt_name, "generation", 0);
+        rc = config_set_int(db, vt_name, "generation", current + 1);
+        if (rc != SQLITE_OK)
+            goto rollback;
+    } else {
+        rc = SQLITE_MISUSE;
+        goto rollback;
+    }
+
+    sqlite3_exec(db, "RELEASE sssp_cascade", NULL, NULL, NULL);
+    return SQLITE_OK;
+
+rollback:
+    sqlite3_exec(db, "ROLLBACK TO sssp_cascade", NULL, NULL, NULL);
+    sqlite3_exec(db, "RELEASE sssp_cascade", NULL, NULL, NULL);
+    return rc;
 }
 
 /* Classify the change ratio |delta|/total_edges into a rebuild
