@@ -17,6 +17,7 @@
 #include "graph_adjacency.h"
 #include "id_validate.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -687,38 +688,208 @@ double run_leiden_warm(const GraphData *g, int *community, double resolution, co
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * Communities cache I/O (G6 T6.5) — STUBS
+ * Communities cache I/O (G6 T6.5)
  *
- * T6.5 GREEN replaces these with real implementations:
- *   leiden_shadow_put: SAVEPOINT-wrapped DELETE-from-namespace +
- *                      INSERT loop + four config_set(_int/_double)
- *                      writes. Atomic across all writes.
- *   leiden_shadow_get: SELECT node_idx, community_id ... ORDER BY
- *                      node_idx, copy into a malloc'd int[].
+ * Atomic write path: SAVEPOINT wraps DELETE-from-namespace + INSERT
+ * loop + four config_set(_double / via INSERT OR REPLACE) writes so
+ * any failure mid-batch ROLLBACK TOs the savepoint, leaving readers
+ * to see only the pre-call state.
  * ═══════════════════════════════════════════════════════════════ */
 
 int leiden_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, const int *community, int n,
                       double resolution, double modularity, int64_t generation) {
-    (void)db;
-    (void)vt_name;
-    (void)namespace_id;
-    (void)community;
-    (void)n;
-    (void)resolution;
-    (void)modularity;
-    (void)generation;
-    return SQLITE_ERROR;
+    if (!db || !vt_name || (n > 0 && !community)) {
+        return SQLITE_MISUSE;
+    }
+
+    sqlite3_exec(db, "SAVEPOINT comm_put", NULL, NULL, NULL);
+
+    char *sql = NULL;
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+
+    /* Replace any existing partition for this namespace. */
+    sql = sqlite3_mprintf("DELETE FROM \"%w_communities\" WHERE namespace_id = ?", vt_name);
+    if (!sql) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    sql = NULL;
+    if (rc != SQLITE_OK)
+        goto rollback;
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    stmt = NULL;
+    if (rc != SQLITE_DONE)
+        goto rollback;
+
+    /* INSERT one row per node. Re-use a single prepared statement
+     * across the loop. */
+    sql = sqlite3_mprintf("INSERT INTO \"%w_communities\""
+                          "(namespace_id, node_idx, community_id) VALUES (?, ?, ?)",
+                          vt_name);
+    if (!sql) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    sql = NULL;
+    if (rc != SQLITE_OK)
+        goto rollback;
+
+    for (int i = 0; i < n; i++) {
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        sqlite3_bind_int(stmt, 2, i);
+        sqlite3_bind_int(stmt, 3, community[i]);
+        int step = sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+        if (step != SQLITE_DONE) {
+            sqlite3_finalize(stmt);
+            rc = step;
+            goto rollback;
+        }
+    }
+    sqlite3_finalize(stmt);
+    stmt = NULL;
+
+    /* Count distinct community ids for num_communities. O(n^2) on a
+     * tiny scratch buffer — N is bounded by node_count, not edges. */
+    int distinct = 0;
+    int *seen = (int *)malloc((size_t)n * sizeof(int));
+    if (!seen) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    for (int i = 0; i < n; i++) {
+        int found = 0;
+        for (int j = 0; j < distinct; j++) {
+            if (seen[j] == community[i]) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            seen[distinct++] = community[i];
+        }
+    }
+    free(seen);
+
+    /* Config metadata — bundled inside the same SAVEPOINT so a
+     * failure here also rolls back the partition writes. */
+    rc = config_set_double(db, vt_name, "communities_resolution", resolution);
+    if (rc != SQLITE_OK)
+        goto rollback;
+    rc = config_set_double(db, vt_name, "communities_modularity", modularity);
+    if (rc != SQLITE_OK)
+        goto rollback;
+
+    /* communities_generation and num_communities — INTEGER, written
+     * via the same TEXT-typed config table. Hand-format because the
+     * file-static config_set_int isn't visible here. */
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%lld", (long long)generation);
+    sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_config\"(key, value) "
+                          "VALUES ('communities_generation', %Q)",
+                          vt_name, buf);
+    if (!sql) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    sql = NULL;
+    if (rc != SQLITE_OK)
+        goto rollback;
+
+    snprintf(buf, sizeof(buf), "%d", distinct);
+    sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_config\"(key, value) "
+                          "VALUES ('num_communities', %Q)",
+                          vt_name, buf);
+    if (!sql) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    sql = NULL;
+    if (rc != SQLITE_OK)
+        goto rollback;
+
+    sqlite3_exec(db, "RELEASE comm_put", NULL, NULL, NULL);
+    return SQLITE_OK;
+
+rollback:
+    if (stmt)
+        sqlite3_finalize(stmt);
+    if (sql)
+        sqlite3_free(sql);
+    sqlite3_exec(db, "ROLLBACK TO comm_put", NULL, NULL, NULL);
+    sqlite3_exec(db, "RELEASE comm_put", NULL, NULL, NULL);
+    return rc;
 }
 
 int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **out_community, int *out_n) {
-    (void)db;
-    (void)vt_name;
-    (void)namespace_id;
-    if (out_community)
-        *out_community = NULL;
-    if (out_n)
-        *out_n = 0;
-    return SQLITE_ERROR;
+    if (!db || !vt_name || !out_community || !out_n) {
+        return SQLITE_MISUSE;
+    }
+    *out_community = NULL;
+    *out_n = 0;
+
+    /* First pass: COUNT(*) so we know how big to allocate. Cheaper than
+     * a realloc loop on the typical case where the partition is small. */
+    char *sql = sqlite3_mprintf("SELECT COUNT(*) FROM \"%w_communities\" WHERE namespace_id = ?", vt_name);
+    if (!sql)
+        return SQLITE_NOMEM;
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    int count = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    if (count == 0)
+        return SQLITE_NOTFOUND;
+
+    int *buf = (int *)malloc((size_t)count * sizeof(int));
+    if (!buf)
+        return SQLITE_NOMEM;
+
+    /* Second pass: ORDER BY node_idx so out[i] = community of node i. */
+    sql = sqlite3_mprintf("SELECT node_idx, community_id FROM \"%w_communities\" "
+                          "WHERE namespace_id = ? ORDER BY node_idx",
+                          vt_name);
+    if (!sql) {
+        free(buf);
+        return SQLITE_NOMEM;
+    }
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        free(buf);
+        return rc;
+    }
+    sqlite3_bind_int(stmt, 1, namespace_id);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int idx = sqlite3_column_int(stmt, 0);
+        int cid = sqlite3_column_int(stmt, 1);
+        if (idx >= 0 && idx < count) {
+            buf[idx] = cid;
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    *out_community = buf;
+    *out_n = count;
+    return SQLITE_OK;
 }
 
 /* ═══════════════════════════════════════════════════════════════
