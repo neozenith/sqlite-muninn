@@ -27,6 +27,28 @@ extern int community_register_tvfs(sqlite3 *db);
 extern int centrality_register_tvfs(sqlite3 *db);
 extern sqlite3_int64 config_get_int64_public(sqlite3 *db, const char *name, const char *key, sqlite3_int64 def);
 
+/* Read a TEXT-typed config value. Caller sqlite3_free()s. */
+static char *config_get_text(sqlite3 *db, const char *vt_name, const char *key) {
+    char *sql = sqlite3_mprintf("SELECT value FROM \"%w_config\" WHERE key = ?", vt_name);
+    if (!sql) {
+        return NULL;
+    }
+    sqlite3_stmt *stmt = NULL;
+    char *out = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *t = (const char *)sqlite3_column_text(stmt, 0);
+            if (t) {
+                out = sqlite3_mprintf("%s", t);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_free(sql);
+    return out;
+}
+
 /* Count rows produced by sql. Returns -1 on prepare/step failure. */
 static int count_rows(sqlite3 *db, const char *sql) {
     sqlite3_stmt *stmt = NULL;
@@ -476,6 +498,94 @@ TEST(test_g7_empty_intersection_returns_zero_rows) {
     sqlite3_close(db);
 }
 
+/* T7.7 — cross-resolution isolation. A graph_leiden query at a
+ * resolution different from the cached one MUST recompute, not
+ * return the cached partition. End-to-end validation of the
+ * resolution-mismatch path that T6.2 and T6.3 covered at the unit
+ * level.
+ *
+ * Same poison-cache pattern as T7.1: plant community_id = 999 (an
+ * impossible Leiden output) in the shadow at resolution 1.0, then
+ * query at resolution 0.5. If lei_filter returns 999s, the cache
+ * was incorrectly trusted across resolutions. */
+TEST(test_g7_resolution_mismatch_recomputes) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = community_register_tvfs(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Two 4-cliques + bridge — same fixture as T7.1. */
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE edges(src TEXT, dst TEXT);"
+                      "INSERT INTO edges(src, dst) VALUES "
+                      "  ('a','b'),('a','c'),('a','d'),('b','c'),('b','d'),('c','d'),"
+                      "  ('e','f'),('e','g'),('e','h'),('f','g'),('f','h'),('g','h'),"
+                      "  ('d','e');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='communities')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* (1) First call at resolution=1.0 → COLD_START → run_leiden +
+     * write back. Just driving lei_filter; result content not asserted
+     * here (T7.1 already validated the cache populates). */
+    sqlite3_stmt *stmt = NULL;
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT COUNT(*) FROM graph_leiden "
+                            "WHERE edge_table = 'g' AND src_col = 'src' AND dst_col = 'dst' "
+                            "  AND resolution = 1.0 AND direction = 'both'",
+                            -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(SQLITE_ROW, sqlite3_step(stmt));
+    sqlite3_finalize(stmt);
+
+    /* Cache now has communities_resolution = 1.0 and a real partition. */
+    char *cached_res_text = config_get_text(db, "g", "communities_resolution");
+    ASSERT(cached_res_text != NULL);
+    ASSERT(atof(cached_res_text) == 1.0);
+    sqlite3_free(cached_res_text);
+
+    /* (2) Poison the cache (same trick as T7.1). */
+    rc = sqlite3_exec(db, "UPDATE g_communities SET community_id = 999", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* (3) Query at resolution 0.5 → check_communities_cache must see
+     * resolution mismatch → COLD_START → run_leiden recomputes. The
+     * returned community_ids must be small integers (no 999s). */
+    rc = sqlite3_prepare_v2(db,
+                            "SELECT community_id FROM graph_leiden "
+                            "WHERE edge_table = 'g' AND src_col = 'src' AND dst_col = 'dst' "
+                            "  AND resolution = 0.5 AND direction = 'both'",
+                            -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    int saw_999 = 0;
+    int n_rows = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int cid = sqlite3_column_int(stmt, 0);
+        if (cid == 999) {
+            saw_999 = 1;
+        }
+        n_rows++;
+    }
+    sqlite3_finalize(stmt);
+    ASSERT_EQ_INT(8, n_rows);   /* All 8 nodes assigned to a community. */
+    ASSERT_EQ_INT(0, saw_999);  /* No poison values — recompute fired. */
+
+    /* Cache now reflects resolution=0.5 (the previous run wrote back). */
+    cached_res_text = config_get_text(db, "g", "communities_resolution");
+    ASSERT(cached_res_text != NULL);
+    ASSERT(atof(cached_res_text) == 0.5);
+    sqlite3_free(cached_res_text);
+
+    sqlite3_close(db);
+}
+
 void test_gii_communities_consume(void) {
     RUN_TEST(test_g7_leiden_cache_hit);
     RUN_TEST(test_g7_hidden_cols_declared);
@@ -483,4 +593,5 @@ void test_gii_communities_consume(void) {
     RUN_TEST(test_g7_g2_signature_includes_community);
     RUN_TEST(test_g7_intersection_with_provenance);
     RUN_TEST(test_g7_empty_intersection_returns_zero_rows);
+    RUN_TEST(test_g7_resolution_mismatch_recomputes);
 }
