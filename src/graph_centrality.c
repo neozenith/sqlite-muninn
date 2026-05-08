@@ -512,6 +512,28 @@ int brandes_compute(const GraphData *g, const char *direction, int auto_approx, 
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * SSSP load-or-compute wrapper (G5 T5.1) — STUB
+ *
+ * Real implementation lands in T5.1 GREEN (cache-hit fast path,
+ * compute + write-back on miss). Returning SQLITE_ERROR until then
+ * makes the test fail at the wrapper call rather than at link time.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int sssp_load_or_compute(sqlite3 *db, const char *gii_vt_name, int namespace_id, const GraphData *g, int source,
+                         int weighted, double *dist, double *sigma, const char *direction) {
+    (void)db;
+    (void)gii_vt_name;
+    (void)namespace_id;
+    (void)g;
+    (void)source;
+    (void)weighted;
+    (void)dist;
+    (void)sigma;
+    (void)direction;
+    return SQLITE_ERROR;
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * DEGREE CENTRALITY
  *
  * O(V+E) — iterate adjacency lists, sum weights per node.

@@ -6,6 +6,7 @@
  *   `make test-g4` → ./build/test_runner --filter=test_g4_
  */
 #include "test_common.h"
+#include "graph_load.h"
 #include <math.h>
 #include <sqlite3.h>
 #include <stdlib.h>
@@ -30,6 +31,11 @@ extern SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edge
                                                  double theta_full);
 extern int sssp_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
                              const int *affected_source_idxs, int n);
+
+/* G5 — sssp_load_or_compute wrapper. Defined in graph_centrality.c so
+ * it can call the static sssp_bfs / sssp_dijkstra helpers there. */
+extern int sssp_load_or_compute(sqlite3 *db, const char *gii_vt_name, int namespace_id, const GraphData *g, int source,
+                                int weighted, double *dist, double *sigma, const char *direction);
 
 /* Count rows produced by sql. Returns -1 on prepare/step failure. */
 static int count_rows(sqlite3 *db, const char *sql) {
@@ -510,6 +516,91 @@ TEST(test_g4_threshold_defaults_match_sweep) {
     sqlite3_close(db);
 }
 
+/* T5.1 — sssp_load_or_compute writes back on cache miss.
+ *
+ * Tiny graph 'a' → 'b' → 'c' lets BFS fill in well-known distances
+ * (0, 1, 2). Cache starts empty. The first wrapper call must compute
+ * via sssp_bfs and persist the result via sssp_shadow_put — verified
+ * by counting _sssp rows. The second call reads back exactly the same
+ * dist[]/sigma[] bytes (cache-hit fast path). */
+TEST(test_g5_load_or_compute_writes_back_on_miss) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE edges(src TEXT, dst TEXT);"
+                      "INSERT INTO edges(src, dst) VALUES ('a','b'),('b','c');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='sssp')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* GraphData mirrors the rows graph_adjacency just ingested. Both
+     * scan `edges` in the same rowid order so node indices align. */
+    GraphData graph;
+    graph_data_init(&graph);
+    GraphLoadConfig config = {.edge_table = "edges",
+                              .src_col = "src",
+                              .dst_col = "dst",
+                              .weight_col = NULL,
+                              .direction = "forward",
+                              .timestamp_col = NULL,
+                              .time_start = NULL,
+                              .time_end = NULL};
+    char *errmsg = NULL;
+    rc = graph_data_load(db, &config, &graph, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(3, graph.node_count);
+
+    /* Cache empty before the first call. */
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_sssp"));
+
+    int N = graph.node_count;
+    double *dist = (double *)malloc((size_t)N * sizeof(double));
+    double *sigma = (double *)malloc((size_t)N * sizeof(double));
+    ASSERT(dist != NULL && sigma != NULL);
+
+    /* MISS: must compute and write back. */
+    rc = sssp_load_or_compute(db, "g", 0, &graph, /*source=*/0, /*weighted=*/0, dist, sigma, "forward");
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Exactly one row keyed by (namespace=0, source_idx=0). */
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_sssp "
+                                    "WHERE namespace_id = 0 AND source_idx = 0"));
+
+    /* BFS sanity: source distance is 0 (anything else means we're not
+     * actually running the SSSP). */
+    ASSERT(dist[0] == 0.0);
+
+    /* HIT: returns the same bytes; cache row count unchanged. */
+    double *dist2 = (double *)malloc((size_t)N * sizeof(double));
+    double *sigma2 = (double *)malloc((size_t)N * sizeof(double));
+    ASSERT(dist2 != NULL && sigma2 != NULL);
+    rc = sssp_load_or_compute(db, "g", 0, &graph, 0, 0, dist2, sigma2, "forward");
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT(memcmp(dist, dist2, sizeof(double) * (size_t)N) == 0);
+    ASSERT(memcmp(sigma, sigma2, sizeof(double) * (size_t)N) == 0);
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_sssp "
+                                    "WHERE namespace_id = 0 AND source_idx = 0"));
+
+    free(dist);
+    free(sigma);
+    free(dist2);
+    free(sigma2);
+    graph_data_destroy(&graph);
+    sqlite3_close(db);
+}
+
 void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_schema_creates_with_feature_flag);
     RUN_TEST(test_g4_blob_round_trip);
@@ -517,4 +608,5 @@ void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_cascade_emit_per_strategy);
     RUN_TEST(test_g4_namespace_isolation);
     RUN_TEST(test_g4_threshold_defaults_match_sweep);
+    RUN_TEST(test_g5_load_or_compute_writes_back_on_miss);
 }
