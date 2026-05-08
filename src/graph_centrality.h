@@ -57,4 +57,38 @@ int brandes_compute(const GraphData *g, const char *direction, int auto_approx, 
 int sssp_load_or_compute(sqlite3 *db, const char *gii_vt_name, int namespace_id, const GraphData *g, int source,
                          int weighted, double *dist, double *sigma, const char *direction);
 
+/* Dynamic int list used by Brandes pred[] entries. Promoted to the
+ * header so external consumers (G5 T5.2 reconstruction, tests) can
+ * pre-allocate / iterate / free pred[] entries without re-implementing
+ * the helpers. Treat fields as opaque — use the functions below. */
+typedef struct IntList {
+    int *items;
+    int count;
+    int capacity;
+} IntList;
+
+void intlist_init(IntList *l);
+void intlist_push(IntList *l, int val);
+void intlist_clear(IntList *l);
+void intlist_destroy(IntList *l);
+
+/* Predecessor and stack reconstruction (G5 T5.2).
+ *
+ * Given a cached dist[] from a previous SSSP run and the same GraphData,
+ * rebuild the pred[] adjacency and stack[] visit order needed by Brandes
+ * back-propagation. For each w with dist[w] >= 0, u is added to pred[w]
+ * iff there's an edge (u, w) with dist[u] + weight(u, w) == dist[w].
+ * stack[] is filled with all reachable node indices sorted by dist
+ * ascending; back-propagation pops from the end (largest dist first).
+ *
+ * pred must be pre-initialized via intlist_init for each entry; the
+ * function calls intlist_clear before populating. stack must hold at
+ * least node_count entries.
+ *
+ * Returns SQLITE_OK on success, SQLITE_NOMEM if scratch allocation
+ * fails, SQLITE_MISUSE for null inputs.
+ */
+int reconstruct_pred_from_dist(const GraphData *g, int source, const double *dist, IntList *pred, int *stack,
+                               int *stack_size, const char *direction, int weighted);
+
 #endif /* GRAPH_CENTRALITY_H */

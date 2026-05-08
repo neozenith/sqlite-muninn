@@ -12,6 +12,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Layout-compatible mirror of graph_centrality.h's IntList. We
+ * don't include graph_centrality.h directly because it pulls in
+ * sqlite3ext.h which expects SQLITE_EXTENSION_INIT3 — the test runner
+ * uses sqlite3_auto_extension instead. */
+typedef struct {
+    int *items;
+    int count;
+    int capacity;
+} IntList;
+
+extern void intlist_init(IntList *l);
+extern void intlist_push(IntList *l, int val);
+extern void intlist_clear(IntList *l);
+extern void intlist_destroy(IntList *l);
+extern int reconstruct_pred_from_dist(const GraphData *g, int source, const double *dist, IntList *pred, int *stack,
+                                      int *stack_size, const char *direction, int weighted);
+
 extern int adjacency_register_module(sqlite3 *db);
 extern int sssp_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, const double *dist,
                            const double *sigma, int n);
@@ -601,6 +618,111 @@ TEST(test_g5_load_or_compute_writes_back_on_miss) {
     sqlite3_close(db);
 }
 
+/* T5.2 — reconstruct_pred_from_dist parity against known-good values
+ * for a deterministic 3-node path graph 'a' → 'b' → 'c'.
+ *
+ * Forward direction from source=0 ('a'):
+ *   dist[0]=0, dist[1]=1, dist[2]=2
+ *   pred[0]=∅, pred[1]={0}, pred[2]={1}
+ *   stack=[0,1,2]  (reachable indices, dist-ascending)
+ *
+ * The test loads the graph + cached dist[] via sssp_load_or_compute
+ * (which exercises T5.1's miss-path), then runs reconstruction and
+ * checks pred[] sets and stack[] composition + ordering against the
+ * hardcoded expectations above. */
+TEST(test_g5_pred_reconstruction_parity) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE edges(src TEXT, dst TEXT);"
+                      "INSERT INTO edges(src, dst) VALUES ('a','b'),('b','c');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='sssp')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    GraphData graph;
+    graph_data_init(&graph);
+    GraphLoadConfig config = {.edge_table = "edges",
+                              .src_col = "src",
+                              .dst_col = "dst",
+                              .weight_col = NULL,
+                              .direction = "forward",
+                              .timestamp_col = NULL,
+                              .time_start = NULL,
+                              .time_end = NULL};
+    char *errmsg = NULL;
+    rc = graph_data_load(db, &config, &graph, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(3, graph.node_count);
+
+    /* Get cached dist[] via the wrapper (miss-path computes + writes back). */
+    int N = graph.node_count;
+    double *dist = (double *)malloc((size_t)N * sizeof(double));
+    double *sigma = (double *)malloc((size_t)N * sizeof(double));
+    rc = sssp_load_or_compute(db, "g", 0, &graph, /*source=*/0, /*weighted=*/0, dist, sigma, "forward");
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT(dist[0] == 0.0);
+    ASSERT(dist[1] == 1.0);
+    ASSERT(dist[2] == 2.0);
+
+    /* Reconstruct pred[] / stack[] from dist[]. */
+    IntList *pred = (IntList *)calloc((size_t)N, sizeof(IntList));
+    int *stack = (int *)malloc((size_t)N * sizeof(int));
+    int stack_size = 0;
+    for (int i = 0; i < N; i++) {
+        intlist_init(&pred[i]);
+    }
+
+    rc = reconstruct_pred_from_dist(&graph, 0, dist, pred, stack, &stack_size, "forward", /*weighted=*/0);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* pred[0] empty (source has no predecessor). */
+    ASSERT_EQ_INT(0, pred[0].count);
+    /* pred[1] == {0}. */
+    ASSERT_EQ_INT(1, pred[1].count);
+    ASSERT_EQ_INT(0, pred[1].items[0]);
+    /* pred[2] == {1}. */
+    ASSERT_EQ_INT(1, pred[2].count);
+    ASSERT_EQ_INT(1, pred[2].items[0]);
+
+    /* stack covers all 3 reachable nodes in non-decreasing dist order.
+     * For a 3-node path with unique distances, the order is exactly
+     * [0, 1, 2]. */
+    ASSERT_EQ_INT(3, stack_size);
+    ASSERT(dist[stack[0]] <= dist[stack[1]]);
+    ASSERT(dist[stack[1]] <= dist[stack[2]]);
+    /* All three node indices appear (set membership check). */
+    int seen[3] = {0, 0, 0};
+    for (int i = 0; i < 3; i++) {
+        ASSERT(stack[i] >= 0 && stack[i] < 3);
+        seen[stack[i]] = 1;
+    }
+    ASSERT(seen[0] && seen[1] && seen[2]);
+
+    /* Cleanup. */
+    for (int i = 0; i < N; i++) {
+        intlist_destroy(&pred[i]);
+    }
+    free(pred);
+    free(stack);
+    free(dist);
+    free(sigma);
+    graph_data_destroy(&graph);
+    sqlite3_close(db);
+}
+
 void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_schema_creates_with_feature_flag);
     RUN_TEST(test_g4_blob_round_trip);
@@ -609,4 +731,5 @@ void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_namespace_isolation);
     RUN_TEST(test_g4_threshold_defaults_match_sweep);
     RUN_TEST(test_g5_load_or_compute_writes_back_on_miss);
+    RUN_TEST(test_g5_pred_reconstruction_parity);
 }

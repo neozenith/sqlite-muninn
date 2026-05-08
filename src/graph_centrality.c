@@ -218,19 +218,16 @@ static int double_eq(double a, double b) {
  * Used by Brandes for tracking shortest-path predecessors.
  * ═══════════════════════════════════════════════════════════════ */
 
-typedef struct {
-    int *items;
-    int count;
-    int capacity;
-} IntList;
-
-static void intlist_init(IntList *l) {
+/* IntList — definition + helpers are public in graph_centrality.h so
+ * external G5 consumers (reconstruction, tests) can manage pred[]
+ * entries without re-implementing the same dynamic-array boilerplate. */
+void intlist_init(IntList *l) {
     l->items = NULL;
     l->count = 0;
     l->capacity = 0;
 }
 
-static void intlist_push(IntList *l, int val) {
+void intlist_push(IntList *l, int val) {
     if (l->count >= l->capacity) {
         l->capacity = l->capacity == 0 ? 4 : l->capacity * 2;
         l->items = (int *)realloc(l->items, (size_t)l->capacity * sizeof(int));
@@ -238,11 +235,11 @@ static void intlist_push(IntList *l, int val) {
     l->items[l->count++] = val;
 }
 
-static void intlist_clear(IntList *l) {
+void intlist_clear(IntList *l) {
     l->count = 0;
 }
 
-static void intlist_destroy(IntList *l) {
+void intlist_destroy(IntList *l) {
     free(l->items);
     l->items = NULL;
     l->count = l->capacity = 0;
@@ -509,6 +506,30 @@ int brandes_compute(const GraphData *g, const char *direction, int auto_approx, 
     free(sources);
 
     return SQLITE_OK;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * pred / stack reconstruction from cached dist[] (G5 T5.2) — STUB
+ *
+ * T5.2 GREEN replaces this with: scan in-edges to each w (out-edges
+ * for reverse direction), test dist[u] + weight(u, w) == dist[w],
+ * push u onto pred[w]; sort reachable indices by dist ascending into
+ * stack[].
+ * ═══════════════════════════════════════════════════════════════ */
+
+int reconstruct_pred_from_dist(const GraphData *g, int source, const double *dist, IntList *pred, int *stack,
+                               int *stack_size, const char *direction, int weighted) {
+    (void)g;
+    (void)source;
+    (void)dist;
+    (void)pred;
+    (void)stack;
+    (void)direction;
+    (void)weighted;
+    if (stack_size) {
+        *stack_size = 0;
+    }
+    return SQLITE_ERROR;
 }
 
 /* ═══════════════════════════════════════════════════════════════
