@@ -1828,14 +1828,37 @@ int sssp_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int sour
     return SQLITE_OK;
 }
 
-/* sssp_shadow_is_stale stub for T5.3 RED — always returns 0 (never
- * stale). T5.3 GREEN replaces this with a real EXISTS lookup. */
+/* Returns 1 if (ns, source) is present in <vt>_sssp_delta (cache
+ * stale), 0 if absent (cache fresh), or a negative SQLite errcode on
+ * query failure. */
 int sssp_shadow_is_stale(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx) {
-    (void)db;
-    (void)vt_name;
-    (void)namespace_id;
-    (void)source_idx;
-    return 0;
+    if (!db || !vt_name) {
+        return -SQLITE_MISUSE;
+    }
+    char *sql = sqlite3_mprintf("SELECT 1 FROM \"%w_sssp_delta\" "
+                                "WHERE namespace_id = ? AND source_idx = ? "
+                                "LIMIT 1",
+                                vt_name);
+    if (!sql) {
+        return -SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return -rc;
+    }
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    sqlite3_bind_int(stmt, 2, source_idx);
+    int step = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (step == SQLITE_ROW) {
+        return 1;
+    }
+    if (step == SQLITE_DONE) {
+        return 0;
+    }
+    return -step;
 }
 
 int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx) {

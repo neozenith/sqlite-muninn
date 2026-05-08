@@ -641,33 +641,44 @@ int sssp_load_or_compute(sqlite3 *db, const char *gii_vt_name, int namespace_id,
     }
     int N = g->node_count;
 
-    /* Try cache first. */
+    /* Try cache first — but a cache row is only trustworthy if the
+     * (namespace, source) pair is NOT in _sssp_delta. T5.3's staleness
+     * check: a SELECTIVE/DELTA_FLUSH cascade may have marked this
+     * source stale without bumping generation, so the cache row could
+     * be a poisoned read. */
     double *cached_dist = NULL;
     double *cached_sigma = NULL;
     int cached_n = 0;
     int rc = sssp_shadow_get(db, gii_vt_name, namespace_id, source, &cached_dist, &cached_sigma, &cached_n);
     if (rc == SQLITE_OK) {
-        if (cached_n != N) {
+        int stale = sssp_shadow_is_stale(db, gii_vt_name, namespace_id, source);
+        if (stale > 0) {
+            /* Stale: free cached buffers and fall through to recompute. */
             free(cached_dist);
             free(cached_sigma);
-            return SQLITE_CORRUPT;
-        }
-        memcpy(dist, cached_dist, sizeof(double) * (size_t)N);
-        if (cached_sigma) {
-            memcpy(sigma, cached_sigma, sizeof(double) * (size_t)N);
+            cached_dist = NULL;
+            cached_sigma = NULL;
+        } else if (stale < 0) {
+            free(cached_dist);
+            free(cached_sigma);
+            return -stale;
         } else {
-            /* Cache stored dist-only (closeness-only callsite). T5.1
-             * fills sigma with zeros so the output buffer is fully
-             * defined. Brandes consumers that need real sigma will
-             * be on the recompute path until a future refinement
-             * forces a sigma column populate. */
-            memset(sigma, 0, sizeof(double) * (size_t)N);
+            if (cached_n != N) {
+                free(cached_dist);
+                free(cached_sigma);
+                return SQLITE_CORRUPT;
+            }
+            memcpy(dist, cached_dist, sizeof(double) * (size_t)N);
+            if (cached_sigma) {
+                memcpy(sigma, cached_sigma, sizeof(double) * (size_t)N);
+            } else {
+                memset(sigma, 0, sizeof(double) * (size_t)N);
+            }
+            free(cached_dist);
+            free(cached_sigma);
+            return SQLITE_OK;
         }
-        free(cached_dist);
-        free(cached_sigma);
-        return SQLITE_OK;
-    }
-    if (rc != SQLITE_NOTFOUND) {
+    } else if (rc != SQLITE_NOTFOUND) {
         return rc;
     }
 
@@ -699,7 +710,17 @@ int sssp_load_or_compute(sqlite3 *db, const char *gii_vt_name, int namespace_id,
     free(stack);
 
     /* Persist for the next reader. */
-    return sssp_shadow_put(db, gii_vt_name, namespace_id, source, dist, sigma, N);
+    rc = sssp_shadow_put(db, gii_vt_name, namespace_id, source, dist, sigma, N);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+
+    /* Consume-and-clear: if this miss was triggered by a stale
+     * delta entry (T5.3 path), drop it now that the cache is fresh.
+     * On a "never-cached" miss the delta entry doesn't exist and the
+     * DELETE is a harmless no-op. Per the plan section 1000, the
+     * consumer is responsible for clearing what it consumes. */
+    return sssp_shadow_clear_delta(db, gii_vt_name, namespace_id, source);
 }
 
 /* ═══════════════════════════════════════════════════════════════
