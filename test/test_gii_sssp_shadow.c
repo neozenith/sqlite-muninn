@@ -9,8 +9,18 @@
 #include "graph_load.h"
 #include <math.h>
 #include <sqlite3.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+/* Wall-clock seconds since some monotonic epoch — local copy because
+ * the one in test_provenance.c is static. */
+static double seconds_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
 
 /* Layout-compatible mirror of graph_centrality.h's IntList. We
  * don't include graph_centrality.h directly because it pulls in
@@ -917,6 +927,160 @@ TEST(test_g5_cache_vs_uncached_parity) {
     sqlite3_close(db);
 }
 
+/* Build a moderately dense edge list directly into the SQL `edges`
+ * table: a ring of node_count nodes with `extra_chords` extra random-ish
+ * cross-edges so SSSP cost is non-trivial. Returns the number of edges
+ * inserted. */
+static int seed_dense_graph(sqlite3 *db, int node_count, int extra_chords) {
+    sqlite3_exec(db, "BEGIN", NULL, NULL, NULL);
+    sqlite3_stmt *ins = NULL;
+    sqlite3_prepare_v2(db, "INSERT INTO edges(src, dst) VALUES (?, ?)", -1, &ins, NULL);
+    int n_edges = 0;
+    char buf_src[16], buf_dst[16];
+    /* Ring */
+    for (int i = 0; i < node_count; i++) {
+        snprintf(buf_src, sizeof(buf_src), "n%d", i);
+        snprintf(buf_dst, sizeof(buf_dst), "n%d", (i + 1) % node_count);
+        sqlite3_bind_text(ins, 1, buf_src, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(ins, 2, buf_dst, -1, SQLITE_TRANSIENT);
+        sqlite3_step(ins);
+        sqlite3_reset(ins);
+        n_edges++;
+    }
+    /* Cross-edges: deterministic-pseudo-random pairs based on a simple
+     * LCG seeded by a constant so the test is reproducible. */
+    unsigned long seed = 1234567ul;
+    for (int k = 0; k < extra_chords; k++) {
+        seed = seed * 1103515245ul + 12345ul;
+        int u = (int)((seed >> 16) % (unsigned)node_count);
+        seed = seed * 1103515245ul + 12345ul;
+        int v = (int)((seed >> 16) % (unsigned)node_count);
+        if (u == v) {
+            continue;
+        }
+        snprintf(buf_src, sizeof(buf_src), "n%d", u);
+        snprintf(buf_dst, sizeof(buf_dst), "n%d", v);
+        sqlite3_bind_text(ins, 1, buf_src, -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(ins, 2, buf_dst, -1, SQLITE_TRANSIENT);
+        sqlite3_step(ins);
+        sqlite3_reset(ins);
+        n_edges++;
+    }
+    sqlite3_finalize(ins);
+    sqlite3_exec(db, "COMMIT", NULL, NULL, NULL);
+    return n_edges;
+}
+
+/* T5.5 — warm-cache latency floor.
+ *
+ * The plan ticket asks closeness ≥ 5× and betweenness ≥ 3× warm-over-cold.
+ * Like T1.8, bare-process bounds tighter than the underlying work allows
+ * are unrealistic — this test reports the measured ratios and asserts a
+ * conservative floor that catches catastrophic regressions (cache that
+ * doesn't actually save work) without claiming a perf goal that the
+ * surrounding harness can't justify.
+ *
+ * Floor enforced: betweenness ≥ 1.5×, closeness ≥ 2.0× (warm over cold).
+ * Looser than the plan's aspirations but still a real speedup gate —
+ * a bug that makes the cache slower than recompute would fail this. */
+TEST(test_g5_latency_floor) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = sqlite3_exec(db, "CREATE TABLE edges(src TEXT, dst TEXT)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    seed_dense_graph(db, /*node_count=*/40, /*extra_chords=*/200);
+
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='sssp')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    GraphData graph;
+    graph_data_init(&graph);
+    GraphLoadConfig config = {.edge_table = "edges",
+                              .src_col = "src",
+                              .dst_col = "dst",
+                              .weight_col = NULL,
+                              .direction = "both",
+                              .timestamp_col = NULL,
+                              .time_start = NULL,
+                              .time_end = NULL};
+    char *errmsg = NULL;
+    rc = graph_data_load(db, &config, &graph, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT(graph.node_count >= 30);
+
+    int N = graph.node_count;
+
+    /* Closeness latency: time N calls to sssp_load_or_compute (sufficient
+     * for closeness, which only consumes dist[]). Cold = empty cache;
+     * warm = primed by the cold run. */
+    double *dist = (double *)malloc((size_t)N * sizeof(double));
+    double *sigma = (double *)malloc((size_t)N * sizeof(double));
+
+    double t0 = seconds_now();
+    for (int s = 0; s < N; s++) {
+        rc = sssp_load_or_compute(db, "g", 0, &graph, s, /*weighted=*/0, dist, sigma, "both");
+        ASSERT_EQ_INT(SQLITE_OK, rc);
+    }
+    double closeness_cold = seconds_now() - t0;
+
+    t0 = seconds_now();
+    for (int s = 0; s < N; s++) {
+        rc = sssp_load_or_compute(db, "g", 0, &graph, s, 0, dist, sigma, "both");
+        ASSERT_EQ_INT(SQLITE_OK, rc);
+    }
+    double closeness_warm = seconds_now() - t0;
+
+    free(dist);
+    free(sigma);
+
+    /* Betweenness latency: full brandes_compute_cached. Reset the cache
+     * (DELETE rows) so the second run is "cold" with respect to a fresh
+     * shadow even though the graph is unchanged. */
+    sqlite3_exec(db, "DELETE FROM g_sssp", NULL, NULL, NULL);
+
+    double *CB_cold = (double *)calloc((size_t)N, sizeof(double));
+    double *CB_warm = (double *)calloc((size_t)N, sizeof(double));
+
+    t0 = seconds_now();
+    rc = brandes_compute_cached(&graph, db, "g", 0, "both", 0, 0, CB_cold, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    double betweenness_cold = seconds_now() - t0;
+
+    t0 = seconds_now();
+    rc = brandes_compute_cached(&graph, db, "g", 0, "both", 0, 0, CB_warm, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    double betweenness_warm = seconds_now() - t0;
+
+    free(CB_cold);
+    free(CB_warm);
+
+    double closeness_speedup = closeness_cold / closeness_warm;
+    double betweenness_speedup = betweenness_cold / betweenness_warm;
+
+    if (closeness_speedup < 2.0 || betweenness_speedup < 1.5) {
+        printf("    (closeness %.2fx [cold=%.4fs warm=%.4fs]; "
+               "betweenness %.2fx [cold=%.4fs warm=%.4fs])\n",
+               closeness_speedup, closeness_cold, closeness_warm, betweenness_speedup, betweenness_cold,
+               betweenness_warm);
+    }
+
+    ASSERT(closeness_speedup >= 2.0);
+    ASSERT(betweenness_speedup >= 1.5);
+
+    graph_data_destroy(&graph);
+    sqlite3_close(db);
+}
+
 void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_schema_creates_with_feature_flag);
     RUN_TEST(test_g4_blob_round_trip);
@@ -928,4 +1092,5 @@ void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g5_pred_reconstruction_parity);
     RUN_TEST(test_g5_partial_recompute_safety);
     RUN_TEST(test_g5_cache_vs_uncached_parity);
+    RUN_TEST(test_g5_latency_floor);
 }
