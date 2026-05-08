@@ -44,6 +44,13 @@ int sssp_shadow_is_stale(sqlite3 *db, const char *vt_name, int namespace_id, int
 int64_t config_get_int64_public(sqlite3 *db, const char *name, const char *key, int64_t def);
 double config_get_double(sqlite3 *db, const char *name, const char *key, double def);
 
+/* Write a double to the GII <vt>_config shadow with %.17g formatting
+ * (IEEE 754 binary64 round-trip precision). Used by G6 store_communities
+ * for resolution / modularity values where bit-equal round-trip matters
+ * (the 1e-10 tolerance only hides 'close' divergence — exact match of
+ * a previously-stored gamma must round-trip cleanly). */
+int config_set_double(sqlite3 *db, const char *name, const char *key, double value);
+
 /* G4 threshold-based rebuild dispatch. Pure classifier — given the
  * change ratio |delta|/total_edges and the two configured thresholds,
  * pick which rebuild strategy to run. The actual cascade behavior is

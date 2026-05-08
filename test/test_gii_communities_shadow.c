@@ -23,6 +23,8 @@ typedef enum {
 } CommCacheState;
 
 extern CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, double requested_resolution);
+extern int config_set_double(sqlite3 *db, const char *name, const char *key, double value);
+extern double config_get_double(sqlite3 *db, const char *name, const char *key, double def);
 
 /* Returns 1 if a regular table named `name` exists, else 0. */
 static int has_table(sqlite3 *db, const char *name) {
@@ -283,7 +285,76 @@ TEST(test_g6_cache_state_truth_table) {
     sqlite3_close(db);
 }
 
+/* T6.3 — resolution storage round-trips with bit-equal precision and
+ * the 1e-10 epsilon comparison classifies near-equal as match.
+ *
+ * The plan section 1283 specifies %.17g formatting because
+ * lower-precision formats (e.g. %g's default 6 digits) drop bits and
+ * a re-read no longer compares bit-equal to the original double. The
+ * 1e-10 tolerance does hide differences for non-bit-equal values, but
+ * exact match for a previously-stored gamma must survive the
+ * round-trip cleanly — otherwise check_communities_cache would
+ * sometimes drop into WARM_START / COLD_START even when the user
+ * asked for the same gamma they cached at. */
+TEST(test_g6_resolution_round_trip) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db, "CREATE TABLE edges(src TEXT, dst TEXT)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='communities')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Tricky doubles — values whose decimal representation requires
+     * 17 significant digits to survive a string round-trip:
+     *   0.1 + 0.2  → 0.30000000000000004 (classic IEEE 754 example)
+     *   1.0 / 3.0  → repeating binary
+     *   M_PI       → irrational
+     *   1e-10      → boundary value for the comparison tolerance
+     */
+    const double tricky[] = {0.1 + 0.2, 1.0 / 3.0, 3.14159265358979323846, 1e-10, -1.234567890123456789e-15};
+    int n_tricky = (int)(sizeof(tricky) / sizeof(tricky[0]));
+
+    for (int i = 0; i < n_tricky; i++) {
+        rc = config_set_double(db, "g", "communities_resolution", tricky[i]);
+        ASSERT_EQ_INT(SQLITE_OK, rc);
+        double readback = config_get_double(db, "g", "communities_resolution", -999.0);
+        /* Bit-exact equality. fabs(diff) > 0 means at least one ULP
+         * was lost. */
+        ASSERT(readback == tricky[i]);
+    }
+
+    /* Tolerance behavior: gammas within 1e-10 of cached → HIT,
+     * beyond → COLD_START. Plant a known gamma into _config and
+     * exercise the boundary. */
+    rc = config_set_double(db, "g", "communities_resolution", 1.0);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    /* communities_generation must be non-sentinel for the resolution
+     * check to be reached. */
+    sqlite3_exec(db,
+                 "INSERT OR REPLACE INTO g_config(key, value) "
+                 "VALUES ('communities_generation', '5'), ('generation', '5')",
+                 NULL, NULL, NULL);
+
+    /* Within tolerance (< 1e-10): HIT. */
+    ASSERT_EQ_INT(COMM_CACHE_HIT, (int)check_communities_cache(db, "g", 1.0));
+    ASSERT_EQ_INT(COMM_CACHE_HIT, (int)check_communities_cache(db, "g", 1.0 + 9e-11));
+    ASSERT_EQ_INT(COMM_CACHE_HIT, (int)check_communities_cache(db, "g", 1.0 - 9e-11));
+
+    /* Beyond tolerance (≥ 1e-10): COLD_START. */
+    ASSERT_EQ_INT(COMM_CACHE_COLD_START, (int)check_communities_cache(db, "g", 1.0 + 1e-9));
+    ASSERT_EQ_INT(COMM_CACHE_COLD_START, (int)check_communities_cache(db, "g", 1.0 - 1e-9));
+
+    sqlite3_close(db);
+}
+
 void test_gii_communities_shadow(void) {
     RUN_TEST(test_g6_schema_and_config_keys);
     RUN_TEST(test_g6_cache_state_truth_table);
+    RUN_TEST(test_g6_resolution_round_trip);
 }

@@ -459,6 +459,16 @@ int64_t config_get_int64_public(sqlite3 *db, const char *name, const char *key, 
     return config_get_int(db, name, key, def);
 }
 
+/* config_set_double — STUB for T6.3 RED.
+ *
+ * Uses lossy %g (6 significant digits) so the round-trip test fails
+ * for a value like 0.1 + 0.2. T6.3 GREEN switches to %.17g. */
+int config_set_double(sqlite3 *db, const char *name, const char *key, double value) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%g", value);
+    return config_set(db, name, key, buf);
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * Delta Table Queries
  * ═══════════════════════════════════════════════════════════════ */
