@@ -893,6 +893,25 @@ int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * Component-seeded cold start (G6 T6.7) — STUB
+ *
+ * Wrong-on-purpose: zeroes community[] regardless of whether
+ * _components exists. The test asserts non-modification when the
+ * table is absent, so this fails.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int seed_from_components(sqlite3 *db, const char *vt_name, int *community, int n) {
+    (void)db;
+    (void)vt_name;
+    if (community && n > 0) {
+        for (int i = 0; i < n; i++) {
+            community[i] = 0;
+        }
+    }
+    return SQLITE_OK;
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * Cascade emit (G6 T6.6)
  *
  * Same three-band strategy as sssp_cascade_emit (G4 T4.4). The

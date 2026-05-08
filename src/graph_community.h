@@ -113,4 +113,19 @@ int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **
 int comm_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
                       const GraphData *g, const int *changed_nodes, int n_changed);
 
+/* Optional Leiden cold-start seeding from a connected-components
+ * shadow table (G6 T6.7).
+ *
+ * When <vt>_components exists (a hypothetical future GII feature),
+ * this would populate community[] from the components table so
+ * Leiden cold-start gets a head-start partition. When the table is
+ * absent (the current state of the world), this is a no-op that
+ * returns SQLITE_OK without modifying community[]. The contract
+ * exists so callers (run_leiden_warm's COLD_START path) can invoke
+ * unconditionally without first probing for the table.
+ *
+ * Returns SQLITE_OK on success (including the no-op path).
+ */
+int seed_from_components(sqlite3 *db, const char *vt_name, int *community, int n);
+
 #endif /* GRAPH_COMMUNITY_H */

@@ -43,6 +43,7 @@ typedef enum {
 
 extern int comm_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
                              const GraphData *g, const int *changed_nodes, int n_changed);
+extern int seed_from_components(sqlite3 *db, const char *vt_name, int *community, int n);
 
 /* count_rows helper — duplicate of the one in test_provenance.c. */
 static int count_rows(sqlite3 *db, const char *sql) {
@@ -615,6 +616,54 @@ TEST(test_g6_comm_delta_includes_1hop) {
     sqlite3_close(db);
 }
 
+/* T6.7 — seed_from_components is a no-op when <vt>_components is
+ * absent. The function is the graceful-fallback half of the cold-
+ * start optimization (the "load partition from connected components"
+ * path is gated on a future feature that doesn't exist yet). The
+ * contract: callers can invoke unconditionally without first
+ * probing for _components, and the call must NOT modify community[]
+ * when the table isn't there. */
+TEST(test_g6_component_seed_partial_load_falls_back) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db, "CREATE TABLE edges(src TEXT, dst TEXT)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    /* features='communities' but NOT 'components' — _components doesn't
+     * exist as a feature flag today; this is the realistic absence
+     * case. */
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='communities')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Pre-fill community[] with sentinel values so we can detect
+     * any unwanted mutation. Distinct values make a "zeroed
+     * everything" stub fail unambiguously. */
+    int community[5] = {7, 8, 9, 10, 11};
+
+    rc = seed_from_components(db, "g", community, 5);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* No mutation: the function had nothing to seed from, so it
+     * left the input partition alone. */
+    ASSERT_EQ_INT(7, community[0]);
+    ASSERT_EQ_INT(8, community[1]);
+    ASSERT_EQ_INT(9, community[2]);
+    ASSERT_EQ_INT(10, community[3]);
+    ASSERT_EQ_INT(11, community[4]);
+
+    /* Boundary: NULL community / n=0 must still return OK without
+     * a crash (defensive against callers that haven't yet allocated). */
+    rc = seed_from_components(db, "g", NULL, 0);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    sqlite3_close(db);
+}
+
 void test_gii_communities_shadow(void) {
     RUN_TEST(test_g6_schema_and_config_keys);
     RUN_TEST(test_g6_cache_state_truth_table);
@@ -622,4 +671,5 @@ void test_gii_communities_shadow(void) {
     RUN_TEST(test_g6_warm_with_singletons_equivalent_to_cold);
     RUN_TEST(test_g6_concurrent_read_during_write);
     RUN_TEST(test_g6_comm_delta_includes_1hop);
+    RUN_TEST(test_g6_component_seed_partial_load_falls_back);
 }
