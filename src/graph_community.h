@@ -45,4 +45,23 @@ typedef enum {
 
 CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, double requested_resolution);
 
+/* Warm-start Leiden (G6 T6.4).
+ *
+ * Args:
+ *   g              Loaded GraphData.
+ *   community      IN:  initial partition. For each node, singleton (idx)
+ *                       for changed nodes; cached community_id otherwise.
+ *                  OUT: final partition after refinement.
+ *   resolution     gamma parameter (modularity resolution).
+ *   direction      "forward" / "reverse" / "both".
+ *   changed_nodes  Optional array of node indices whose 1-hop
+ *                  neighborhoods changed since G_comm. NULL or
+ *                  n_changed == 0 falls back to a cold-start run.
+ *   n_changed      Number of entries in changed_nodes.
+ *
+ * Returns: final modularity Q.
+ */
+double run_leiden_warm(const GraphData *g, int *community, double resolution, const char *direction,
+                       const int *changed_nodes, int n_changed);
+
 #endif /* GRAPH_COMMUNITY_H */

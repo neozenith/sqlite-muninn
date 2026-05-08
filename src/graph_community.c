@@ -662,6 +662,30 @@ static sqlite3_module graph_leiden_module = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
+ * Warm-start Leiden (G6 T6.4) — STUB
+ *
+ * Real warm-start logic (using changed_nodes to skip refinement for
+ * unchanged neighborhoods) lands when a future iteration needs the
+ * optimization. T6.4's contract is just the fallback: when
+ * n_changed == 0 or changed_nodes == NULL, behave equivalently to a
+ * cold run_leiden.
+ *
+ * The stub returns -1.0 so the parity test fails — no Leiden was run,
+ * no modularity computed.
+ * ═══════════════════════════════════════════════════════════════ */
+
+double run_leiden_warm(const GraphData *g, int *community, double resolution, const char *direction,
+                       const int *changed_nodes, int n_changed) {
+    (void)g;
+    (void)community;
+    (void)resolution;
+    (void)direction;
+    (void)changed_nodes;
+    (void)n_changed;
+    return -1.0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * Communities cache state machine (G6 T6.2)
  *
  * Decision order matters:

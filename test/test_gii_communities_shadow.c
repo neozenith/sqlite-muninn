@@ -6,6 +6,7 @@
  *   `make test-g6` → ./build/test_runner --filter=test_g6_
  */
 #include "test_common.h"
+#include "graph_load.h"
 #include <math.h>
 #include <sqlite3.h>
 #include <stdlib.h>
@@ -25,6 +26,9 @@ typedef enum {
 extern CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, double requested_resolution);
 extern int config_set_double(sqlite3 *db, const char *name, const char *key, double value);
 extern double config_get_double(sqlite3 *db, const char *name, const char *key, double def);
+extern double run_leiden(const GraphData *g, int *community, double resolution, const char *direction);
+extern double run_leiden_warm(const GraphData *g, int *community, double resolution, const char *direction,
+                              const int *changed_nodes, int n_changed);
 
 /* Returns 1 if a regular table named `name` exists, else 0. */
 static int has_table(sqlite3 *db, const char *name) {
@@ -353,8 +357,78 @@ TEST(test_g6_resolution_round_trip) {
     sqlite3_close(db);
 }
 
+/* T6.4 — run_leiden_warm with all-singleton init must produce a
+ * partition with modularity equivalent (within 0.01) to a cold-start
+ * run_leiden. Two 4-cliques + bridge gives clear community structure
+ * so the modularity is non-trivial — a stub that doesn't run Leiden
+ * lands far outside the tolerance. */
+TEST(test_g6_warm_with_singletons_equivalent_to_cold) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Two 4-cliques (a-b-c-d and e-f-g-h) plus a single bridge d-e.
+     * Clear community structure: cold Leiden should find Q ≈ 0.4 - 0.5. */
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE edges(src TEXT, dst TEXT);"
+                      "INSERT INTO edges(src, dst) VALUES "
+                      "  ('a','b'),('a','c'),('a','d'),('b','c'),('b','d'),('c','d'),"
+                      "  ('e','f'),('e','g'),('e','h'),('f','g'),('f','h'),('g','h'),"
+                      "  ('d','e');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    GraphData graph;
+    graph_data_init(&graph);
+    GraphLoadConfig config = {.edge_table = "edges",
+                              .src_col = "src",
+                              .dst_col = "dst",
+                              .weight_col = NULL,
+                              .direction = "both",
+                              .timestamp_col = NULL,
+                              .time_start = NULL,
+                              .time_end = NULL};
+    char *errmsg = NULL;
+    rc = graph_data_load(db, &config, &graph, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(8, graph.node_count);
+
+    int N = graph.node_count;
+    int *community_cold = (int *)malloc((size_t)N * sizeof(int));
+    int *community_warm = (int *)malloc((size_t)N * sizeof(int));
+
+    /* Cold-start: run_leiden initializes from singletons internally. */
+    double Q_cold = run_leiden(&graph, community_cold, 1.0, "both");
+    ASSERT(Q_cold > 0.0); /* Non-trivial structure → non-zero modularity. */
+
+    /* Warm-start with all-singleton init and no changed-nodes hint:
+     * equivalent to cold per the plan section 1322 ("When n_changed
+     * == 0, equivalent to run_leiden() but skips singleton init"). */
+    for (int i = 0; i < N; i++) {
+        community_warm[i] = i;
+    }
+    double Q_warm = run_leiden_warm(&graph, community_warm, 1.0, "both", NULL, 0);
+
+    /* Modularity tolerance per plan section 1258: within 0.01.
+     * Leiden has tiebreak nondeterminism so two runs can land at
+     * slightly different local optima — 0.01 absorbs that without
+     * being so loose a broken stub passes. */
+    ASSERT(fabs(Q_cold - Q_warm) < 0.01);
+
+    free(community_cold);
+    free(community_warm);
+    graph_data_destroy(&graph);
+    sqlite3_close(db);
+}
+
 void test_gii_communities_shadow(void) {
     RUN_TEST(test_g6_schema_and_config_keys);
     RUN_TEST(test_g6_cache_state_truth_table);
     RUN_TEST(test_g6_resolution_round_trip);
+    RUN_TEST(test_g6_warm_with_singletons_equivalent_to_cold);
 }
