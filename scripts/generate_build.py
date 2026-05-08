@@ -58,6 +58,7 @@ TEST_LINK_SOURCES = [
     "src/provenance.c",
     "src/graph_adjacency.c",
     "src/graph_centrality.c",
+    "src/graph_community.c",
 ]
 
 # ── CMake flags ──────────────────────────────────────────────────────

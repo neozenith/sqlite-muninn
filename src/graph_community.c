@@ -662,6 +662,20 @@ static sqlite3_module graph_leiden_module = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
+ * Communities cache state machine (G6 T6.2) — STUB
+ *
+ * T6.2 GREEN replaces this with the real four-branch decision tree
+ * documented in graph_community.h.
+ * ═══════════════════════════════════════════════════════════════ */
+
+CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, double requested_resolution) {
+    (void)db;
+    (void)vtab_name;
+    (void)requested_resolution;
+    return COMM_CACHE_HIT;
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * Registration
  * ═══════════════════════════════════════════════════════════════ */
 

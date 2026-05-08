@@ -427,6 +427,38 @@ static int64_t config_get_int(sqlite3 *db, const char *name, const char *key, in
     return result;
 }
 
+/* config_get_double — same shape as config_get_int but parses the
+ * TEXT-typed value as a double. Used by G6's check_communities_cache
+ * to compare resolution values with a 1e-10 tolerance. Non-static so
+ * graph_community.c can read shadow config without duplicating the
+ * SQL prepare/step boilerplate. */
+double config_get_double(sqlite3 *db, const char *name, const char *key, double def) {
+    sqlite3_stmt *stmt;
+    char *sql = sqlite3_mprintf("SELECT value FROM \"%w_config\" WHERE key='%w'", name, key);
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return def;
+
+    double result = def;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *val = (const char *)sqlite3_column_text(stmt, 0);
+        if (val)
+            result = atof(val);
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+/* config_get_int64_public — non-static wrapper exposed so other source
+ * files (G6's check_communities_cache, future G7 / G2 consumers) can
+ * read shadow config values without duplicating the SQL prepare/step
+ * boilerplate. Internal callers continue to use the file-static
+ * config_get_int. */
+int64_t config_get_int64_public(sqlite3 *db, const char *name, const char *key, int64_t def) {
+    return config_get_int(db, name, key, def);
+}
+
 /* ═══════════════════════════════════════════════════════════════
  * Delta Table Queries
  * ═══════════════════════════════════════════════════════════════ */

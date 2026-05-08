@@ -13,6 +13,17 @@
 
 extern int adjacency_register_module(sqlite3 *db);
 
+/* G6 T6.2 cache state machine — re-declared layout-compatibly so the
+ * test doesn't have to include graph_community.h (which pulls in
+ * sqlite3ext.h). Values must match graph_community.h exactly. */
+typedef enum {
+    COMM_CACHE_HIT = 0,
+    COMM_CACHE_WARM_START = 1,
+    COMM_CACHE_COLD_START = 2
+} CommCacheState;
+
+extern CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, double requested_resolution);
+
 /* Returns 1 if a regular table named `name` exists, else 0. */
 static int has_table(sqlite3 *db, const char *name) {
     sqlite3_stmt *stmt = NULL;
@@ -199,6 +210,80 @@ TEST(test_g6_schema_and_config_keys) {
     sqlite3_close(db3);
 }
 
+/* Set a TEXT-typed config value via direct UPDATE so the test can
+ * simulate every state-machine input combination without driving
+ * Leiden. */
+static void set_config(sqlite3 *db, const char *vt_name, const char *key, const char *value) {
+    char *sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_config\"(key, value) VALUES (?, ?)", vt_name);
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, key, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, value, -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+    sqlite3_free(sql);
+}
+
+/* T6.2 — check_communities_cache truth table.
+ *
+ * Plan section "Cache state machine" (line 1295) defines four
+ * decision branches:
+ *
+ *   G_comm < 0                              → COLD_START (never computed)
+ *   resolution mismatch (>= 1e-10)          → COLD_START
+ *   G_comm < G_adj, resolution matches       → WARM_START
+ *   G_comm == G_adj, resolution matches      → HIT
+ *
+ * The test plants each combination directly into _config (bypassing
+ * Leiden) and asserts the enum returned. */
+TEST(test_g6_cache_state_truth_table) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db, "CREATE TABLE edges(src TEXT, dst TEXT)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='communities')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* (1) Default state: communities_generation = -1 (sentinel). Any
+     * resolution → COLD_START because 'never computed' wins. */
+    ASSERT_EQ_INT(COMM_CACHE_COLD_START, (int)check_communities_cache(db, "g", 1.0));
+    ASSERT_EQ_INT(COMM_CACHE_COLD_START, (int)check_communities_cache(db, "g", 0.5));
+
+    /* (2) Cached at resolution=1.0, generation=5, current G_adj=5 →
+     * HIT for resolution=1.0. */
+    set_config(db, "g", "generation", "5");
+    set_config(db, "g", "communities_generation", "5");
+    set_config(db, "g", "communities_resolution", "1.0");
+    ASSERT_EQ_INT(COMM_CACHE_HIT, (int)check_communities_cache(db, "g", 1.0));
+
+    /* (3) Resolution mismatch (≥ 1e-10) → COLD_START. */
+    ASSERT_EQ_INT(COMM_CACHE_COLD_START, (int)check_communities_cache(db, "g", 1.5));
+    ASSERT_EQ_INT(COMM_CACHE_COLD_START, (int)check_communities_cache(db, "g", 0.999999));
+
+    /* (4) Within-tolerance resolution (< 1e-10 difference) → still HIT. */
+    ASSERT_EQ_INT(COMM_CACHE_HIT, (int)check_communities_cache(db, "g", 1.0 + 1e-12));
+
+    /* (5) G_adj advanced past G_comm (e.g. CSR rebuilt) but resolution
+     * matches → WARM_START. */
+    set_config(db, "g", "generation", "7"); /* G_adj > G_comm = 5 */
+    ASSERT_EQ_INT(COMM_CACHE_WARM_START, (int)check_communities_cache(db, "g", 1.0));
+
+    /* (6) Generation moved AND resolution mismatched → COLD_START
+     * (resolution check wins; partition is unrecoverable for this
+     * gamma regardless). */
+    ASSERT_EQ_INT(COMM_CACHE_COLD_START, (int)check_communities_cache(db, "g", 2.0));
+
+    sqlite3_close(db);
+}
+
 void test_gii_communities_shadow(void) {
     RUN_TEST(test_g6_schema_and_config_keys);
+    RUN_TEST(test_g6_cache_state_truth_table);
 }

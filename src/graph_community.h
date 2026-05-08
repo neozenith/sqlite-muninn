@@ -25,4 +25,24 @@ int community_register_tvfs(sqlite3 *db);
  */
 double run_leiden(const GraphData *g, int *community, double resolution, const char *direction);
 
+/* Communities-cache state machine (G6 T6.2).
+ *
+ *   COMM_CACHE_HIT         G_comm == G_adj AND resolution matches:
+ *                          read partition from <vt>_communities.
+ *   COMM_CACHE_WARM_START  G_comm < G_adj AND resolution matches:
+ *                          warm-start Leiden from cached partition.
+ *   COMM_CACHE_COLD_START  Never computed OR resolution mismatched:
+ *                          cold-start (singletons or component-seeded).
+ *
+ * Resolution comparison uses 1e-10 tolerance — gamma round-trips
+ * through TEXT-typed config values via %.17g formatting.
+ */
+typedef enum {
+    COMM_CACHE_HIT = 0,
+    COMM_CACHE_WARM_START = 1,
+    COMM_CACHE_COLD_START = 2
+} CommCacheState;
+
+CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, double requested_resolution);
+
 #endif /* GRAPH_COMMUNITY_H */

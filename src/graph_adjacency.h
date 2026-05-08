@@ -18,6 +18,7 @@
 
 #include "sqlite3ext.h"
 #include "graph_load.h"
+#include <stdint.h>
 
 /* Register the graph_adjacency virtual table module with db. */
 int adjacency_register_module(sqlite3 *db);
@@ -36,6 +37,12 @@ int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, 
  * use), 0 if absent, or a negative SQLite error code on query failure.
  * G5's read path consults this before trusting a cache hit. */
 int sssp_shadow_is_stale(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx);
+
+/* Cross-file accessors for the GII <vt>_config shadow table. G6+'s
+ * cache state machine reads communities_generation/_resolution from
+ * here without duplicating the prepare/step boilerplate. */
+int64_t config_get_int64_public(sqlite3 *db, const char *name, const char *key, int64_t def);
+double config_get_double(sqlite3 *db, const char *name, const char *key, double def);
 
 /* G4 threshold-based rebuild dispatch. Pure classifier — given the
  * change ratio |delta|/total_edges and the two configured thresholds,
