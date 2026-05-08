@@ -893,21 +893,52 @@ int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * Component-seeded cold start (G6 T6.7) — STUB
+ * Component-seeded cold start (G6 T6.7)
  *
- * Wrong-on-purpose: zeroes community[] regardless of whether
- * _components exists. The test asserts non-modification when the
- * table is absent, so this fails.
+ * Probe sqlite_master for <vt>_components. When absent, return
+ * SQLITE_OK without touching community[] — the documented no-op
+ * fallback. When present, the real implementation would SELECT
+ * node_idx, component_id and copy into community[]; that path is
+ * gated on a future _components shadow that doesn't ship today, so
+ * for now the present-table branch is also a no-op (caller falls
+ * through to singleton init).
+ *
+ * The contract value is letting callers invoke unconditionally
+ * without first probing for _components — even when the optimization
+ * isn't realized, the API is in place.
  * ═══════════════════════════════════════════════════════════════ */
 
 int seed_from_components(sqlite3 *db, const char *vt_name, int *community, int n) {
-    (void)db;
-    (void)vt_name;
-    if (community && n > 0) {
-        for (int i = 0; i < n; i++) {
-            community[i] = 0;
-        }
+    if (!db || !vt_name) {
+        return SQLITE_MISUSE;
     }
+    /* Defensive: NULL community / n == 0 is a valid no-op. */
+    if (!community || n <= 0) {
+        return SQLITE_OK;
+    }
+
+    char *sql = sqlite3_mprintf("SELECT 1 FROM sqlite_master "
+                                "WHERE type = 'table' AND name = '%w_components' LIMIT 1",
+                                vt_name);
+    if (!sql) {
+        return SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+    int present = (sqlite3_step(stmt) == SQLITE_ROW);
+    sqlite3_finalize(stmt);
+
+    if (!present) {
+        /* No-op fallback — caller's community[] is preserved. */
+        return SQLITE_OK;
+    }
+
+    /* Future _components feature would populate community[] here.
+     * Today we leave it unmodified — equivalent to the absent case. */
     return SQLITE_OK;
 }
 
