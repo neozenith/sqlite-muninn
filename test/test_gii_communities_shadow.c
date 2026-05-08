@@ -29,6 +29,23 @@ extern double config_get_double(sqlite3 *db, const char *name, const char *key, 
 extern double run_leiden(const GraphData *g, int *community, double resolution, const char *direction);
 extern double run_leiden_warm(const GraphData *g, int *community, double resolution, const char *direction,
                               const int *changed_nodes, int n_changed);
+extern int leiden_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, const int *community, int n,
+                             double resolution, double modularity, sqlite3_int64 generation);
+extern int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **out_community, int *out_n);
+
+/* count_rows helper — duplicate of the one in test_provenance.c. */
+static int count_rows(sqlite3 *db, const char *sql) {
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    int n = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        n = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return n;
+}
 
 /* Returns 1 if a regular table named `name` exists, else 0. */
 static int has_table(sqlite3 *db, const char *name) {
@@ -426,9 +443,85 @@ TEST(test_g6_warm_with_singletons_equivalent_to_cold) {
     sqlite3_close(db);
 }
 
+/* T6.5 — store_communities atomicity. The DELETE + INSERT loop +
+ * config metadata writes must commit as a unit so external readers
+ * see either the OLD partition or the NEW partition, never a partial
+ * mix. True multi-connection isolation isn't tractable in a
+ * single-threaded runner; this test verifies the strongest
+ * single-process equivalent: end-state consistency across all
+ * artifacts (partition rows + four config keys) after each put,
+ * including rapid overwrites that would surface stale-row leaks if
+ * the DELETE didn't fire as part of the same transaction. */
+TEST(test_g6_concurrent_read_during_write) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db, "CREATE TABLE edges(src TEXT, dst TEXT)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='communities')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Initial put: 5 nodes, all in community 1. */
+    const int initial[5] = {1, 1, 1, 1, 1};
+    rc = leiden_shadow_put(db, "g", 0, initial, 5, /*res=*/1.0, /*mod=*/0.30, /*gen=*/1);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Round-trip: read back the same partition. */
+    int *out = NULL;
+    int n = 0;
+    rc = leiden_shadow_get(db, "g", 0, &out, &n);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(5, n);
+    for (int i = 0; i < 5; i++) {
+        ASSERT_EQ_INT(1, out[i]);
+    }
+    free(out);
+
+    /* All four config keys updated to match the put inputs. */
+    ASSERT(config_get_double(db, "g", "communities_resolution", -1.0) == 1.0);
+    ASSERT(fabs(config_get_double(db, "g", "communities_modularity", -1.0) - 0.30) < 1e-9);
+    ASSERT_EQ_INT(1, atoi(config_get_text(db, "g", "communities_generation")));
+    ASSERT_EQ_INT(1, atoi(config_get_text(db, "g", "num_communities"))); /* one distinct id */
+
+    /* Overwrite: 5 nodes, 3 communities. Distinct count = 3. */
+    const int updated[5] = {2, 2, 3, 3, 4};
+    rc = leiden_shadow_put(db, "g", 0, updated, 5, /*res=*/0.5, /*mod=*/0.55, /*gen=*/2);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* No leftover rows from the initial partition (DELETE fired
+     * inside the same transaction as the new INSERTs). */
+    ASSERT_EQ_INT(5, count_rows(db, "SELECT COUNT(*) FROM g_communities WHERE namespace_id = 0"));
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_communities WHERE community_id = 1"));
+
+    /* Round-trip new partition. */
+    rc = leiden_shadow_get(db, "g", 0, &out, &n);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(5, n);
+    ASSERT_EQ_INT(2, out[0]);
+    ASSERT_EQ_INT(2, out[1]);
+    ASSERT_EQ_INT(3, out[2]);
+    ASSERT_EQ_INT(3, out[3]);
+    ASSERT_EQ_INT(4, out[4]);
+    free(out);
+
+    /* Config keys updated atomically alongside the partition. */
+    ASSERT(config_get_double(db, "g", "communities_resolution", -1.0) == 0.5);
+    ASSERT(fabs(config_get_double(db, "g", "communities_modularity", -1.0) - 0.55) < 1e-9);
+    ASSERT_EQ_INT(2, atoi(config_get_text(db, "g", "communities_generation")));
+    ASSERT_EQ_INT(3, atoi(config_get_text(db, "g", "num_communities"))); /* {2, 3, 4} */
+
+    sqlite3_close(db);
+}
+
 void test_gii_communities_shadow(void) {
     RUN_TEST(test_g6_schema_and_config_keys);
     RUN_TEST(test_g6_cache_state_truth_table);
     RUN_TEST(test_g6_resolution_round_trip);
     RUN_TEST(test_g6_warm_with_singletons_equivalent_to_cold);
+    RUN_TEST(test_g6_concurrent_read_during_write);
 }

@@ -687,6 +687,41 @@ double run_leiden_warm(const GraphData *g, int *community, double resolution, co
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * Communities cache I/O (G6 T6.5) — STUBS
+ *
+ * T6.5 GREEN replaces these with real implementations:
+ *   leiden_shadow_put: SAVEPOINT-wrapped DELETE-from-namespace +
+ *                      INSERT loop + four config_set(_int/_double)
+ *                      writes. Atomic across all writes.
+ *   leiden_shadow_get: SELECT node_idx, community_id ... ORDER BY
+ *                      node_idx, copy into a malloc'd int[].
+ * ═══════════════════════════════════════════════════════════════ */
+
+int leiden_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, const int *community, int n,
+                      double resolution, double modularity, int64_t generation) {
+    (void)db;
+    (void)vt_name;
+    (void)namespace_id;
+    (void)community;
+    (void)n;
+    (void)resolution;
+    (void)modularity;
+    (void)generation;
+    return SQLITE_ERROR;
+}
+
+int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **out_community, int *out_n) {
+    (void)db;
+    (void)vt_name;
+    (void)namespace_id;
+    if (out_community)
+        *out_community = NULL;
+    if (out_n)
+        *out_n = 0;
+    return SQLITE_ERROR;
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * Communities cache state machine (G6 T6.2)
  *
  * Decision order matters:

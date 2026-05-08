@@ -9,6 +9,7 @@
 
 #include "sqlite3ext.h"
 #include "graph_load.h"
+#include <stdint.h>
 
 int community_register_tvfs(sqlite3 *db);
 
@@ -63,5 +64,31 @@ CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, doubl
  */
 double run_leiden_warm(const GraphData *g, int *community, double resolution, const char *direction,
                        const int *changed_nodes, int n_changed);
+
+/* Communities cache I/O (G6 T6.5).
+ *
+ * leiden_shadow_put: atomically replace the cached partition for one
+ *   namespace and update the four communities_* config keys. Wraps the
+ *   DELETE + INSERT loop + config writes inside a SAVEPOINT so any
+ *   mid-batch failure rolls back the whole operation.
+ *
+ *     community[i]   community_id assigned to node i (i ∈ [0, n))
+ *     resolution     gamma used to compute this partition (stored via
+ *                    %.17g for round-trip precision)
+ *     modularity     final Q
+ *     generation     G_adj at which the partition was computed
+ *
+ *   Returns SQLITE_OK on success, SQLite errcode on failure.
+ *
+ * leiden_shadow_get: read the cached partition for one namespace.
+ *   *out_community is malloc'd by the callee; caller frees with free().
+ *   Returns:
+ *     SQLITE_OK        partition loaded into *out_community / *out_n
+ *     SQLITE_NOTFOUND  no rows for that (vt, namespace)
+ *     other            SQLite errcode on prepare/step failure
+ */
+int leiden_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, const int *community, int n,
+                      double resolution, double modularity, int64_t generation);
+int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **out_community, int *out_n);
 
 #endif /* GRAPH_COMMUNITY_H */
