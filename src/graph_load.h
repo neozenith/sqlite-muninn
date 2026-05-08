@@ -86,4 +86,24 @@ static inline void graph_data_add_edge(GraphData *g, int src_idx, int dst_idx, d
  */
 int graph_data_load(sqlite3 *db, const GraphLoadConfig *config, GraphData *g, char **pzErrMsg);
 
+/* G7 T7.3 — community-filter helpers.
+ *
+ * build_community_mask: allocate and return an int[g->node_count]
+ *   where mask[i] = 1 iff partition[i] == target_community_id, else 0.
+ *   Caller frees with free(). Returns NULL on allocation failure.
+ *
+ * induce_subgraph: build a NEW GraphData containing only nodes where
+ *   mask[i] != 0. Edges are preserved iff BOTH endpoints are in the
+ *   mask. The new graph uses fresh 0..n-1 indexing; node string IDs
+ *   are preserved (graph_data_find_or_add carries them). out_to_orig,
+ *   if non-NULL, receives a malloc'd int[new_node_count] mapping each
+ *   new index back to the original index in g.
+ *
+ *   has_weights is copied from g. Returns SQLITE_OK on success or a
+ *   SQLite errcode on failure. On failure out_g is left in a
+ *   destroy-safe state (caller still calls graph_data_destroy).
+ */
+int *build_community_mask(const GraphData *g, const int *partition, int target_community_id);
+int induce_subgraph(const GraphData *g, const int *mask, GraphData *out_g, int **out_to_orig);
+
 #endif /* GRAPH_LOAD_H */

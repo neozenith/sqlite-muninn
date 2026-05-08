@@ -6,11 +6,17 @@
  *   `make test-g7` → ./build/test_runner --filter=test_g7_
  */
 #include "test_common.h"
+#include "graph_load.h"
 #include <math.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+extern int *build_community_mask(const GraphData *g, const int *partition, int target_community_id);
+extern int induce_subgraph(const GraphData *g, const int *mask, GraphData *out_g, int **out_to_orig);
+extern int brandes_compute(const GraphData *g, const char *direction, int auto_approx, int normalized, double *CB,
+                           double *EB);
 
 extern int adjacency_register_module(sqlite3 *db);
 extern int community_register_tvfs(sqlite3 *db);
@@ -181,7 +187,127 @@ TEST(test_g7_hidden_cols_declared) {
     sqlite3_close(db);
 }
 
+/* T7.3 — build_community_mask + induce_subgraph parity.
+ *
+ * Path graph a-b-c-d-e-f, partitioned into communities by index half:
+ *   {0,1,2} → community 1, {3,4,5} → community 2.
+ *
+ * Inducing community 1 drops the c-d cross-edge and yields a 3-node
+ * sub-path a-b-c. Manually loading the same a-b-c path produces an
+ * equivalent graph; brandes_compute on both must produce identical
+ * CB[] within float tolerance.
+ *
+ * "Filter parity" here means parity with a hand-rolled subgraph load,
+ * NOT parity with full-graph-then-post-filter (the latter is the
+ * semantically-wrong baseline the plan is replacing — see
+ * docs/plans/adv-centrality-filtering.md "induced-subgraph Brandes
+ * is semantically correct vs full-graph-then-post-filter"). */
+TEST(test_g7_filter_parity) {
+    /* Use a fresh in-memory DB — graph_data_load needs a SQL backing.
+     * No GII / centrality TVF needed for T7.3; this exercises the
+     * helpers in isolation. */
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE edges_full(src TEXT, dst TEXT);"
+                      "INSERT INTO edges_full(src, dst) VALUES "
+                      "  ('a','b'),('b','c'),('c','d'),('d','e'),('e','f');"
+                      "CREATE TABLE edges_a(src TEXT, dst TEXT);"
+                      "INSERT INTO edges_a(src, dst) VALUES "
+                      "  ('a','b'),('b','c');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Load the full path graph. */
+    GraphData g_full;
+    graph_data_init(&g_full);
+    GraphLoadConfig cfg_full = {.edge_table = "edges_full",
+                                .src_col = "src",
+                                .dst_col = "dst",
+                                .weight_col = NULL,
+                                .direction = "both",
+                                .timestamp_col = NULL,
+                                .time_start = NULL,
+                                .time_end = NULL};
+    char *errmsg = NULL;
+    rc = graph_data_load(db, &cfg_full, &g_full, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(6, g_full.node_count);
+
+    /* Plant partition: first three nodes → community 1, rest → 2.
+     * Indices match scan order: a=0, b=1, c=2, d=3, e=4, f=5. */
+    const int partition[6] = {1, 1, 1, 2, 2, 2};
+
+    /* (1) Mask = build_community_mask(g, partition, 1). */
+    int *mask = build_community_mask(&g_full, partition, 1);
+    ASSERT(mask != NULL);
+    ASSERT_EQ_INT(1, mask[0]);
+    ASSERT_EQ_INT(1, mask[1]);
+    ASSERT_EQ_INT(1, mask[2]);
+    ASSERT_EQ_INT(0, mask[3]);
+    ASSERT_EQ_INT(0, mask[4]);
+    ASSERT_EQ_INT(0, mask[5]);
+
+    /* (2) Induce subgraph. */
+    GraphData g_induced;
+    int *to_orig = NULL;
+    rc = induce_subgraph(&g_full, mask, &g_induced, &to_orig);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(3, g_induced.node_count);
+    ASSERT(to_orig != NULL);
+
+    /* (3) Manually load the equivalent 3-node path. */
+    GraphData g_manual;
+    graph_data_init(&g_manual);
+    GraphLoadConfig cfg_a = {.edge_table = "edges_a",
+                             .src_col = "src",
+                             .dst_col = "dst",
+                             .weight_col = NULL,
+                             .direction = "both",
+                             .timestamp_col = NULL,
+                             .time_start = NULL,
+                             .time_end = NULL};
+    rc = graph_data_load(db, &cfg_a, &g_manual, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(3, g_manual.node_count);
+
+    /* (4) Brandes on both — must match per node. For a 3-node path a-b-c
+     * with direction='both', betweenness is:
+     *   a (idx 0): 0
+     *   b (idx 1): 1.0  (the unique a↔c shortest path passes through b)
+     *   c (idx 2): 0
+     * Both g_induced and g_manual should produce these exact values. */
+    double *CB_induced = (double *)calloc(3, sizeof(double));
+    double *CB_manual = (double *)calloc(3, sizeof(double));
+    rc = brandes_compute(&g_induced, "both", 0, 0, CB_induced, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = brandes_compute(&g_manual, "both", 0, 0, CB_manual, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    for (int i = 0; i < 3; i++) {
+        ASSERT(fabs(CB_induced[i] - CB_manual[i]) < 1e-9);
+    }
+
+    /* Cleanup. */
+    free(mask);
+    free(to_orig);
+    free(CB_induced);
+    free(CB_manual);
+    graph_data_destroy(&g_induced);
+    graph_data_destroy(&g_manual);
+    graph_data_destroy(&g_full);
+    sqlite3_close(db);
+}
+
 void test_gii_communities_consume(void) {
     RUN_TEST(test_g7_leiden_cache_hit);
     RUN_TEST(test_g7_hidden_cols_declared);
+    RUN_TEST(test_g7_filter_parity);
 }

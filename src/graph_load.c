@@ -248,3 +248,26 @@ int graph_data_load(sqlite3 *db, const GraphLoadConfig *config, GraphData *g, ch
 
     return SQLITE_OK;
 }
+
+/* G7 T7.3 build_community_mask — STUB.
+ * Returns NULL so the test fails on the very first ASSERT(mask != NULL). */
+int *build_community_mask(const GraphData *g, const int *partition, int target_community_id) {
+    (void)g;
+    (void)partition;
+    (void)target_community_id;
+    return NULL;
+}
+
+/* G7 T7.3 induce_subgraph — STUB.
+ * Returns SQLITE_ERROR so the test fails on the rc check. */
+int induce_subgraph(const GraphData *g, const int *mask, GraphData *out_g, int **out_to_orig) {
+    (void)g;
+    (void)mask;
+    if (out_g) {
+        graph_data_init(out_g);
+    }
+    if (out_to_orig) {
+        *out_to_orig = NULL;
+    }
+    return SQLITE_ERROR;
+}
