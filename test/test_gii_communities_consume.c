@@ -15,6 +15,7 @@
 
 extern int *build_community_mask(const GraphData *g, const int *partition, int target_community_id);
 extern int induce_subgraph(const GraphData *g, const int *mask, GraphData *out_g, int **out_to_orig);
+extern int *intersect_masks(const int *a, const int *b, int n);
 extern int brandes_compute(const GraphData *g, const char *direction, int auto_approx, int normalized, double *CB,
                            double *EB);
 extern unsigned int topk_signature(const char *provenance_table, const char *filter_predicate, const char *metric,
@@ -349,9 +350,61 @@ TEST(test_g7_g2_signature_includes_community) {
     ASSERT(s_baseline != s_other_topk);
 }
 
+/* T7.5 — provenance ∩ community composition.
+ *
+ * The eventual TVF filter pipeline ANDs G1's provenance mask with
+ * G7's community mask before inducing the subgraph. T7.5 verifies
+ * the composition primitive (`intersect_masks`) implements logical
+ * AND with truthy/falsy semantics — a node survives iff it appears
+ * in BOTH source masks.
+ *
+ * Boundary cases:
+ *   - A_only: in community but outside provenance → filtered out
+ *   - B_only: in provenance but outside community → filtered out
+ *   - Both:   in both → survives
+ *   - Neither: in neither → filtered out
+ *   - Truthy values: any non-zero counts as "in" (defensive against
+ *     future provenance helpers that might return positive counts). */
+TEST(test_g7_intersection_with_provenance) {
+    /* a = community mask, b = provenance mask. */
+    const int community_mask[] = {1, 1, 0, 0, 1};   /* in community 0 1 4 */
+    const int provenance_mask[] = {1, 0, 1, 0, 1};  /* in provenance 0 2 4 */
+
+    int *isect = intersect_masks(community_mask, provenance_mask, 5);
+    ASSERT(isect != NULL);
+    ASSERT_EQ_INT(1, isect[0]); /* in both */
+    ASSERT_EQ_INT(0, isect[1]); /* community only */
+    ASSERT_EQ_INT(0, isect[2]); /* provenance only */
+    ASSERT_EQ_INT(0, isect[3]); /* neither */
+    ASSERT_EQ_INT(1, isect[4]); /* in both */
+    free(isect);
+
+    /* Truthy semantics: positive counts count as "in". */
+    const int counts_a[] = {3, 0, 7, 0};
+    const int counts_b[] = {1, 5, 0, 0};
+    isect = intersect_masks(counts_a, counts_b, 4);
+    ASSERT(isect != NULL);
+    ASSERT_EQ_INT(1, isect[0]); /* both truthy */
+    ASSERT_EQ_INT(0, isect[1]); /* a falsy */
+    ASSERT_EQ_INT(0, isect[2]); /* b falsy */
+    ASSERT_EQ_INT(0, isect[3]); /* both falsy */
+    free(isect);
+
+    /* All-zero a: result must be all zero (no surviving nodes). */
+    const int zero[] = {0, 0, 0};
+    const int ones[] = {1, 1, 1};
+    isect = intersect_masks(zero, ones, 3);
+    ASSERT(isect != NULL);
+    ASSERT_EQ_INT(0, isect[0]);
+    ASSERT_EQ_INT(0, isect[1]);
+    ASSERT_EQ_INT(0, isect[2]);
+    free(isect);
+}
+
 void test_gii_communities_consume(void) {
     RUN_TEST(test_g7_leiden_cache_hit);
     RUN_TEST(test_g7_hidden_cols_declared);
     RUN_TEST(test_g7_filter_parity);
     RUN_TEST(test_g7_g2_signature_includes_community);
+    RUN_TEST(test_g7_intersection_with_provenance);
 }

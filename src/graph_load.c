@@ -264,6 +264,22 @@ int *build_community_mask(const GraphData *g, const int *partition, int target_c
     return mask;
 }
 
+/* G7 T7.5 intersect_masks — STUB.
+ * Returns a's contents as-is, ignoring b. Test fails because the
+ * intersected mask doesn't match a logical AND. */
+int *intersect_masks(const int *a, const int *b, int n) {
+    (void)b;
+    if (!a || n <= 0)
+        return NULL;
+    int *out = (int *)malloc((size_t)n * sizeof(int));
+    if (!out)
+        return NULL;
+    for (int i = 0; i < n; i++) {
+        out[i] = a[i] ? 1 : 0;
+    }
+    return out;
+}
+
 /* G7 T7.3 induce_subgraph.
  *
  * Two-pass: first add masked nodes to out_g (preserving string IDs so

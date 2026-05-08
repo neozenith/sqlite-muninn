@@ -106,4 +106,13 @@ int graph_data_load(sqlite3 *db, const GraphLoadConfig *config, GraphData *g, ch
 int *build_community_mask(const GraphData *g, const int *partition, int target_community_id);
 int induce_subgraph(const GraphData *g, const int *mask, GraphData *out_g, int **out_to_orig);
 
+/* G7 T7.5 — mask intersection. Returns a fresh malloc'd int[n] where
+ * out[i] = 1 iff a[i] != 0 AND b[i] != 0. Both inputs are treated as
+ * truthy/falsy (any non-zero counts as "in"). NULL on bad inputs or
+ * allocation failure. Caller frees with free().
+ *
+ * Used to compose G1's provenance filter mask with G7's community
+ * filter mask before inducing the centrality subgraph. */
+int *intersect_masks(const int *a, const int *b, int n);
+
 #endif /* GRAPH_LOAD_H */
