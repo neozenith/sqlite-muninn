@@ -38,8 +38,9 @@ typedef struct {
     char *src_col;
     char *dst_col;
     char *weight_col;   /* NULL if unweighted */
-    int64_t generation; /* increments on each rebuild */
-    int has_sssp;       /* features='sssp' opt-in (G4: SSSP shadow tables) */
+    int64_t generation;  /* increments on each rebuild */
+    int has_sssp;        /* features='sssp' opt-in (G4: SSSP shadow tables) */
+    int has_communities; /* features='communities' opt-in (G6: Leiden shadow + cache) */
 } AdjVtab;
 
 typedef struct {
@@ -289,11 +290,47 @@ static int adjacency_create_sssp_tables(sqlite3 *db, const char *name) {
     return rc;
 }
 
+/* Optional Leiden community shadow + four config keys created when
+ * features='communities' is set. Schema is the contract documented in
+ * docs/plans/adv-centrality-filtering.md G6 ("Schema (verbatim — this
+ * is the contract; G7 reads from it)"). The four config keys form the
+ * cache state machine: communities_generation < 0 signals
+ * 'never computed' → COLD_START. */
+static int adjacency_create_communities_tables(sqlite3 *db, const char *name) {
+    char *sql;
+    int rc;
+
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_communities\" ("
+                          "namespace_id INTEGER DEFAULT 0, "
+                          "node_idx INTEGER NOT NULL, "
+                          "community_id INTEGER NOT NULL, "
+                          "PRIMARY KEY (namespace_id, node_idx))",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Seed sentinel defaults so check_communities_cache's first read
+     * deterministically routes to COLD_START. INSERT OR IGNORE keeps
+     * any user-tuned values intact across xConnect/xCreate cycles. */
+    sql = sqlite3_mprintf("INSERT OR IGNORE INTO \"%w_config\"(key, value) VALUES "
+                          "  ('communities_generation', '-1'),"
+                          "  ('communities_resolution', '-1.0'),"
+                          "  ('communities_modularity', '0.0'),"
+                          "  ('num_communities', '0')",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    return rc;
+}
+
 static int drop_shadow_tables(sqlite3 *db, const char *name) {
-    /* Drop _sssp/_sssp_delta unconditionally with IF EXISTS — handles
-     * both the features='sssp' and the default case. */
-    const char *suffixes[] = {"_config",  "_nodes", "_degree",     "_csr_fwd",
-                              "_csr_rev", "_delta", "_sssp_delta", "_sssp"};
+    /* Drop optional shadow tables unconditionally with IF EXISTS —
+     * handles default + features='sssp' + features='communities' +
+     * any composition thereof. */
+    const char *suffixes[] = {"_config",  "_nodes",      "_degree", "_csr_fwd",     "_csr_rev",
+                              "_delta",   "_sssp_delta", "_sssp",   "_communities", "_comm_delta"};
     for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
         char *sql = sqlite3_mprintf("DROP TABLE IF EXISTS \"%w%s\"", name, suffixes[i]);
         sqlite3_exec(db, sql, NULL, NULL, NULL);
@@ -1167,6 +1204,7 @@ static int adj_init(sqlite3 *db, void *pAux, int argc, const char *const *argv, 
     vtab->dst_col = params.dst_col;
     vtab->weight_col = params.weight_col;
     vtab->has_sssp = features_contains(params.features, "sssp");
+    vtab->has_communities = features_contains(params.features, "communities");
     sqlite3_free(params.features); /* parsed value not stored on vtab */
 
     if (is_create) {
@@ -1187,6 +1225,21 @@ static int adj_init(sqlite3 *db, void *pAux, int argc, const char *const *argv, 
             rc = adjacency_create_sssp_tables(db, argv[2]);
             if (rc != SQLITE_OK) {
                 *pzErr = sqlite3_mprintf("graph_adjacency: failed to create SSSP shadow tables");
+                drop_shadow_tables(db, argv[2]);
+                sqlite3_free(vtab->vtab_name);
+                sqlite3_free(vtab->edge_table);
+                sqlite3_free(vtab->src_col);
+                sqlite3_free(vtab->dst_col);
+                sqlite3_free(vtab->weight_col);
+                sqlite3_free(vtab);
+                return rc;
+            }
+        }
+
+        if (vtab->has_communities) {
+            rc = adjacency_create_communities_tables(db, argv[2]);
+            if (rc != SQLITE_OK) {
+                *pzErr = sqlite3_mprintf("graph_adjacency: failed to create communities shadow tables");
                 drop_shadow_tables(db, argv[2]);
                 sqlite3_free(vtab->vtab_name);
                 sqlite3_free(vtab->edge_table);
