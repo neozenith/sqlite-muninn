@@ -401,10 +401,86 @@ TEST(test_g7_intersection_with_provenance) {
     free(isect);
 }
 
+/* T7.6 — empty intersection returns zero rows (NOT unfiltered).
+ *
+ * The contract: when the community ∩ provenance intersection is
+ * empty, the centrality result must be empty too. A buggy fallback
+ * that "if mask is empty, just compute on the full graph" would be
+ * a silent wrong-answer bug — the user asked for "centrality within
+ * community 99 ∩ provenance window" and got "centrality on the
+ * whole graph" instead.
+ *
+ * Tests at the helper level (induce_subgraph + brandes_compute);
+ * the TVF integration test happens once T7.3's wire-up lands. */
+TEST(test_g7_empty_intersection_returns_zero_rows) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE edges(src TEXT, dst TEXT);"
+                      "INSERT INTO edges(src, dst) VALUES "
+                      "  ('a','b'),('b','c'),('c','d'),('d','e');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    GraphData g;
+    graph_data_init(&g);
+    GraphLoadConfig cfg = {.edge_table = "edges",
+                           .src_col = "src",
+                           .dst_col = "dst",
+                           .weight_col = NULL,
+                           .direction = "both",
+                           .timestamp_col = NULL,
+                           .time_start = NULL,
+                           .time_end = NULL};
+    char *errmsg = NULL;
+    rc = graph_data_load(db, &cfg, &g, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(5, g.node_count);
+
+    /* Compose: community mask = all 1s (entire graph in one community);
+     * provenance mask = all 0s (no nodes match the filter window).
+     * Intersection: all 0s. */
+    const int community_mask[5] = {1, 1, 1, 1, 1};
+    const int provenance_mask[5] = {0, 0, 0, 0, 0};
+    int *isect = intersect_masks(community_mask, provenance_mask, 5);
+    ASSERT(isect != NULL);
+    for (int i = 0; i < 5; i++) {
+        ASSERT_EQ_INT(0, isect[i]);
+    }
+
+    /* Induce subgraph from empty mask → must be 0 nodes. NOT a copy
+     * of the original graph (the silent-fallback bug). */
+    GraphData induced;
+    int *to_orig = NULL;
+    rc = induce_subgraph(&g, isect, &induced, &to_orig);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(0, induced.node_count); /* NOT 5 — that'd be the silent fallback. */
+    ASSERT_EQ_INT(0, induced.edge_count);
+
+    /* Brandes on empty graph completes without crashing and produces
+     * no centrality values (CB stays at its caller-init zeros). The
+     * caller's responsibility is to skip emitting result rows when
+     * node_count == 0. */
+    double dummy_cb;
+    rc = brandes_compute(&induced, "both", 0, 0, &dummy_cb, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    free(isect);
+    free(to_orig);
+    graph_data_destroy(&induced);
+    graph_data_destroy(&g);
+    sqlite3_close(db);
+}
+
 void test_gii_communities_consume(void) {
     RUN_TEST(test_g7_leiden_cache_hit);
     RUN_TEST(test_g7_hidden_cols_declared);
     RUN_TEST(test_g7_filter_parity);
     RUN_TEST(test_g7_g2_signature_includes_community);
     RUN_TEST(test_g7_intersection_with_provenance);
+    RUN_TEST(test_g7_empty_intersection_returns_zero_rows);
 }
