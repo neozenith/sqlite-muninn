@@ -169,31 +169,151 @@ unsigned int topk_signature(const char *provenance_table, const char *filter_pre
     return h;
 }
 
-/* G2 T2.2 — cache put/get STUBS. Real implementations land in T2.2 GREEN. */
+/* G2 T2.2 — cache put/get. */
+
+/* The signature is currently 32-bit unsigned; the hex column width is
+ * 8 chars + null. T2.4's xxh3 swap will widen this to 32 chars without
+ * changing the read/write API. */
+#define TOPK_SIG_HEX_LEN 8
+
+static const char *kTopkCreateSql = "CREATE TABLE IF NOT EXISTS _gii_topk_cache ("
+                                    "  signature       TEXT PRIMARY KEY,"
+                                    "  seeds_json      TEXT,"
+                                    "  nodes_json      TEXT,"
+                                    "  edges_json      TEXT,"
+                                    "  edge_generation INTEGER,"
+                                    "  prov_generation INTEGER,"
+                                    "  cached_at       TEXT"
+                                    ")";
+
+static void format_signature(unsigned int sig, char out[TOPK_SIG_HEX_LEN + 1]) {
+    snprintf(out, TOPK_SIG_HEX_LEN + 1, "%08x", sig);
+}
 
 int topk_cache_put(sqlite3 *db, unsigned int signature, const char *seeds_json, const char *nodes_json,
                    const char *edges_json, int64_t edge_generation, int64_t prov_generation) {
-    (void)db;
-    (void)signature;
-    (void)seeds_json;
-    (void)nodes_json;
-    (void)edges_json;
-    (void)edge_generation;
-    (void)prov_generation;
-    return SQLITE_ERROR;
+    if (!db) {
+        return SQLITE_MISUSE;
+    }
+
+    /* Lazy CREATE TABLE — first put bootstraps the cache schema. */
+    int rc = sqlite3_exec(db, kTopkCreateSql, NULL, NULL, NULL);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+
+    char sig_hex[TOPK_SIG_HEX_LEN + 1];
+    format_signature(signature, sig_hex);
+
+    sqlite3_stmt *stmt = NULL;
+    rc = sqlite3_prepare_v2(db,
+                            "INSERT OR REPLACE INTO _gii_topk_cache"
+                            "(signature, seeds_json, nodes_json, edges_json,"
+                            " edge_generation, prov_generation, cached_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+                            -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+    sqlite3_bind_text(stmt, 1, sig_hex, TOPK_SIG_HEX_LEN, SQLITE_TRANSIENT);
+    if (seeds_json) {
+        sqlite3_bind_text(stmt, 2, seeds_json, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 2);
+    }
+    if (nodes_json) {
+        sqlite3_bind_text(stmt, 3, nodes_json, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 3);
+    }
+    if (edges_json) {
+        sqlite3_bind_text(stmt, 4, edges_json, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 4);
+    }
+    sqlite3_bind_int64(stmt, 5, edge_generation);
+    sqlite3_bind_int64(stmt, 6, prov_generation);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? SQLITE_OK : rc;
+}
+
+/* Copy a TEXT column into a malloc'd string. NULL column → out is NULL.
+ * Returns 0 on success, non-zero on alloc failure. */
+static int copy_text_column(sqlite3_stmt *stmt, int col, char **out) {
+    if (sqlite3_column_type(stmt, col) == SQLITE_NULL) {
+        *out = NULL;
+        return 0;
+    }
+    const unsigned char *text = sqlite3_column_text(stmt, col);
+    int bytes = sqlite3_column_bytes(stmt, col);
+    if (!text || bytes < 0) {
+        *out = NULL;
+        return 0;
+    }
+    *out = (char *)malloc((size_t)bytes + 1);
+    if (!*out) {
+        return -1;
+    }
+    memcpy(*out, text, (size_t)bytes);
+    (*out)[bytes] = '\0';
+    return 0;
 }
 
 int topk_cache_get(sqlite3 *db, unsigned int signature, int64_t edge_generation, int64_t prov_generation,
                    char **out_seeds_json, char **out_nodes_json, char **out_edges_json) {
-    (void)db;
-    (void)signature;
-    (void)edge_generation;
-    (void)prov_generation;
     if (out_seeds_json)
         *out_seeds_json = NULL;
     if (out_nodes_json)
         *out_nodes_json = NULL;
     if (out_edges_json)
         *out_edges_json = NULL;
-    return SQLITE_ERROR;
+    if (!db || !out_seeds_json || !out_nodes_json || !out_edges_json) {
+        return SQLITE_MISUSE;
+    }
+
+    char sig_hex[TOPK_SIG_HEX_LEN + 1];
+    format_signature(signature, sig_hex);
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db,
+                                "SELECT seeds_json, nodes_json, edges_json "
+                                "FROM _gii_topk_cache "
+                                "WHERE signature = ? "
+                                "  AND edge_generation = ? "
+                                "  AND prov_generation = ?",
+                                -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        /* "no such table" before any put: cache is logically empty.
+         * Treat as miss rather than propagating the prepare error. */
+        return SQLITE_NOTFOUND;
+    }
+    sqlite3_bind_text(stmt, 1, sig_hex, TOPK_SIG_HEX_LEN, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, edge_generation);
+    sqlite3_bind_int64(stmt, 3, prov_generation);
+
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        return SQLITE_NOTFOUND;
+    }
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return rc;
+    }
+
+    int alloc_ok = (copy_text_column(stmt, 0, out_seeds_json) == 0 &&
+                    copy_text_column(stmt, 1, out_nodes_json) == 0 &&
+                    copy_text_column(stmt, 2, out_edges_json) == 0);
+    sqlite3_finalize(stmt);
+    if (!alloc_ok) {
+        free(*out_seeds_json);
+        free(*out_nodes_json);
+        free(*out_edges_json);
+        *out_seeds_json = NULL;
+        *out_nodes_json = NULL;
+        *out_edges_json = NULL;
+        return SQLITE_NOMEM;
+    }
+    return SQLITE_OK;
 }
