@@ -1851,6 +1851,20 @@ int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, 
     return rc == SQLITE_DONE ? SQLITE_OK : rc;
 }
 
+/* sssp_cascade_emit stub for T4.4 RED. Returns SQLITE_ERROR so the
+ * test fails at the first call. T4.4 GREEN replaces this with the
+ * real per-strategy emission logic. */
+int sssp_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
+                      const int *affected_source_idxs, int n) {
+    (void)db;
+    (void)vt_name;
+    (void)namespace_id;
+    (void)strategy;
+    (void)affected_source_idxs;
+    (void)n;
+    return SQLITE_ERROR;
+}
+
 /* Classify the change ratio |delta|/total_edges into a rebuild
  * strategy. Bands are closed-open on the lower side, open-closed-
  * downward on the upper:

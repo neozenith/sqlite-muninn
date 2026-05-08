@@ -27,6 +27,22 @@ typedef enum {
 
 extern SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edges, double theta_selective,
                                                  double theta_full);
+extern int sssp_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
+                             const int *affected_source_idxs, int n);
+
+/* Count rows produced by sql. Returns -1 on prepare/step failure. */
+static int count_rows(sqlite3 *db, const char *sql) {
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    int n = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        n = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return n;
+}
 
 /* Returns 1 if a regular table named `name` exists in the schema, else 0. */
 static int has_table(sqlite3 *db, const char *name) {
@@ -260,8 +276,100 @@ TEST(test_g4_threshold_dispatch) {
     sqlite3_close(db);
 }
 
+/* Read a TEXT-typed config value as an integer (matches the convention
+ * used elsewhere in graph_adjacency: TEXT key/value, callers cast). */
+static sqlite3_int64 config_get_int_text(sqlite3 *db, const char *vt_name, const char *key) {
+    char *raw = config_get_text(db, vt_name, key);
+    if (!raw) {
+        return -1;
+    }
+    sqlite3_int64 v = (sqlite3_int64)atoll(raw);
+    sqlite3_free(raw);
+    return v;
+}
+
+/* T4.4 — sssp_cascade_emit dispatches per strategy:
+ *
+ *   REBUILD_SELECTIVE / REBUILD_DELTA_FLUSH: append the supplied
+ *     affected source_idx values to <vt>_sssp_delta (INSERT OR IGNORE
+ *     on PK conflict). Generation unchanged. _sssp untouched.
+ *
+ *   REBUILD_FULL: physically DELETE all rows from <vt>_sssp (no
+ *     per-row generation, so logical invalidation isn't enough),
+ *     DELETE all rows from <vt>_sssp_delta (irrelevant once everything
+ *     is stale), and bump generation in <vt>_config. The
+ *     affected_source_idxs argument is ignored.
+ *
+ * The plan describes SELECTIVE and DELTA_FLUSH as differing in WHICH
+ * indices they emit (a block-level subset vs the entire namespace),
+ * but the primitive itself takes the precomputed list — separating
+ * "what to emit" from "how to emit". */
+TEST(test_g4_cascade_emit_per_strategy) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db, "CREATE TABLE edges(src TEXT, dst TEXT)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='sssp')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Pre-populate _sssp with two rows so the FULL-rebuild clear has
+     * something to remove. dist[] values don't matter for this test. */
+    double dist[5] = {0.0, 1.0, 2.0, 3.0, 4.0};
+    ASSERT_EQ_INT(SQLITE_OK, sssp_shadow_put(db, "g", 0, 1, dist, NULL, 5));
+    ASSERT_EQ_INT(SQLITE_OK, sssp_shadow_put(db, "g", 0, 2, dist, NULL, 5));
+    ASSERT_EQ_INT(2, count_rows(db, "SELECT COUNT(*) FROM g_sssp"));
+
+    /* Pre-populate _sssp_delta with one entry so we can observe whether
+     * SELECTIVE/DELTA_FLUSH appends (and FULL clears). */
+    rc = sqlite3_exec(db, "INSERT INTO g_sssp_delta(namespace_id, source_idx) VALUES (0, 99)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta"));
+
+    sqlite3_int64 gen_before = config_get_int_text(db, "g", "generation");
+    ASSERT(gen_before >= 0);
+
+    /* (1) SELECTIVE: append 3 affected source indices. */
+    const int affected_a[3] = {1, 5, 9};
+    rc = sssp_cascade_emit(db, "g", 0, REBUILD_SELECTIVE, affected_a, 3);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    /* _sssp_delta now has the prior (0,99) plus (0,1), (0,5), (0,9) — 4 total. */
+    ASSERT_EQ_INT(4, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta"));
+    /* Generation untouched. */
+    ASSERT_EQ_INT(gen_before, config_get_int_text(db, "g", "generation"));
+    /* _sssp untouched. */
+    ASSERT_EQ_INT(2, count_rows(db, "SELECT COUNT(*) FROM g_sssp"));
+
+    /* (2) DELTA_FLUSH: same emit shape as SELECTIVE — appends without
+     * touching _sssp or generation. INSERT OR IGNORE means a repeat of
+     * source_idx=1 (already in delta from step 1) doesn't double up. */
+    const int affected_b[2] = {1, 7}; /* 1 collides with prior selective emit */
+    rc = sssp_cascade_emit(db, "g", 0, REBUILD_DELTA_FLUSH, affected_b, 2);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    /* +1 net (source_idx=7 is new; source_idx=1 is a PK conflict). */
+    ASSERT_EQ_INT(5, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta"));
+    ASSERT_EQ_INT(gen_before, config_get_int_text(db, "g", "generation"));
+    ASSERT_EQ_INT(2, count_rows(db, "SELECT COUNT(*) FROM g_sssp"));
+
+    /* (3) FULL: clears both _sssp and _sssp_delta and bumps generation.
+     * The affected_source_idxs argument is ignored. */
+    rc = sssp_cascade_emit(db, "g", 0, REBUILD_FULL, NULL, 0);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_sssp"));
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta"));
+    ASSERT(config_get_int_text(db, "g", "generation") > gen_before);
+
+    sqlite3_close(db);
+}
+
 void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_schema_creates_with_feature_flag);
     RUN_TEST(test_g4_blob_round_trip);
     RUN_TEST(test_g4_threshold_dispatch);
+    RUN_TEST(test_g4_cascade_emit_per_strategy);
 }

@@ -43,6 +43,16 @@ typedef enum {
 
 SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edges, double theta_selective, double theta_full);
 
+/* G4 cascade emit. Per the rebuild strategy:
+ *   REBUILD_SELECTIVE / REBUILD_DELTA_FLUSH:
+ *     INSERT OR IGNORE each affected_source_idxs[i] into <vt>_sssp_delta;
+ *     do not touch _sssp; do not bump generation.
+ *   REBUILD_FULL:
+ *     DELETE all rows from <vt>_sssp and <vt>_sssp_delta; bump
+ *     generation in <vt>_config. affected_source_idxs is ignored. */
+int sssp_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
+                      const int *affected_source_idxs, int n);
+
 /*
  * Check if a name corresponds to a graph_adjacency virtual table.
  * Returns 1 if yes, 0 if no.
