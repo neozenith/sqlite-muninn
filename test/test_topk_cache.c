@@ -202,8 +202,60 @@ TEST(test_g2_generation_invalidation) {
     sqlite3_close(db);
 }
 
+/* qsort comparator for unsigned int — stable order so sequential-pass
+ * collision detection works. */
+static int compare_uint(const void *a, const void *b) {
+    unsigned int ua = *(const unsigned int *)a;
+    unsigned int ub = *(const unsigned int *)b;
+    if (ua < ub)
+        return -1;
+    if (ua > ub)
+        return 1;
+    return 0;
+}
+
+/* T2.4 — 10K-signature uniqueness sweep. Generate 10K distinct
+ * (provenance, predicate, metric, top_k, ...) tuples and assert the
+ * resulting signatures collide zero times.
+ *
+ * With DJB2's 32-bit space, birthday-paradox expected collisions at
+ * 10K is ~0.012 per run — most runs see 0, some see 1-2. If the
+ * empirical count is non-zero, the primitive needs a wider hash
+ * (FNV-1a-64 inline, or vendor xxh3 per the plan ADR). For T2.4 to
+ * pass reliably, we need 0 collisions on every run. */
+TEST(test_g2_no_collisions_over_10k) {
+    const int N = 10000;
+    unsigned int *sigs = (unsigned int *)malloc((size_t)N * sizeof(unsigned int));
+    ASSERT(sigs != NULL);
+
+    /* Vary one parameter (top_k) so each call hashes a distinct
+     * canonical string. Other inputs constant. */
+    for (int i = 0; i < N; i++) {
+        sigs[i] = topk_signature("prov", "{\"k\":\"v\"}", "node_betweenness",
+                                 /*top_k=*/i, /*depth=*/0, /*min_degree=*/0,
+                                 /*g_adj=*/0, /*g_prov=*/0,
+                                 /*community_filter=*/0, /*community_resolution=*/1.0);
+    }
+
+    /* Sort + sequential-pass collision detection. O(N log N) once,
+     * O(N) for the dup check. */
+    qsort(sigs, (size_t)N, sizeof(unsigned int), compare_uint);
+    int collisions = 0;
+    for (int i = 1; i < N; i++) {
+        if (sigs[i] == sigs[i - 1]) {
+            collisions++;
+        }
+    }
+    free(sigs);
+
+    /* Per plan ADR (line 825): the documented goal is 0 collisions at
+     * 10K. If this fires, T2.4 GREEN must upgrade the hash primitive. */
+    ASSERT_EQ_INT(0, collisions);
+}
+
 void test_topk_cache(void) {
     RUN_TEST(test_g2_signature_stable_under_json_reordering);
     RUN_TEST(test_g2_cache_hit_returns_stored_rows);
     RUN_TEST(test_g2_generation_invalidation);
+    RUN_TEST(test_g2_no_collisions_over_10k);
 }
