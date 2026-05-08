@@ -28,6 +28,10 @@ extern void intlist_clear(IntList *l);
 extern void intlist_destroy(IntList *l);
 extern int reconstruct_pred_from_dist(const GraphData *g, int source, const double *dist, IntList *pred, int *stack,
                                       int *stack_size, const char *direction, int weighted);
+extern int brandes_compute(const GraphData *g, const char *direction, int auto_approx, int normalized, double *CB,
+                           double *EB);
+extern int brandes_compute_cached(const GraphData *g, sqlite3 *db, const char *gii_vt_name, int namespace_id,
+                                  const char *direction, int auto_approx, int normalized, double *CB, double *EB);
 
 extern int adjacency_register_module(sqlite3 *db);
 extern int sssp_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, const double *dist,
@@ -823,6 +827,96 @@ TEST(test_g5_partial_recompute_safety) {
     sqlite3_close(db);
 }
 
+/* T5.4 — cache-vs-uncached centrality result parity.
+ *
+ * Diamond fixture (a-b-d, a-c-d) with betweenness = 0.5 each on b
+ * and c (a single shortest a→d pair has two equal-length routes,
+ * so flow splits). Running brandes_compute (direct sssp_bfs) and
+ * brandes_compute_cached (sssp_load_or_compute + reconstruction)
+ * must produce the same CB[] within float tolerance.
+ *
+ * Three runs:
+ *   (1) uncached  → CB_baseline (the reference)
+ *   (2) cached, cold  → CB_cold (every source is a miss, computes + writes back)
+ *   (3) cached, warm  → CB_warm (every source is a hit, reads from cache)
+ *
+ * All three must agree per-component. */
+TEST(test_g5_cache_vs_uncached_parity) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Diamond: a-b-d and a-c-d, plus a direct b-c link. Two shortest
+     * routes a→d, distance 2 each, splitting flow on b and c. */
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE edges(src TEXT, dst TEXT);"
+                      "INSERT INTO edges(src, dst) VALUES "
+                      "  ('a','b'),('a','c'),('b','c'),('b','d'),('c','d');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='sssp')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    GraphData graph;
+    graph_data_init(&graph);
+    GraphLoadConfig config = {.edge_table = "edges",
+                              .src_col = "src",
+                              .dst_col = "dst",
+                              .weight_col = NULL,
+                              .direction = "both",
+                              .timestamp_col = NULL,
+                              .time_start = NULL,
+                              .time_end = NULL};
+    char *errmsg = NULL;
+    rc = graph_data_load(db, &config, &graph, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+    }
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(4, graph.node_count);
+
+    int N = graph.node_count;
+    double *CB_baseline = (double *)calloc((size_t)N, sizeof(double));
+    double *CB_cold = (double *)calloc((size_t)N, sizeof(double));
+    double *CB_warm = (double *)calloc((size_t)N, sizeof(double));
+
+    /* (1) Reference: direct (uncached) Brandes. */
+    rc = brandes_compute(&graph, "both", 0, 0, CB_baseline, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* (2) Cached, cold cache: every source is a miss path. */
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_sssp"));
+    rc = brandes_compute_cached(&graph, db, "g", 0, "both", 0, 0, CB_cold, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    /* Cache should now hold one row per source (4 rows). */
+    ASSERT_EQ_INT(N, count_rows(db, "SELECT COUNT(*) FROM g_sssp"));
+
+    /* (3) Cached, warm cache: every source is a hit path. */
+    rc = brandes_compute_cached(&graph, db, "g", 0, "both", 0, 0, CB_warm, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    /* Still 4 rows — INSERT OR REPLACE keeps PK uniqueness. */
+    ASSERT_EQ_INT(N, count_rows(db, "SELECT COUNT(*) FROM g_sssp"));
+
+    /* Per-component parity. Tolerance 1e-9 covers the floating-point
+     * roundtrip through the BLOB encode/decode path. */
+    for (int i = 0; i < N; i++) {
+        ASSERT(fabs(CB_baseline[i] - CB_cold[i]) < 1e-9);
+        ASSERT(fabs(CB_baseline[i] - CB_warm[i]) < 1e-9);
+    }
+
+    free(CB_baseline);
+    free(CB_cold);
+    free(CB_warm);
+    graph_data_destroy(&graph);
+    sqlite3_close(db);
+}
+
 void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_schema_creates_with_feature_flag);
     RUN_TEST(test_g4_blob_round_trip);
@@ -833,4 +927,5 @@ void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g5_load_or_compute_writes_back_on_miss);
     RUN_TEST(test_g5_pred_reconstruction_parity);
     RUN_TEST(test_g5_partial_recompute_safety);
+    RUN_TEST(test_g5_cache_vs_uncached_parity);
 }

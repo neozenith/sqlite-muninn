@@ -91,4 +91,21 @@ void intlist_destroy(IntList *l);
 int reconstruct_pred_from_dist(const GraphData *g, int source, const double *dist, IntList *pred, int *stack,
                                int *stack_size, const char *direction, int weighted);
 
+/*
+ * Cache-aware Brandes (G5 T5.4).
+ *
+ * Same numerical contract as brandes_compute, but per-source SSSP is
+ * routed through sssp_load_or_compute (cache hit when fresh, compute +
+ * write-back on miss/stale). pred[] and stack[] are reconstructed via
+ * reconstruct_pred_from_dist instead of being filled by direct
+ * sssp_bfs / sssp_dijkstra.
+ *
+ * Result parity with brandes_compute is guaranteed because Brandes
+ * back-propagation is associative and commutative — even if
+ * reconstruction returns predecessors in a different per-source order,
+ * the accumulated CB[]/EB[] values match.
+ */
+int brandes_compute_cached(const GraphData *g, sqlite3 *db, const char *gii_vt_name, int namespace_id,
+                           const char *direction, int auto_approx, int normalized, double *CB, double *EB);
+
 #endif /* GRAPH_CENTRALITY_H */

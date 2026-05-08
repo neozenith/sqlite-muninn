@@ -509,6 +509,28 @@ int brandes_compute(const GraphData *g, const char *direction, int auto_approx, 
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * Cache-aware Brandes wrapper (G5 T5.4) — STUB
+ *
+ * T5.4 GREEN replaces this with a copy of brandes_compute's body,
+ * but routes per-source SSSP through sssp_load_or_compute and
+ * recovers pred[]/stack[] via reconstruct_pred_from_dist.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int brandes_compute_cached(const GraphData *g, sqlite3 *db, const char *gii_vt_name, int namespace_id,
+                           const char *direction, int auto_approx, int normalized, double *CB, double *EB) {
+    (void)g;
+    (void)db;
+    (void)gii_vt_name;
+    (void)namespace_id;
+    (void)direction;
+    (void)auto_approx;
+    (void)normalized;
+    (void)CB;
+    (void)EB;
+    return SQLITE_ERROR;
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * pred / stack reconstruction from cached dist[] (G5 T5.2)
  *
  * Inverse of sssp_bfs/dijkstra's expansion. For each w with finite
