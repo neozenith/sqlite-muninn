@@ -17,6 +17,9 @@ extern int *build_community_mask(const GraphData *g, const int *partition, int t
 extern int induce_subgraph(const GraphData *g, const int *mask, GraphData *out_g, int **out_to_orig);
 extern int brandes_compute(const GraphData *g, const char *direction, int auto_approx, int normalized, double *CB,
                            double *EB);
+extern unsigned int topk_signature(const char *provenance_table, const char *filter_predicate, const char *metric,
+                                   int top_k, int depth, int min_degree, sqlite3_int64 g_adj, sqlite3_int64 g_prov,
+                                   int community_filter, double community_resolution);
 
 extern int adjacency_register_module(sqlite3 *db);
 extern int community_register_tvfs(sqlite3 *db);
@@ -306,8 +309,49 @@ TEST(test_g7_filter_parity) {
     sqlite3_close(db);
 }
 
+/* T7.4 — G2's signature function MUST hash community_filter and
+ * community_resolution. Without them, two top-K queries that differ
+ * only on community filter would collide on cache key and read each
+ * other's results — silent wrong answers.
+ *
+ * The hash primitive is DJB2 today; G2 T2.1 will swap to xxh3. T7.4
+ * tests "does community_X change the output," not collision strength
+ * (T2.4's concern). All other params held constant; only the
+ * community fields vary. */
+TEST(test_g7_g2_signature_includes_community) {
+    const char *prov = "events_msg_chunks_p";
+    const char *pred = "{\"project\":\"a\",\"days\":7}";
+    const char *metric = "node_betweenness";
+
+    /* Baseline: a specific community/resolution pair. */
+    unsigned int s_baseline = topk_signature(prov, pred, metric, /*top_k=*/100, /*depth=*/2, /*min_degree=*/3,
+                                             /*g_adj=*/42, /*g_prov=*/17, /*community_filter=*/5,
+                                             /*community_resolution=*/1.0);
+
+    /* Same params, different community_filter → must differ. */
+    unsigned int s_other_community = topk_signature(prov, pred, metric, 100, 2, 3, 42, 17,
+                                                    /*community_filter=*/6, /*community_resolution=*/1.0);
+    ASSERT(s_baseline != s_other_community);
+
+    /* Same params, different community_resolution → must differ. */
+    unsigned int s_other_resolution = topk_signature(prov, pred, metric, 100, 2, 3, 42, 17,
+                                                     /*community_filter=*/5, /*community_resolution=*/0.5);
+    ASSERT(s_baseline != s_other_resolution);
+
+    /* Identical inputs (same community, same resolution) → identical
+     * signatures. Stable for cache lookup. */
+    unsigned int s_repeat = topk_signature(prov, pred, metric, 100, 2, 3, 42, 17, 5, 1.0);
+    ASSERT_EQ_INT((int)s_baseline, (int)s_repeat);
+
+    /* Sanity: non-community params still influence the hash (regression
+     * guard against a stub that ignores everything). */
+    unsigned int s_other_topk = topk_signature(prov, pred, metric, /*top_k=*/200, 2, 3, 42, 17, 5, 1.0);
+    ASSERT(s_baseline != s_other_topk);
+}
+
 void test_gii_communities_consume(void) {
     RUN_TEST(test_g7_leiden_cache_hit);
     RUN_TEST(test_g7_hidden_cols_declared);
     RUN_TEST(test_g7_filter_parity);
+    RUN_TEST(test_g7_g2_signature_includes_community);
 }

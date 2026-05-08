@@ -59,6 +59,7 @@ TEST_LINK_SOURCES = [
     "src/graph_adjacency.c",
     "src/graph_centrality.c",
     "src/graph_community.c",
+    "src/graph_topk_cache.c",
 ]
 
 # ── CMake flags ──────────────────────────────────────────────────────
