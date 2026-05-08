@@ -133,7 +133,77 @@ TEST(test_g2_cache_hit_returns_stored_rows) {
     sqlite3_close(db);
 }
 
+/* T2.3 — generation invalidation on G_adj / G_prov tick. Reading with
+ * either bumped generation must return NOTFOUND, even though the row
+ * is still physically in the table. Property follows from T2.2's
+ * WHERE-on-generations design (lazy compare-on-read); T2.3 locks it
+ * in place against future regression. */
+TEST(test_g2_generation_invalidation) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Plant: signature 0xABCD at (edge_gen=5, prov_gen=2). */
+    const char *seeds = "[\"a\",\"b\"]";
+    const char *nodes = "[]";
+    const char *edges = "[]";
+    rc = topk_cache_put(db, 0xABCDu, seeds, nodes, edges, /*edge_gen=*/5, /*prov_gen=*/2);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Baseline: matching generations → HIT. */
+    char *out_seeds = NULL, *out_nodes = NULL, *out_edges = NULL;
+    rc = topk_cache_get(db, 0xABCDu, /*edge_gen=*/5, /*prov_gen=*/2, &out_seeds, &out_nodes, &out_edges);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    free(out_seeds);
+    free(out_nodes);
+    free(out_edges);
+
+    /* edge_generation bumped → MISS. */
+    rc = topk_cache_get(db, 0xABCDu, /*edge_gen=*/6, /*prov_gen=*/2, &out_seeds, &out_nodes, &out_edges);
+    ASSERT_EQ_INT(SQLITE_NOTFOUND, rc);
+    ASSERT(out_seeds == NULL);
+
+    /* prov_generation bumped → MISS. */
+    rc = topk_cache_get(db, 0xABCDu, /*edge_gen=*/5, /*prov_gen=*/3, &out_seeds, &out_nodes, &out_edges);
+    ASSERT_EQ_INT(SQLITE_NOTFOUND, rc);
+    ASSERT(out_seeds == NULL);
+
+    /* Both bumped → MISS. */
+    rc = topk_cache_get(db, 0xABCDu, /*edge_gen=*/6, /*prov_gen=*/3, &out_seeds, &out_nodes, &out_edges);
+    ASSERT_EQ_INT(SQLITE_NOTFOUND, rc);
+
+    /* The original row is still physically present (lazy strategy —
+     * the read just doesn't see it). Verified by direct SQL. */
+    sqlite3_stmt *stmt = NULL;
+    /* Signatures are 8-char zero-padded hex: 0xABCD → "0000abcd". */
+    rc = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM _gii_topk_cache WHERE signature = '0000abcd'", -1, &stmt, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(SQLITE_ROW, sqlite3_step(stmt));
+    int physical_count = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+    ASSERT_EQ_INT(1, physical_count); /* row still in table — staleness-driven sweep is a separate concern. */
+
+    /* Re-put at the new generation overwrites the stale row (PK is
+     * signature alone, not (sig, gen)). Get with new generation now
+     * succeeds. */
+    rc = topk_cache_put(db, 0xABCDu, "[\"updated\"]", nodes, edges, /*edge_gen=*/6, /*prov_gen=*/3);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = topk_cache_get(db, 0xABCDu, /*edge_gen=*/6, /*prov_gen=*/3, &out_seeds, &out_nodes, &out_edges);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(0, strcmp(out_seeds, "[\"updated\"]"));
+    free(out_seeds);
+    free(out_nodes);
+    free(out_edges);
+
+    /* Old generation now also misses — the new row replaced the old. */
+    rc = topk_cache_get(db, 0xABCDu, /*edge_gen=*/5, /*prov_gen=*/2, &out_seeds, &out_nodes, &out_edges);
+    ASSERT_EQ_INT(SQLITE_NOTFOUND, rc);
+
+    sqlite3_close(db);
+}
+
 void test_topk_cache(void) {
     RUN_TEST(test_g2_signature_stable_under_json_reordering);
     RUN_TEST(test_g2_cache_hit_returns_stored_rows);
+    RUN_TEST(test_g2_generation_invalidation);
 }
