@@ -19,6 +19,7 @@ extern int topk_cache_put(sqlite3 *db, unsigned int signature, const char *seeds
 extern int topk_cache_get(sqlite3 *db, unsigned int signature, sqlite3_int64 edge_generation,
                           sqlite3_int64 prov_generation, char **out_seeds_json, char **out_nodes_json,
                           char **out_edges_json);
+extern sqlite3_int64 config_get_int64_public(sqlite3 *db, const char *name, const char *key, sqlite3_int64 def);
 
 /* T2.1 — JSON canonicalization makes the signature stable under key
  * reordering. Same logical content with different key order must
@@ -253,9 +254,71 @@ TEST(test_g2_no_collisions_over_10k) {
     ASSERT_EQ_INT(0, collisions);
 }
 
+/* T2.5 — external generation bump must be visible immediately.
+ *
+ * Plan section 832 documents the trap: a long-lived prepared
+ * sqlite3_stmt that reads _config.value DOES NOT re-execute when the
+ * underlying row changes. A naive implementation that caches the
+ * statement returns the stale snapshot forever. config_get_int64_public
+ * avoids the trap by re-preparing on every call.
+ *
+ * Test (property-locking, like T2.3 / T2.4):
+ *   - Set up a mock _config table.
+ *   - Read generation = 1.
+ *   - UPDATE generation = 2 (simulating a counter bump from another
+ *     statement / connection / write path).
+ *   - Re-read; must see 2, not 1.
+ *   - Bump 50 more times in a loop; each read must see the latest. */
+TEST(test_g2_external_generation_bump) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* config_get_int64_public reads from <name>_config; create one
+     * for a mock VT name. */
+    rc = sqlite3_exec(db,
+                      "CREATE TABLE mock_config(key TEXT PRIMARY KEY, value TEXT);"
+                      "INSERT INTO mock_config(key, value) VALUES ('generation', '1');",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Initial read. */
+    sqlite3_int64 g = config_get_int64_public(db, "mock", "generation", -1);
+    ASSERT_EQ_INT(1, (int)g);
+
+    /* External bump → read must reflect the new value, not a cached
+     * snapshot. */
+    rc = sqlite3_exec(db, "UPDATE mock_config SET value = '2' WHERE key = 'generation'", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    g = config_get_int64_public(db, "mock", "generation", -1);
+    ASSERT_EQ_INT(2, (int)g);
+
+    /* Stress: 50 bump-and-read cycles, every read must be fresh. */
+    for (int i = 3; i <= 52; i++) {
+        char *upd =
+            sqlite3_mprintf("UPDATE mock_config SET value = '%d' WHERE key = 'generation'", i);
+        rc = sqlite3_exec(db, upd, NULL, NULL, NULL);
+        sqlite3_free(upd);
+        ASSERT_EQ_INT(SQLITE_OK, rc);
+        g = config_get_int64_public(db, "mock", "generation", -1);
+        ASSERT_EQ_INT(i, (int)g);
+    }
+
+    /* Default-on-missing: deleting the row must restore the default
+     * sentinel. Future code that relies on the -1 sentinel for
+     * 'never-computed' state needs this to keep working. */
+    rc = sqlite3_exec(db, "DELETE FROM mock_config WHERE key = 'generation'", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    g = config_get_int64_public(db, "mock", "generation", -1);
+    ASSERT_EQ_INT(-1, (int)g);
+
+    sqlite3_close(db);
+}
+
 void test_topk_cache(void) {
     RUN_TEST(test_g2_signature_stable_under_json_reordering);
     RUN_TEST(test_g2_cache_hit_returns_stored_rows);
     RUN_TEST(test_g2_generation_invalidation);
     RUN_TEST(test_g2_no_collisions_over_10k);
+    RUN_TEST(test_g2_external_generation_bump);
 }
