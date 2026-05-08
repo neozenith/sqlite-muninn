@@ -367,9 +367,81 @@ TEST(test_g4_cascade_emit_per_strategy) {
     sqlite3_close(db);
 }
 
+/* T4.5 — namespace isolation. Writes scoped to one namespace_id are
+ * invisible to another, including under cascade emit. Walks every
+ * SSSP API surface that takes a namespace_id (put / get / clear_delta /
+ * cascade_emit per strategy) so a missing WHERE filter on any one
+ * surface fails with a localized assertion. */
+TEST(test_g4_namespace_isolation) {
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open(":memory:", &db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = adjacency_register_module(db);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db, "CREATE TABLE edges(src TEXT, dst TEXT)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    rc = sqlite3_exec(db,
+                      "CREATE VIRTUAL TABLE g USING graph_adjacency("
+                      "  edge_table=edges, src_col=src, dst_col=dst, features='sssp')",
+                      NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+
+    /* Distinct dist[] payloads per namespace so we can detect cross-
+     * namespace contamination via memcmp. */
+    const double dist_ns0[3] = {1.0, 2.0, 3.0};
+    const double dist_ns1[3] = {10.0, 20.0, 30.0};
+
+    /* (1) put isolates by namespace — same source_idx written under
+     * two namespaces produces two distinct rows. */
+    ASSERT_EQ_INT(SQLITE_OK, sssp_shadow_put(db, "g", 0, /*source_idx=*/5, dist_ns0, NULL, 3));
+    ASSERT_EQ_INT(SQLITE_OK, sssp_shadow_put(db, "g", 1, /*source_idx=*/5, dist_ns1, NULL, 3));
+    ASSERT_EQ_INT(2, count_rows(db, "SELECT COUNT(*) FROM g_sssp"));
+
+    /* (2) get returns the namespace-correct payload. */
+    double *out0 = NULL, *out1 = NULL, *junk = NULL;
+    int n0 = 0, n1 = 0;
+    ASSERT_EQ_INT(SQLITE_OK, sssp_shadow_get(db, "g", 0, 5, &out0, &junk, &n0));
+    ASSERT_EQ_INT(3, n0);
+    ASSERT(memcmp(out0, dist_ns0, sizeof(double) * 3) == 0);
+    free(out0);
+    ASSERT_EQ_INT(SQLITE_OK, sssp_shadow_get(db, "g", 1, 5, &out1, &junk, &n1));
+    ASSERT_EQ_INT(3, n1);
+    ASSERT(memcmp(out1, dist_ns1, sizeof(double) * 3) == 0);
+    free(out1);
+
+    /* (3) cascade emit SELECTIVE in namespace 0 leaves namespace 1's
+     * _sssp_delta untouched. */
+    int affected[2] = {7, 8};
+    ASSERT_EQ_INT(SQLITE_OK, sssp_cascade_emit(db, "g", 0, REBUILD_SELECTIVE, affected, 2));
+    ASSERT_EQ_INT(2, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta WHERE namespace_id = 0"));
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta WHERE namespace_id = 1"));
+
+    /* (4) clear_delta scoped to namespace 0 doesn't touch namespace 1.
+     * Pre-populate namespace 1's delta queue first. */
+    rc = sqlite3_exec(db, "INSERT INTO g_sssp_delta(namespace_id, source_idx) VALUES (1, 99)", NULL, NULL, NULL);
+    ASSERT_EQ_INT(SQLITE_OK, rc);
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta WHERE namespace_id = 1"));
+    ASSERT_EQ_INT(SQLITE_OK, sssp_shadow_clear_delta(db, "g", 0, 7));
+    /* Namespace 0's (0,7) gone; (0,8) remains; namespace 1's (1,99) intact. */
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta WHERE namespace_id = 0 AND source_idx = 7"));
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta WHERE namespace_id = 0"));
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta WHERE namespace_id = 1 AND source_idx = 99"));
+
+    /* (5) cascade emit FULL on namespace 0 wipes namespace 0 entirely
+     * but leaves namespace 1's _sssp + _sssp_delta intact. */
+    ASSERT_EQ_INT(SQLITE_OK, sssp_cascade_emit(db, "g", 0, REBUILD_FULL, NULL, 0));
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_sssp WHERE namespace_id = 0"));
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_sssp WHERE namespace_id = 1"));
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta WHERE namespace_id = 0"));
+    ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM g_sssp_delta WHERE namespace_id = 1"));
+
+    sqlite3_close(db);
+}
+
 void test_gii_sssp_shadow(void) {
     RUN_TEST(test_g4_schema_creates_with_feature_flag);
     RUN_TEST(test_g4_blob_round_trip);
     RUN_TEST(test_g4_threshold_dispatch);
     RUN_TEST(test_g4_cascade_emit_per_strategy);
+    RUN_TEST(test_g4_namespace_isolation);
 }
