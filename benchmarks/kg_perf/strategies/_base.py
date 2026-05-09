@@ -34,7 +34,7 @@ class Result:
 class Strategy(ABC):
     name: str = "abstract"
 
-    def prepare(self, conn: sqlite3.Connection) -> None:
+    def prepare(self, conn: sqlite3.Connection) -> None:  # noqa: B027 — intentional default no-op hook
         """Optional: build any auxiliary tables, register prepared statements, etc."""
 
     @abstractmethod
