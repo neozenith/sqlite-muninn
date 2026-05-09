@@ -37,7 +37,7 @@ typedef struct {
     char *edge_table;
     char *src_col;
     char *dst_col;
-    char *weight_col;   /* NULL if unweighted */
+    char *weight_col;    /* NULL if unweighted */
     int64_t generation;  /* increments on each rebuild */
     int has_sssp;        /* features='sssp' opt-in (G4: SSSP shadow tables) */
     int has_communities; /* features='communities' opt-in (G6: Leiden shadow + cache) */
@@ -344,8 +344,8 @@ static int drop_shadow_tables(sqlite3 *db, const char *name) {
     /* Drop optional shadow tables unconditionally with IF EXISTS —
      * handles default + features='sssp' + features='communities' +
      * any composition thereof. */
-    const char *suffixes[] = {"_config",  "_nodes",      "_degree", "_csr_fwd",     "_csr_rev",
-                              "_delta",   "_sssp_delta", "_sssp",   "_communities", "_comm_delta"};
+    const char *suffixes[] = {"_config", "_nodes",      "_degree", "_csr_fwd",     "_csr_rev",
+                              "_delta",  "_sssp_delta", "_sssp",   "_communities", "_comm_delta"};
     for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
         char *sql = sqlite3_mprintf("DROP TABLE IF EXISTS \"%w%s\"", name, suffixes[i]);
         sqlite3_exec(db, sql, NULL, NULL, NULL);
@@ -2114,8 +2114,7 @@ rollback:
  * The empty-graph case routes to REBUILD_FULL because the ratio is
  * undefined and any rebuild on an empty graph is logically a
  * fresh-start anyway. */
-SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edges, double theta_selective,
-                                          double theta_full) {
+SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edges, double theta_selective, double theta_full) {
     if (total_edges <= 0) {
         return REBUILD_FULL;
     }

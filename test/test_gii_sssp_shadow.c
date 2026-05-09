@@ -53,11 +53,7 @@ extern int sssp_shadow_is_stale(sqlite3 *db, const char *vt_name, int namespace_
 
 /* Threshold dispatch — see graph_adjacency.h for the full enum and
  * function declaration. */
-typedef enum {
-    REBUILD_SELECTIVE = 0,
-    REBUILD_DELTA_FLUSH = 1,
-    REBUILD_FULL = 2
-} SsspRebuildStrategy;
+typedef enum { REBUILD_SELECTIVE = 0, REBUILD_DELTA_FLUSH = 1, REBUILD_FULL = 2 } SsspRebuildStrategy;
 
 extern SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edges, double theta_selective,
                                                  double theta_full);
@@ -292,7 +288,7 @@ TEST(test_g4_threshold_dispatch) {
     sqlite3_free(theta_full);
 
     /* (b) Classifier band coverage with the documented defaults. */
-    ASSERT_EQ_INT(REBUILD_SELECTIVE, (int)sssp_classify_rebuild(2, 100, 0.05, 0.30));   /* 2% < 5% */
+    ASSERT_EQ_INT(REBUILD_SELECTIVE, (int)sssp_classify_rebuild(2, 100, 0.05, 0.30));    /* 2% < 5% */
     ASSERT_EQ_INT(REBUILD_DELTA_FLUSH, (int)sssp_classify_rebuild(15, 100, 0.05, 0.30)); /* 15% in [5%,30%) */
     ASSERT_EQ_INT(REBUILD_FULL, (int)sssp_classify_rebuild(40, 100, 0.05, 0.30));        /* 40% ≥ 30% */
 
@@ -537,9 +533,8 @@ TEST(test_g4_threshold_defaults_match_sweep) {
      * theta_selective must dispatch SELECTIVE; just above theta_full
      * must dispatch FULL. Locks the boundaries against accidental
      * drift in either the constants or the classifier. */
-    ASSERT_EQ_INT(REBUILD_SELECTIVE,
-                  (int)sssp_classify_rebuild(/*delta=*/(int)((theta_sel - 0.001) * 1000),
-                                             /*total=*/1000, theta_sel, theta_full));
+    ASSERT_EQ_INT(REBUILD_SELECTIVE, (int)sssp_classify_rebuild(/*delta=*/(int)((theta_sel - 0.001) * 1000),
+                                                                /*total=*/1000, theta_sel, theta_full));
     ASSERT_EQ_INT(REBUILD_FULL, (int)sssp_classify_rebuild(/*delta=*/(int)((theta_full + 0.001) * 1000),
                                                            /*total=*/1000, theta_sel, theta_full));
 

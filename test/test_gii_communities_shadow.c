@@ -17,11 +17,7 @@ extern int adjacency_register_module(sqlite3 *db);
 /* G6 T6.2 cache state machine — re-declared layout-compatibly so the
  * test doesn't have to include graph_community.h (which pulls in
  * sqlite3ext.h). Values must match graph_community.h exactly. */
-typedef enum {
-    COMM_CACHE_HIT = 0,
-    COMM_CACHE_WARM_START = 1,
-    COMM_CACHE_COLD_START = 2
-} CommCacheState;
+typedef enum { COMM_CACHE_HIT = 0, COMM_CACHE_WARM_START = 1, COMM_CACHE_COLD_START = 2 } CommCacheState;
 
 extern CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, double requested_resolution);
 extern int config_set_double(sqlite3 *db, const char *name, const char *key, double value);
@@ -35,11 +31,7 @@ extern int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id,
 
 /* Layout-compatible mirror of graph_adjacency.h's SsspRebuildStrategy
  * — the comm_cascade_emit signature reuses the same enum. */
-typedef enum {
-    REBUILD_SELECTIVE = 0,
-    REBUILD_DELTA_FLUSH = 1,
-    REBUILD_FULL = 2
-} SsspRebuildStrategy;
+typedef enum { REBUILD_SELECTIVE = 0, REBUILD_DELTA_FLUSH = 1, REBUILD_FULL = 2 } SsspRebuildStrategy;
 
 extern int comm_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
                              const GraphData *g, const int *changed_nodes, int n_changed);

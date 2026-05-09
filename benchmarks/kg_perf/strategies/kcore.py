@@ -18,10 +18,10 @@ from benchmarks.kg_perf.strategies._base import Result, Strategy
 from benchmarks.kg_perf.strategies.chunk_canonical import (
     EVENT_CANONICAL_DDL,
     EVENT_CANONICAL_FILL,
-    _build_filtered_edges_via_index,
-    _compute_seeds_on_subset,
     _adjacency_from_subset,
     _bfs_expand,
+    _build_filtered_edges_via_index,
+    _compute_seeds_on_subset,
     _induced_edges_from_subset,
 )
 from benchmarks.kg_perf.workload import Workload
@@ -39,13 +39,9 @@ class KCoreStrategy(Strategy):
         if cur.fetchone()[0] == 0:
             conn.execute(EVENT_CANONICAL_FILL)
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS event_canonical_idx_proj_ts "
-                "ON event_canonical_idx(project_id, timestamp)"
+                "CREATE INDEX IF NOT EXISTS event_canonical_idx_proj_ts ON event_canonical_idx(project_id, timestamp)"
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS event_canonical_idx_canonical "
-                "ON event_canonical_idx(canonical)"
-            )
+            conn.execute("CREATE INDEX IF NOT EXISTS event_canonical_idx_canonical ON event_canonical_idx(canonical)")
             conn.commit()
 
     def run(self, conn: sqlite3.Connection, workload: Workload) -> Result:

@@ -302,8 +302,7 @@ int topk_cache_get(sqlite3 *db, unsigned int signature, int64_t edge_generation,
         return rc;
     }
 
-    int alloc_ok = (copy_text_column(stmt, 0, out_seeds_json) == 0 &&
-                    copy_text_column(stmt, 1, out_nodes_json) == 0 &&
+    int alloc_ok = (copy_text_column(stmt, 0, out_seeds_json) == 0 && copy_text_column(stmt, 1, out_nodes_json) == 0 &&
                     copy_text_column(stmt, 2, out_edges_json) == 0);
     sqlite3_finalize(stmt);
     if (!alloc_ok) {

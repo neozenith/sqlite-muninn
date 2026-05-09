@@ -15,7 +15,6 @@ import json
 import logging
 import sys
 from collections import defaultdict
-from pathlib import Path
 from typing import cast
 
 from benchmarks.kg_perf.bench import append_record, fidelity_against, time_one

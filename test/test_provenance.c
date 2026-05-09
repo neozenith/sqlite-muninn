@@ -335,8 +335,7 @@ TEST(test_g1_entity_mutations_propagate) {
     rc = sqlite3_exec(db, "UPDATE entities SET name = 'Bob' WHERE chunk_id = 42 AND name = 'AcmeCorp';", NULL, NULL,
                       NULL);
     ASSERT_EQ_INT(SQLITE_OK, rc);
-    ASSERT_EQ_INT(0,
-                  count_rows(db, "SELECT COUNT(*) FROM _gii_provenance WHERE canonical = 'Acme Corp'"));
+    ASSERT_EQ_INT(0, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance WHERE canonical = 'Acme Corp'"));
     ASSERT_EQ_INT(1, count_rows(db, "SELECT COUNT(*) FROM _gii_provenance "
                                     "WHERE chunk_id = 42 AND canonical = 'Bob'"));
 

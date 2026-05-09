@@ -46,13 +46,9 @@ class ChunkCanonicalStrategy(Strategy):
         if existing == 0:
             conn.execute(EVENT_CANONICAL_FILL)
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS event_canonical_idx_proj_ts "
-                "ON event_canonical_idx(project_id, timestamp)"
+                "CREATE INDEX IF NOT EXISTS event_canonical_idx_proj_ts ON event_canonical_idx(project_id, timestamp)"
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS event_canonical_idx_canonical "
-                "ON event_canonical_idx(canonical)"
-            )
+            conn.execute("CREATE INDEX IF NOT EXISTS event_canonical_idx_canonical ON event_canonical_idx(canonical)")
             conn.commit()
 
     def run(self, conn: sqlite3.Connection, workload: Workload) -> Result:
@@ -83,10 +79,7 @@ def _build_filtered_edges_via_index(conn: sqlite3.Connection, flt: Filter) -> No
         where.append("project_id = ?")
         params.append(flt.project_id)
     if flt.days is not None:
-        where.append(
-            "timestamp >= datetime((SELECT MAX(timestamp) FROM events), "
-            f"'-{int(flt.days)} days')"
-        )
+        where.append(f"timestamp >= datetime((SELECT MAX(timestamp) FROM events), '-{int(flt.days)} days')")
 
     conn.execute("DROP TABLE IF EXISTS _kgperf_allowed_nodes")
     conn.execute(
@@ -94,7 +87,7 @@ def _build_filtered_edges_via_index(conn: sqlite3.Connection, flt: Filter) -> No
         CREATE TABLE _kgperf_allowed_nodes AS
         SELECT DISTINCT canonical
         FROM event_canonical_idx
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where)}
         """,
         params,
     )

@@ -52,11 +52,7 @@ def _allowed_canonicals(conn: sqlite3.Connection, flt: Filter) -> set[str]:
         where.append("e.project_id = ?")
         params.append(flt.project_id)
     if flt.days is not None:
-        where.append(
-            "e.timestamp >= datetime("
-            "(SELECT MAX(timestamp) FROM events), "
-            f"'-{int(flt.days)} days')"
-        )
+        where.append(f"e.timestamp >= datetime((SELECT MAX(timestamp) FROM events), '-{int(flt.days)} days')")
 
     sql = f"""
         SELECT DISTINCT COALESCE(ec.canonical, ent.name) AS canonical
@@ -64,7 +60,7 @@ def _allowed_canonicals(conn: sqlite3.Connection, flt: Filter) -> set[str]:
         JOIN event_message_chunks emc ON emc.event_id = e.id
         JOIN entities ent ON ent.chunk_id = emc.chunk_id
         LEFT JOIN entity_clusters ec ON ec.name = ent.name
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where)}
     """
     return {row[0] for row in conn.execute(sql, params) if row[0] is not None}
 

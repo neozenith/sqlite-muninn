@@ -99,6 +99,7 @@ TEST_LINK_SRC := $(shell $(_Q) TEST_LINK_SRC)
         docs-serve docs-build docs-clean \
         format format-c format-python format-js \
         lint lint-c lint-python lint-js \
+        lint-fix lint-fix-c lint-fix-python lint-fix-js \
         typecheck typecheck-python typecheck-js \
         ci ci-all llama-clean llamacpp \
         build-wasm build-wasm-lite build-wasm-full \
@@ -247,6 +248,7 @@ test: test-c test-python test-js docs-build  ## Run all tests
 ######################################################################
 # CODE QUALITY
 ######################################################################
+fix: format lint-fix
 
 format: format-c format-python format-js       ## Format all code
 
@@ -282,6 +284,23 @@ lint-python:                                   ## Lint Python code with ruff
 
 lint-js:                                       ## Lint TypeScript code with biome
 	npm --prefix npm run lint
+
+lint-fix: lint-fix-c lint-fix-python lint-fix-js      ## Apply fixable lint issues across all languages
+
+lint-fix-c:                                    ## Apply clang-format fixes in place
+	@if command -v clang-format >/dev/null 2>&1; then \
+		clang-format -i src/*.c src/*.h test/*.c test/*.h; \
+		echo "C lint fixes applied"; \
+	else \
+		echo "clang-format not installed — skipping C lint fix"; \
+	fi
+
+lint-fix-python:                               ## Apply ruff fixes (lint + format) to Python code
+	uv run ruff check --fix .
+	uv run ruff format .
+
+lint-fix-js:                                   ## Apply biome lint fixes to TypeScript code
+	npm --prefix npm run lint:fix
 
 typecheck: typecheck-python typecheck-js format       ## Type-check all code
 

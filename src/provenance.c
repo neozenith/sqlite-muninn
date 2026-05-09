@@ -411,8 +411,7 @@ static int prov_xClose(sqlite3_vtab_cursor *pCursor) {
     return SQLITE_OK;
 }
 
-static int prov_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr, int argc,
-                        sqlite3_value **argv) {
+static int prov_xFilter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr, int argc, sqlite3_value **argv) {
     (void)idxNum;
     (void)idxStr;
     (void)argc;

@@ -16,7 +16,6 @@ from pathlib import Path
 from shlex import split
 
 import sqlite_muninn
-
 from benchmarks.kg_perf.constants import REPETITIONS, RESULTS_DIR, WARMUP
 from benchmarks.kg_perf.strategies._base import Result, Strategy
 from benchmarks.kg_perf.workload import Workload
@@ -195,6 +194,5 @@ def fidelity_against(record: dict[str, object], baseline: dict[str, object]) -> 
 
 
 from typing import cast  # placed after definition to keep diff minimal  # noqa: E402
-
 
 __all__ = ["PhaseTimings", "append_record", "fidelity_against", "open_db", "time_one"]

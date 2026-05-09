@@ -48,13 +48,9 @@ class TopKCacheStrategy(Strategy):
         if cur.fetchone()[0] == 0:
             conn.execute(EVENT_CANONICAL_FILL)
             conn.execute(
-                "CREATE INDEX IF NOT EXISTS event_canonical_idx_proj_ts "
-                "ON event_canonical_idx(project_id, timestamp)"
+                "CREATE INDEX IF NOT EXISTS event_canonical_idx_proj_ts ON event_canonical_idx(project_id, timestamp)"
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS event_canonical_idx_canonical "
-                "ON event_canonical_idx(canonical)"
-            )
+            conn.execute("CREATE INDEX IF NOT EXISTS event_canonical_idx_canonical ON event_canonical_idx(canonical)")
         conn.execute(CACHE_DDL)
         conn.commit()
 

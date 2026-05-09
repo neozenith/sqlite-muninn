@@ -98,7 +98,7 @@ TEST(test_g2_cache_hit_returns_stored_rows) {
     const char *nodes_in = "[{\"id\":\"a\",\"degree\":3},{\"id\":\"b\",\"degree\":2}]";
     const char *edges_in = "[{\"src\":\"a\",\"dst\":\"b\",\"w\":1.0}]";
     rc = topk_cache_put(db, /*sig=*/12345u, seeds_in, nodes_in, edges_in,
-                       /*edge_gen=*/5, /*prov_gen=*/2);
+                        /*edge_gen=*/5, /*prov_gen=*/2);
     ASSERT_EQ_INT(SQLITE_OK, rc);
 
     /* Get with matching generations → hit, returns stored payloads. */
@@ -295,8 +295,7 @@ TEST(test_g2_external_generation_bump) {
 
     /* Stress: 50 bump-and-read cycles, every read must be fresh. */
     for (int i = 3; i <= 52; i++) {
-        char *upd =
-            sqlite3_mprintf("UPDATE mock_config SET value = '%d' WHERE key = 'generation'", i);
+        char *upd = sqlite3_mprintf("UPDATE mock_config SET value = '%d' WHERE key = 'generation'", i);
         rc = sqlite3_exec(db, upd, NULL, NULL, NULL);
         sqlite3_free(upd);
         ASSERT_EQ_INT(SQLITE_OK, rc);

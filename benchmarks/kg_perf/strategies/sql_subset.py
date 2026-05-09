@@ -47,11 +47,7 @@ def _build_filtered_edges(conn: sqlite3.Connection, flt: Filter) -> None:
         where.append("e.project_id = ?")
         params.append(flt.project_id)
     if flt.days is not None:
-        where.append(
-            "e.timestamp >= datetime("
-            "(SELECT MAX(timestamp) FROM events), "
-            f"'-{int(flt.days)} days')"
-        )
+        where.append(f"e.timestamp >= datetime((SELECT MAX(timestamp) FROM events), '-{int(flt.days)} days')")
 
     conn.execute("DROP TABLE IF EXISTS _kgperf_allowed_nodes")
     conn.execute(
@@ -62,7 +58,7 @@ def _build_filtered_edges(conn: sqlite3.Connection, flt: Filter) -> None:
         JOIN event_message_chunks emc ON emc.event_id = e.id
         JOIN entities ent ON ent.chunk_id = emc.chunk_id
         LEFT JOIN entity_clusters ec ON ec.name = ent.name
-        WHERE {' AND '.join(where)}
+        WHERE {" AND ".join(where)}
         """,
         params,
     )

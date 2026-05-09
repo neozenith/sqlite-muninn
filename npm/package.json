@@ -21,6 +21,7 @@
   "scripts": {
     "build": "tsup",
     "lint": "biome lint src/",
+    "lint:fix": "biome lint --write src/",
     "format": "biome format --write src/",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --coverage",

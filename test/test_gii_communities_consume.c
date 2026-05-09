@@ -389,8 +389,8 @@ TEST(test_g7_g2_signature_includes_community) {
  *     future provenance helpers that might return positive counts). */
 TEST(test_g7_intersection_with_provenance) {
     /* a = community mask, b = provenance mask. */
-    const int community_mask[] = {1, 1, 0, 0, 1};   /* in community 0 1 4 */
-    const int provenance_mask[] = {1, 0, 1, 0, 1};  /* in provenance 0 2 4 */
+    const int community_mask[] = {1, 1, 0, 0, 1};  /* in community 0 1 4 */
+    const int provenance_mask[] = {1, 0, 1, 0, 1}; /* in provenance 0 2 4 */
 
     int *isect = intersect_masks(community_mask, provenance_mask, 5);
     ASSERT(isect != NULL);
@@ -574,8 +574,8 @@ TEST(test_g7_resolution_mismatch_recomputes) {
         n_rows++;
     }
     sqlite3_finalize(stmt);
-    ASSERT_EQ_INT(8, n_rows);   /* All 8 nodes assigned to a community. */
-    ASSERT_EQ_INT(0, saw_999);  /* No poison values — recompute fired. */
+    ASSERT_EQ_INT(8, n_rows);  /* All 8 nodes assigned to a community. */
+    ASSERT_EQ_INT(0, saw_999); /* No poison values — recompute fired. */
 
     /* Cache now reflects resolution=0.5 (the previous run wrote back). */
     cached_res_text = config_get_text(db, "g", "communities_resolution");
