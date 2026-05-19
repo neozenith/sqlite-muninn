@@ -37,8 +37,10 @@ typedef struct {
     char *edge_table;
     char *src_col;
     char *dst_col;
-    char *weight_col;   /* NULL if unweighted */
-    int64_t generation; /* increments on each rebuild */
+    char *weight_col;    /* NULL if unweighted */
+    int64_t generation;  /* increments on each rebuild */
+    int has_sssp;        /* features='sssp' opt-in (G4: SSSP shadow tables) */
+    int has_communities; /* features='communities' opt-in (G6: Leiden shadow + cache) */
 } AdjVtab;
 
 typedef struct {
@@ -68,7 +70,40 @@ typedef struct {
     char *src_col;
     char *dst_col;
     char *weight_col;
+    char *features; /* Optional comma-separated feature flags (G4: 'sssp', G6: 'communities'). */
 } AdjParams;
+
+/* Returns 1 if `features` (NULL or comma-separated) contains the token
+ * `feat` (whitespace-trimmed), else 0. Forward-compatible parsing for
+ * features='sssp,communities,...' lists. */
+static int features_contains(const char *features, const char *feat) {
+    if (!features) {
+        return 0;
+    }
+    size_t flen = strlen(feat);
+    const char *p = features;
+    while (*p) {
+        while (*p == ' ' || *p == ',') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        const char *start = p;
+        while (*p && *p != ',') {
+            p++;
+        }
+        size_t tlen = (size_t)(p - start);
+        /* Trim trailing whitespace from token. */
+        while (tlen > 0 && start[tlen - 1] == ' ') {
+            tlen--;
+        }
+        if (tlen == flen && strncmp(start, feat, flen) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* Strip surrounding quotes from a string value (single or double quotes) */
 static const char *strip_quotes(const char *val, char *buf, int bufsize) {
@@ -103,6 +138,9 @@ static int parse_adjacency_params(int argc, const char *const *argv, AdjParams *
         } else if (strncmp(arg, "weight_col=", 11) == 0) {
             const char *val = strip_quotes(arg + 11, buf, (int)sizeof(buf));
             params->weight_col = sqlite3_mprintf("%s", val);
+        } else if (strncmp(arg, "features=", 9) == 0) {
+            const char *val = strip_quotes(arg + 9, buf, (int)sizeof(buf));
+            params->features = sqlite3_mprintf("%s", val);
         } else {
             *errmsg = sqlite3_mprintf("graph_adjacency: unknown parameter '%s'", arg);
             return SQLITE_ERROR;
@@ -115,6 +153,7 @@ static int parse_adjacency_params(int argc, const char *const *argv, AdjParams *
         sqlite3_free(params->src_col);
         sqlite3_free(params->dst_col);
         sqlite3_free(params->weight_col);
+        sqlite3_free(params->features);
         memset(params, 0, sizeof(AdjParams));
         return SQLITE_ERROR;
     }
@@ -127,6 +166,7 @@ static int parse_adjacency_params(int argc, const char *const *argv, AdjParams *
         sqlite3_free(params->src_col);
         sqlite3_free(params->dst_col);
         sqlite3_free(params->weight_col);
+        sqlite3_free(params->features);
         memset(params, 0, sizeof(AdjParams));
         return SQLITE_ERROR;
     }
@@ -136,6 +176,7 @@ static int parse_adjacency_params(int argc, const char *const *argv, AdjParams *
         sqlite3_free(params->src_col);
         sqlite3_free(params->dst_col);
         sqlite3_free(params->weight_col);
+        sqlite3_free(params->features);
         memset(params, 0, sizeof(AdjParams));
         return SQLITE_ERROR;
     }
@@ -206,9 +247,106 @@ static int adjacency_create_shadow_tables(sqlite3 *db, const char *name) {
     return rc;
 }
 
+/* Optional SSSP shadow tables created when features='sssp' is set. Schema
+ * is the contract documented in docs/plans/adv-centrality-filtering.md G4
+ * ("Schema (verbatim — this is the contract; G5 reads from it)"). */
+static int adjacency_create_sssp_tables(sqlite3 *db, const char *name) {
+    char *sql;
+    int rc;
+
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_sssp\" ("
+                          "namespace_id INTEGER NOT NULL, "
+                          "source_idx INTEGER NOT NULL, "
+                          "distances BLOB NOT NULL, "
+                          "sigma BLOB, "
+                          "PRIMARY KEY (namespace_id, source_idx))",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_sssp_delta\" ("
+                          "namespace_id INTEGER NOT NULL, "
+                          "source_idx INTEGER NOT NULL, "
+                          "PRIMARY KEY (namespace_id, source_idx))",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Seed the threshold defaults so consumers (T4.4 cascade emit, G5
+     * read path) can read them from _config without a separate init
+     * step. INSERT OR IGNORE leaves any user-tuned values intact when
+     * xConnect-then-xCreate sequences run on an existing DB. T4.6
+     * may revise these defaults based on an empirical sweep. */
+    sql = sqlite3_mprintf("INSERT OR IGNORE INTO \"%w_config\"(key, value) VALUES "
+                          "  ('theta_selective', '0.05'),"
+                          "  ('theta_full', '0.30')",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    return rc;
+}
+
+/* Optional Leiden community shadow + four config keys created when
+ * features='communities' is set. Schema is the contract documented in
+ * docs/plans/adv-centrality-filtering.md G6 ("Schema (verbatim — this
+ * is the contract; G7 reads from it)"). The four config keys form the
+ * cache state machine: communities_generation < 0 signals
+ * 'never computed' → COLD_START. */
+static int adjacency_create_communities_tables(sqlite3 *db, const char *name) {
+    char *sql;
+    int rc;
+
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_communities\" ("
+                          "namespace_id INTEGER DEFAULT 0, "
+                          "node_idx INTEGER NOT NULL, "
+                          "community_id INTEGER NOT NULL, "
+                          "PRIMARY KEY (namespace_id, node_idx))",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* _comm_delta: stale-source queue for the Leiden cache (analog of
+     * _sssp_delta). One row per (namespace, node) marks a node whose
+     * community membership must be re-evaluated on the next warm-start.
+     * Populated by comm_cascade_emit (T6.6) under the SELECTIVE /
+     * DELTA_FLUSH bands. */
+    sql = sqlite3_mprintf("CREATE TABLE IF NOT EXISTS \"%w_comm_delta\" ("
+                          "namespace_id INTEGER NOT NULL, "
+                          "node_idx INTEGER NOT NULL, "
+                          "PRIMARY KEY (namespace_id, node_idx))",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+
+    /* Seed sentinel defaults so check_communities_cache's first read
+     * deterministically routes to COLD_START. INSERT OR IGNORE keeps
+     * any user-tuned values intact across xConnect/xCreate cycles. */
+    sql = sqlite3_mprintf("INSERT OR IGNORE INTO \"%w_config\"(key, value) VALUES "
+                          "  ('communities_generation', '-1'),"
+                          "  ('communities_resolution', '-1.0'),"
+                          "  ('communities_modularity', '0.0'),"
+                          "  ('num_communities', '0')",
+                          name);
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    return rc;
+}
+
 static int drop_shadow_tables(sqlite3 *db, const char *name) {
-    const char *suffixes[] = {"_config", "_nodes", "_degree", "_csr_fwd", "_csr_rev", "_delta"};
-    for (int i = 0; i < 6; i++) {
+    /* Drop optional shadow tables unconditionally with IF EXISTS —
+     * handles default + features='sssp' + features='communities' +
+     * any composition thereof. */
+    const char *suffixes[] = {"_config", "_nodes",      "_degree", "_csr_fwd",     "_csr_rev",
+                              "_delta",  "_sssp_delta", "_sssp",   "_communities", "_comm_delta"};
+    for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); i++) {
         char *sql = sqlite3_mprintf("DROP TABLE IF EXISTS \"%w%s\"", name, suffixes[i]);
         sqlite3_exec(db, sql, NULL, NULL, NULL);
         sqlite3_free(sql);
@@ -302,6 +440,52 @@ static int64_t config_get_int(sqlite3 *db, const char *name, const char *key, in
     }
     sqlite3_finalize(stmt);
     return result;
+}
+
+/* config_get_double — same shape as config_get_int but parses the
+ * TEXT-typed value as a double. Used by G6's check_communities_cache
+ * to compare resolution values with a 1e-10 tolerance. Non-static so
+ * graph_community.c can read shadow config without duplicating the
+ * SQL prepare/step boilerplate. */
+double config_get_double(sqlite3 *db, const char *name, const char *key, double def) {
+    sqlite3_stmt *stmt;
+    char *sql = sqlite3_mprintf("SELECT value FROM \"%w_config\" WHERE key='%w'", name, key);
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return def;
+
+    double result = def;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *val = (const char *)sqlite3_column_text(stmt, 0);
+        if (val)
+            result = atof(val);
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+/* config_get_int64_public — non-static wrapper exposed so other source
+ * files (G6's check_communities_cache, future G7 / G2 consumers) can
+ * read shadow config values without duplicating the SQL prepare/step
+ * boilerplate. Internal callers continue to use the file-static
+ * config_get_int. */
+int64_t config_get_int64_public(sqlite3 *db, const char *name, const char *key, int64_t def) {
+    return config_get_int(db, name, key, def);
+}
+
+/* Write a double to <vt>_config with full IEEE 754 binary64 round-trip
+ * precision. %.17g is the minimum precision that guarantees every bit
+ * of a binary64 round-trips through atof. Lower precision drops ULPs
+ * — a re-read no longer compares bit-equal to the original. The 1e-10
+ * tolerance in check_communities_cache hides divergence between
+ * 'close' values, but a user re-issuing the EXACT gamma they cached
+ * at must round-trip cleanly, otherwise the cache state machine
+ * spuriously routes them to WARM_START / COLD_START. */
+int config_set_double(sqlite3 *db, const char *name, const char *key, double value) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.17g", value);
+    return config_set(db, name, key, buf);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1070,6 +1254,7 @@ static int adj_init(sqlite3 *db, void *pAux, int argc, const char *const *argv, 
         sqlite3_free(params.src_col);
         sqlite3_free(params.dst_col);
         sqlite3_free(params.weight_col);
+        sqlite3_free(params.features);
         return SQLITE_NOMEM;
     }
     memset(vtab, 0, sizeof(AdjVtab));
@@ -1079,6 +1264,9 @@ static int adj_init(sqlite3 *db, void *pAux, int argc, const char *const *argv, 
     vtab->src_col = params.src_col;
     vtab->dst_col = params.dst_col;
     vtab->weight_col = params.weight_col;
+    vtab->has_sssp = features_contains(params.features, "sssp");
+    vtab->has_communities = features_contains(params.features, "communities");
+    sqlite3_free(params.features); /* parsed value not stored on vtab */
 
     if (is_create) {
         /* Create shadow tables */
@@ -1092,6 +1280,36 @@ static int adj_init(sqlite3 *db, void *pAux, int argc, const char *const *argv, 
             sqlite3_free(vtab->weight_col);
             sqlite3_free(vtab);
             return rc;
+        }
+
+        if (vtab->has_sssp) {
+            rc = adjacency_create_sssp_tables(db, argv[2]);
+            if (rc != SQLITE_OK) {
+                *pzErr = sqlite3_mprintf("graph_adjacency: failed to create SSSP shadow tables");
+                drop_shadow_tables(db, argv[2]);
+                sqlite3_free(vtab->vtab_name);
+                sqlite3_free(vtab->edge_table);
+                sqlite3_free(vtab->src_col);
+                sqlite3_free(vtab->dst_col);
+                sqlite3_free(vtab->weight_col);
+                sqlite3_free(vtab);
+                return rc;
+            }
+        }
+
+        if (vtab->has_communities) {
+            rc = adjacency_create_communities_tables(db, argv[2]);
+            if (rc != SQLITE_OK) {
+                *pzErr = sqlite3_mprintf("graph_adjacency: failed to create communities shadow tables");
+                drop_shadow_tables(db, argv[2]);
+                sqlite3_free(vtab->vtab_name);
+                sqlite3_free(vtab->edge_table);
+                sqlite3_free(vtab->src_col);
+                sqlite3_free(vtab->dst_col);
+                sqlite3_free(vtab->weight_col);
+                sqlite3_free(vtab);
+                return rc;
+            }
         }
 
         /* Save config */
@@ -1594,6 +1812,321 @@ static sqlite3_module adjacency_module = {
     .xRename = adj_xRename,
     .xShadowName = adj_xShadowName,
 };
+
+/* ═══════════════════════════════════════════════════════════════
+ * SSSP Shadow API (G4) — BLOB read/write/clear-delta helpers.
+ *
+ * The cache stores one row per (namespace_id, source_idx) carrying
+ * dist[V] and (optionally) sigma[V] as native-byte-order BLOBs. See
+ * docs/plans/adv-centrality-filtering.md G4 ("BLOB encoding contract").
+ *
+ * Return codes:
+ *   put / clear_delta — SQLITE_OK on success, SQLite error code otherwise
+ *   get               — SQLITE_OK if the row was found and the out
+ *                       buffers were populated;
+ *                       SQLITE_NOTFOUND if no row exists for the key
+ *                       (G5's pull-through path uses this to decide
+ *                       whether to compute and write back);
+ *                       any other SQLite error code on prepare/step
+ *                       failure.
+ *
+ * Memory: get() allocates *out_dist (always when row found) and
+ * *out_sigma (only when the sigma column is non-NULL) via malloc;
+ * caller must free() both.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int sssp_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, const double *dist,
+                    const double *sigma, int n) {
+    if (!db || !vt_name || !dist || n <= 0) {
+        return SQLITE_MISUSE;
+    }
+    char *sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_sssp\""
+                                "  (namespace_id, source_idx, distances, sigma) "
+                                "VALUES (?, ?, ?, ?)",
+                                vt_name);
+    if (!sql) {
+        return SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+    int n_bytes = n * (int)sizeof(double);
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    sqlite3_bind_int(stmt, 2, source_idx);
+    sqlite3_bind_blob(stmt, 3, dist, n_bytes, SQLITE_TRANSIENT);
+    if (sigma) {
+        sqlite3_bind_blob(stmt, 4, sigma, n_bytes, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, 4);
+    }
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? SQLITE_OK : rc;
+}
+
+int sssp_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx, double **out_dist,
+                    double **out_sigma, int *out_n) {
+    if (!db || !vt_name || !out_dist || !out_sigma || !out_n) {
+        return SQLITE_MISUSE;
+    }
+    *out_dist = NULL;
+    *out_sigma = NULL;
+    *out_n = 0;
+
+    char *sql = sqlite3_mprintf("SELECT distances, sigma FROM \"%w_sssp\" "
+                                "WHERE namespace_id = ? AND source_idx = ?",
+                                vt_name);
+    if (!sql) {
+        return SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    sqlite3_bind_int(stmt, 2, source_idx);
+
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        sqlite3_finalize(stmt);
+        return SQLITE_NOTFOUND;
+    }
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return rc;
+    }
+
+    /* dist column — always present (NOT NULL by schema). */
+    const void *dist_blob = sqlite3_column_blob(stmt, 0);
+    int dist_bytes = sqlite3_column_bytes(stmt, 0);
+    if (dist_bytes <= 0 || (dist_bytes % (int)sizeof(double)) != 0) {
+        sqlite3_finalize(stmt);
+        return SQLITE_CORRUPT;
+    }
+    int n_doubles = dist_bytes / (int)sizeof(double);
+    double *dist_buf = (double *)malloc((size_t)dist_bytes);
+    if (!dist_buf) {
+        sqlite3_finalize(stmt);
+        return SQLITE_NOMEM;
+    }
+    memcpy(dist_buf, dist_blob, (size_t)dist_bytes);
+
+    /* sigma column — may be SQL NULL. */
+    double *sigma_buf = NULL;
+    if (sqlite3_column_type(stmt, 1) != SQLITE_NULL) {
+        const void *sigma_blob = sqlite3_column_blob(stmt, 1);
+        int sigma_bytes = sqlite3_column_bytes(stmt, 1);
+        if (sigma_bytes != dist_bytes) {
+            free(dist_buf);
+            sqlite3_finalize(stmt);
+            return SQLITE_CORRUPT;
+        }
+        sigma_buf = (double *)malloc((size_t)sigma_bytes);
+        if (!sigma_buf) {
+            free(dist_buf);
+            sqlite3_finalize(stmt);
+            return SQLITE_NOMEM;
+        }
+        memcpy(sigma_buf, sigma_blob, (size_t)sigma_bytes);
+    }
+
+    sqlite3_finalize(stmt);
+    *out_dist = dist_buf;
+    *out_sigma = sigma_buf;
+    *out_n = n_doubles;
+    return SQLITE_OK;
+}
+
+/* Returns 1 if (ns, source) is present in <vt>_sssp_delta (cache
+ * stale), 0 if absent (cache fresh), or a negative SQLite errcode on
+ * query failure. */
+int sssp_shadow_is_stale(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx) {
+    if (!db || !vt_name) {
+        return -SQLITE_MISUSE;
+    }
+    char *sql = sqlite3_mprintf("SELECT 1 FROM \"%w_sssp_delta\" "
+                                "WHERE namespace_id = ? AND source_idx = ? "
+                                "LIMIT 1",
+                                vt_name);
+    if (!sql) {
+        return -SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return -rc;
+    }
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    sqlite3_bind_int(stmt, 2, source_idx);
+    int step = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    if (step == SQLITE_ROW) {
+        return 1;
+    }
+    if (step == SQLITE_DONE) {
+        return 0;
+    }
+    return -step;
+}
+
+int sssp_shadow_clear_delta(sqlite3 *db, const char *vt_name, int namespace_id, int source_idx) {
+    if (!db || !vt_name) {
+        return SQLITE_MISUSE;
+    }
+    char *sql = sqlite3_mprintf("DELETE FROM \"%w_sssp_delta\" "
+                                "WHERE namespace_id = ? AND source_idx = ?",
+                                vt_name);
+    if (!sql) {
+        return SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    sqlite3_bind_int(stmt, 2, source_idx);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE ? SQLITE_OK : rc;
+}
+
+/* Cascade-emit per rebuild strategy. See graph_adjacency.h for the
+ * full contract. Wrapped in a SAVEPOINT so a partial failure rolls
+ * back the entire batch — important for FULL where a successful
+ * _sssp DELETE followed by a failing generation update would leave
+ * the cache empty without invalidating consumers. */
+int sssp_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
+                      const int *affected_source_idxs, int n) {
+    if (!db || !vt_name) {
+        return SQLITE_MISUSE;
+    }
+    char *sql = NULL;
+    int rc;
+
+    sqlite3_exec(db, "SAVEPOINT sssp_cascade", NULL, NULL, NULL);
+
+    if (strategy == REBUILD_SELECTIVE || strategy == REBUILD_DELTA_FLUSH) {
+        /* Append affected source_idxs to _sssp_delta. PK collision is
+         * silent (already-stale source stays stale). */
+        if (n > 0 && !affected_source_idxs) {
+            rc = SQLITE_MISUSE;
+            goto rollback;
+        }
+        sql = sqlite3_mprintf("INSERT OR IGNORE INTO \"%w_sssp_delta\""
+                              "(namespace_id, source_idx) VALUES (?, ?)",
+                              vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        sqlite3_stmt *stmt = NULL;
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK) {
+            goto rollback;
+        }
+        for (int i = 0; i < n; i++) {
+            sqlite3_bind_int(stmt, 1, namespace_id);
+            sqlite3_bind_int(stmt, 2, affected_source_idxs[i]);
+            int step = sqlite3_step(stmt);
+            sqlite3_reset(stmt);
+            if (step != SQLITE_DONE) {
+                sqlite3_finalize(stmt);
+                rc = step;
+                goto rollback;
+            }
+        }
+        sqlite3_finalize(stmt);
+    } else if (strategy == REBUILD_FULL) {
+        /* Physical clear of _sssp + _sssp_delta then bump generation.
+         * Schema has no per-row generation, so logical invalidation
+         * isn't enough — we must DELETE so future cache lookups miss. */
+        sql = sqlite3_mprintf("DELETE FROM \"%w_sssp\" WHERE namespace_id = ?", vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        sqlite3_stmt *stmt = NULL;
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE)
+            goto rollback;
+
+        sql = sqlite3_mprintf("DELETE FROM \"%w_sssp_delta\" WHERE namespace_id = ?", vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE)
+            goto rollback;
+
+        /* Bump generation. Read current value, increment, write back.
+         * TEXT-typed value column matches graph_adjacency's convention. */
+        sqlite3_int64 current = config_get_int(db, vt_name, "generation", 0);
+        rc = config_set_int(db, vt_name, "generation", current + 1);
+        if (rc != SQLITE_OK)
+            goto rollback;
+    } else {
+        rc = SQLITE_MISUSE;
+        goto rollback;
+    }
+
+    sqlite3_exec(db, "RELEASE sssp_cascade", NULL, NULL, NULL);
+    return SQLITE_OK;
+
+rollback:
+    sqlite3_exec(db, "ROLLBACK TO sssp_cascade", NULL, NULL, NULL);
+    sqlite3_exec(db, "RELEASE sssp_cascade", NULL, NULL, NULL);
+    return rc;
+}
+
+/* Classify the change ratio |delta|/total_edges into a rebuild
+ * strategy. Bands are closed-open on the lower side, open-closed-
+ * downward on the upper:
+ *
+ *   ratio < theta_selective                       → REBUILD_SELECTIVE
+ *   theta_selective ≤ ratio < theta_full          → REBUILD_DELTA_FLUSH
+ *   ratio ≥ theta_full   OR   total_edges == 0    → REBUILD_FULL
+ *
+ * The empty-graph case routes to REBUILD_FULL because the ratio is
+ * undefined and any rebuild on an empty graph is logically a
+ * fresh-start anyway. */
+SsspRebuildStrategy sssp_classify_rebuild(int delta_count, int total_edges, double theta_selective, double theta_full) {
+    if (total_edges <= 0) {
+        return REBUILD_FULL;
+    }
+    double ratio = (double)delta_count / (double)total_edges;
+    if (ratio < theta_selective) {
+        return REBUILD_SELECTIVE;
+    }
+    if (ratio < theta_full) {
+        return REBUILD_DELTA_FLUSH;
+    }
+    return REBUILD_FULL;
+}
 
 int adjacency_register_module(sqlite3 *db) {
     return sqlite3_create_module(db, "graph_adjacency", &adjacency_module, NULL);

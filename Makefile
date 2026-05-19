@@ -99,6 +99,7 @@ TEST_LINK_SRC := $(shell $(_Q) TEST_LINK_SRC)
         docs-serve docs-build docs-clean \
         format format-c format-python format-js \
         lint lint-c lint-python lint-js \
+        lint-fix lint-fix-c lint-fix-python lint-fix-js \
         typecheck typecheck-python typecheck-js \
         ci ci-all llama-clean llamacpp \
         build-wasm build-wasm-lite build-wasm-full \
@@ -221,6 +222,24 @@ build/test_runner: $(TEST_SRC) $(TEST_LINK_SRC) $(VENDOR_SRC) $(LLAMA_LIBS)
 test-python: build/muninn$(EXT)                ## Run Python integration tests + coverage
 	uv run -m pytest pytests/ -v
 
+# Per-gap test gates for docs/plans/adv-centrality-filtering.md.
+# `make test-g1` runs every C test whose name starts with "test_g1_" plus
+# every pytest test marked @pytest.mark.G1. Pytest exit 5 ("no tests
+# collected") is treated as success: a gap may have only C tests early on.
+.PHONY: test-g1 test-g2 test-g3 test-g4 test-g5 test-g6 test-g7 test-all-gates
+test-g1 test-g2 test-g3 test-g4 test-g5 test-g6 test-g7: build/test_runner build/muninn$(EXT) ## Run a single per-gap test gate (G1..G7)
+	./build/test_runner --filter=test_$(subst test-,,$@)_
+	@gap=$$(echo $@ | tr a-z A-Z | sed 's/TEST-//'); \
+		uv run -m pytest -m $$gap pytests/ --no-cov; \
+		ec=$$?; \
+		if [ $$ec -eq 5 ]; then \
+			echo "($$gap: no pytest tests yet — passing)"; \
+			exit 0; \
+		fi; \
+		exit $$ec
+
+test-all-gates: test-g1 test-g2 test-g3 test-g4 test-g5 test-g6 test-g7 ## Run every per-gap gate (project convergence signal)
+
 test-js:                                       ## Run TypeScript tests + coverage
 	npm --prefix npm test
 
@@ -229,6 +248,7 @@ test: test-c test-python test-js docs-build  ## Run all tests
 ######################################################################
 # CODE QUALITY
 ######################################################################
+fix: format lint-fix
 
 format: format-c format-python format-js       ## Format all code
 
@@ -264,6 +284,23 @@ lint-python:                                   ## Lint Python code with ruff
 
 lint-js:                                       ## Lint TypeScript code with biome
 	npm --prefix npm run lint
+
+lint-fix: lint-fix-c lint-fix-python lint-fix-js      ## Apply fixable lint issues across all languages
+
+lint-fix-c:                                    ## Apply clang-format fixes in place
+	@if command -v clang-format >/dev/null 2>&1; then \
+		clang-format -i src/*.c src/*.h test/*.c test/*.h; \
+		echo "C lint fixes applied"; \
+	else \
+		echo "clang-format not installed — skipping C lint fix"; \
+	fi
+
+lint-fix-python:                               ## Apply ruff fixes (lint + format) to Python code
+	uv run ruff check --fix .
+	uv run ruff format .
+
+lint-fix-js:                                   ## Apply biome lint fixes to TypeScript code
+	npm --prefix npm run lint:fix
 
 typecheck: typecheck-python typecheck-js format       ## Type-check all code
 

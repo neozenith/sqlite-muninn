@@ -1,6 +1,6 @@
 {
   "name": "muninn",
-  "version": "0.4.0",
+  "version": "0.5.0-rc1",
   "description": "HNSW vector search, graph algorithms, Node2Vec, and GGUF embedding + LLM inference — all inside SQLite via a single C11 extension. Ships nine task-granular skills covering setup, vector search, text embeddings, LLM extraction, graph algorithms, dbt-style lineage, Node2Vec, GraphRAG pipelines, and troubleshooting across SQLite CLI, C, Python, Node.js, and WASM.",
   "author": {
     "name": "Josh Peak",

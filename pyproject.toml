@@ -109,6 +109,13 @@ addopts = "--cov=sqlite_muninn --cov=pytests --cov-report=term-missing --cov-fai
 markers = [
     "integration: slow install tests that create throwaway projects (deselected by default)",
     "gguf: tests requiring GGUF model files (auto-downloaded on first run)",
+    "G1: adv-centrality-filtering G1 — Provenance shadow table",
+    "G2: adv-centrality-filtering G2 — Top-K result cache TVF",
+    "G3: adv-centrality-filtering G3 — Filter-aware Brandes (deferred)",
+    "G4: adv-centrality-filtering G4 — GII SSSP shadow table (build)",
+    "G5: adv-centrality-filtering G5 — SSSP wiring into centrality TVFs (consume)",
+    "G6: adv-centrality-filtering G6 — GII Leiden shadow table (build)",
+    "G7: adv-centrality-filtering G7 — Community-filter wiring (consume)",
 ]
 
 [tool.ruff]

@@ -3,7 +3,7 @@ import { defineConfig, devices } from '@playwright/test'
 /**
  * Playwright config for muninn-viz.
  *
- * - Backend (FastAPI) at :8200, frontend (Vite) at :5280
+ * - Backend (FastAPI) at :8290, frontend (Vite) at :5282
  * - All artifacts (screenshots, .log, .network.json, failure traces) land in
  *   e2e-screenshots/ so the whole post-mortem set lives in one folder.
  * - globalSetup warms Vite so the first test in each worker doesn't pay the
@@ -55,8 +55,8 @@ export default defineConfig({
   webServer: {
     command:
       'concurrently --kill-others --names "be,fe" ' +
-      '"uv run --directory .. python -m server --port 8200" ' +
-      '"VITE_API_PORT=8200 npx vite --port 5282 --strictPort"',
+      '"uv run --directory .. python -m server --port 8290" ' +
+      '"VITE_API_PORT=8290 npx vite --port 5282 --strictPort"',
     url: 'http://localhost:5282',
     reuseExistingServer: !process.env.CI,
     timeout: 120000,

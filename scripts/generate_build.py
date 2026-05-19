@@ -55,6 +55,11 @@ TEST_LINK_SOURCES = [
     "src/llama_embed.c",
     "src/llama_chat.c",
     "src/string_sim.c",
+    "src/provenance.c",
+    "src/graph_adjacency.c",
+    "src/graph_centrality.c",
+    "src/graph_community.c",
+    "src/graph_topk_cache.c",
 ]
 
 # ── CMake flags ──────────────────────────────────────────────────────
