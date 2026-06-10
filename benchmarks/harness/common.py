@@ -8,6 +8,7 @@ import collections
 import datetime
 import json
 import logging
+import os
 import platform
 import random
 import resource
@@ -34,7 +35,8 @@ KG_DIR = OUTPUT_ROOT / "kg"
 
 PROJECT_ROOT = BENCHMARKS_ROOT.parent  # project root
 MUNINN_PATH = str(PROJECT_ROOT / "build" / "muninn")
-GGUF_MODELS_DIR = PROJECT_ROOT / "models"
+# GGUF model directory: ~/.claude/cache/models (override via MUNINN_MODELS_DIR).
+GGUF_MODELS_DIR = Path(os.environ.get("MUNINN_MODELS_DIR", str(Path.home() / ".claude" / "cache" / "models")))
 DOCS_BENCHMARKS_DIR = PROJECT_ROOT / "docs" / "benchmarks"
 
 # ── Benchmark defaults ─────────────────────────────────────────────

@@ -12,6 +12,7 @@ auto-downloaded on first run. Tests cover:
 
 import json
 import math
+import os
 import struct
 import urllib.request
 from pathlib import Path
@@ -20,7 +21,8 @@ import pysqlite3 as sqlite3
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-MODELS_DIR = PROJECT_ROOT / "models"
+# GGUF model directory: ~/.claude/cache/models (override via MUNINN_MODELS_DIR).
+MODELS_DIR = Path(os.environ.get("MUNINN_MODELS_DIR", str(Path.home() / ".claude" / "cache" / "models")))
 GGUF_MODEL_PATH = MODELS_DIR / "all-MiniLM-L6-v2.Q8_0.gguf"
 GGUF_MODEL_URL = "https://huggingface.co/leliuga/all-MiniLM-L6-v2-GGUF/resolve/main/all-MiniLM-L6-v2.Q8_0.gguf"
 EXTENSION_PATH = str(PROJECT_ROOT / "build" / "muninn")

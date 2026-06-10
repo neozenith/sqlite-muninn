@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # ── Path constants ────────────────────────────────────────────────
@@ -29,11 +30,12 @@ SESSION_DB_ID = "sessions_demo"
 
 MUNINN_CHAT_MODEL_NAME = "Qwen3.5-4B"
 MUNINN_CHAT_MODEL_FILE = "Qwen3.5-4B-Q4_K_M.gguf"
-MUNINN_CHAT_MODELS_DIR = PROJECT_ROOT / "models"
+# GGUF model directory: ~/.claude/cache/models (override via MUNINN_MODELS_DIR).
+MUNINN_CHAT_MODELS_DIR = Path(os.environ.get("MUNINN_MODELS_DIR", str(CLAUDE_HOME / "cache" / "models")))
 
 # ── GGUF embedding model ─────────────────────────────────────────
 
-GGUF_MODEL_PATH = str(PROJECT_ROOT / "models" / "nomic-embed-text-v1.5.Q8_0.gguf")
+GGUF_MODEL_PATH = str(MUNINN_CHAT_MODELS_DIR / "nomic-embed-text-v1.5.Q8_0.gguf")
 GGUF_MODEL_NAME = "nomic"
 GGUF_EMBEDDING_DIM = 768
 
