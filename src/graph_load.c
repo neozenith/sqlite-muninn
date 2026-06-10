@@ -248,3 +248,113 @@ int graph_data_load(sqlite3 *db, const GraphLoadConfig *config, GraphData *g, ch
 
     return SQLITE_OK;
 }
+
+/* G7 T7.3 build_community_mask. */
+int *build_community_mask(const GraphData *g, const int *partition, int target_community_id) {
+    if (!g || !partition || g->node_count <= 0) {
+        return NULL;
+    }
+    int *mask = (int *)malloc((size_t)g->node_count * sizeof(int));
+    if (!mask) {
+        return NULL;
+    }
+    for (int i = 0; i < g->node_count; i++) {
+        mask[i] = (partition[i] == target_community_id) ? 1 : 0;
+    }
+    return mask;
+}
+
+/* G7 T7.5 intersect_masks. Logical AND with truthy/falsy semantics:
+ * out[i] = 1 iff a[i] != 0 AND b[i] != 0, else 0. Both inputs treated
+ * as truthy/falsy so a future caller passing positive counts (e.g.,
+ * a per-node provenance hit count) still produces the right mask. */
+int *intersect_masks(const int *a, const int *b, int n) {
+    if (!a || !b || n <= 0)
+        return NULL;
+    int *out = (int *)malloc((size_t)n * sizeof(int));
+    if (!out)
+        return NULL;
+    for (int i = 0; i < n; i++) {
+        out[i] = (a[i] && b[i]) ? 1 : 0;
+    }
+    return out;
+}
+
+/* G7 T7.3 induce_subgraph.
+ *
+ * Two-pass: first add masked nodes to out_g (preserving string IDs so
+ * downstream consumers can map back), then walk g's adjacency for
+ * each masked node and add edges where the destination is also
+ * masked. Edges are added with add_forward=1, add_reverse=1 so the
+ * induced graph carries both adjacency directions just like
+ * graph_data_load with direction='both'. */
+int induce_subgraph(const GraphData *g, const int *mask, GraphData *out_g, int **out_to_orig) {
+    if (!g || !mask || !out_g) {
+        return SQLITE_MISUSE;
+    }
+    graph_data_init(out_g);
+    if (out_to_orig) {
+        *out_to_orig = NULL;
+    }
+
+    /* old idx → new idx; -1 for unmasked nodes that don't survive. */
+    int *old_to_new = (int *)malloc((size_t)g->node_count * sizeof(int));
+    if (!old_to_new) {
+        return SQLITE_NOMEM;
+    }
+    for (int i = 0; i < g->node_count; i++) {
+        old_to_new[i] = -1;
+    }
+
+    /* Pass 1: register surviving nodes by string id. */
+    int n_kept = 0;
+    for (int i = 0; i < g->node_count; i++) {
+        if (mask[i]) {
+            int new_idx = graph_data_find_or_add(out_g, g->ids[i]);
+            if (new_idx < 0) {
+                free(old_to_new);
+                return SQLITE_NOMEM;
+            }
+            old_to_new[i] = new_idx;
+            n_kept++;
+        }
+    }
+
+    /* Pass 2: copy edges where both endpoints survived. We only walk
+     * g->out[]; graph_data_add_edge with add_forward=1 + add_reverse=1
+     * fills both g_out->out[] and g_out->in[], so we don't need to
+     * separately walk g->in[]. */
+    for (int u = 0; u < g->node_count; u++) {
+        if (!mask[u])
+            continue;
+        int new_u = old_to_new[u];
+        for (int e = 0; e < g->out[u].count; e++) {
+            int v = g->out[u].edges[e].target;
+            if (mask[v]) {
+                int new_v = old_to_new[v];
+                double w = g->out[u].edges[e].weight;
+                graph_data_add_edge(out_g, new_u, new_v, w, 1, 1);
+            }
+        }
+    }
+    out_g->has_weights = g->has_weights;
+
+    /* Optional reverse mapping for callers that need to translate new
+     * node indices back to original positions. */
+    if (out_to_orig && n_kept > 0) {
+        int *to_orig = (int *)malloc((size_t)n_kept * sizeof(int));
+        if (!to_orig) {
+            free(old_to_new);
+            return SQLITE_NOMEM;
+        }
+        for (int i = 0; i < g->node_count; i++) {
+            if (old_to_new[i] >= 0) {
+                to_orig[old_to_new[i]] = i;
+            }
+        }
+        *out_to_orig = to_orig;
+    }
+
+    free(old_to_new);
+    return SQLITE_OK;
+}

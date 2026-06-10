@@ -3,7 +3,8 @@
  *
  * `react-cytoscapejs` exports a default component that takes the same props
  * as cytoscape.Core initialization plus `elements` / `stylesheet` / `cy`.
- * `cytoscape-fcose` is a cytoscape extension registered via `cytoscape.use`.
+ * `cytoscape-fcose` and `cytoscape-svg` are cytoscape extensions registered
+ * via `cytoscape.use`. The svg plugin also augments `cy` with `.svg()`.
  */
 
 declare module 'cytoscape-fcose' {
@@ -12,10 +13,10 @@ declare module 'cytoscape-fcose' {
   export default fcose
 }
 
-declare module 'cytoscape-elk' {
+declare module 'cytoscape-svg' {
   import type { Ext } from 'cytoscape'
-  const elk: Ext
-  export default elk
+  const svg: Ext
+  export default svg
 }
 
 declare module 'react-cytoscapejs' {

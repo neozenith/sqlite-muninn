@@ -293,7 +293,7 @@ export function EmbedPage() {
 
         {state.status === 'ready' && (
           <RightPanel title="Embedding inspector" storageKey="embed" testId="embed">
-            <PanelSection title="Visualization">
+            <PanelSection title="Visualization" storageKey="embed-visualization">
               <label className="flex flex-col gap-1" data-testid="embed-control-point-scale">
                 <span className="flex items-center justify-between">
                   <span>Point scale</span>
@@ -327,6 +327,7 @@ export function EmbedPage() {
 
             <PanelSection
               title="Selection"
+              storageKey="embed-selection"
               meta={
                 <span className="font-mono" data-testid="embed-selection-count">
                   {selected.size}

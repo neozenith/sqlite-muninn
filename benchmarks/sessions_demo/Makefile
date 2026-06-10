@@ -19,7 +19,8 @@ else
 endif
 
 EXTENSION = ../../build/muninn$(EXT)
-GGUF_MODEL = ../../models/nomic-embed-text-v1.5.Q8_0.gguf
+# GGUF model directory: ~/.claude/cache/models (override via MUNINN_MODELS_DIR).
+GGUF_MODEL = $(or $(MUNINN_MODELS_DIR),$(HOME)/.claude/cache/models)/nomic-embed-text-v1.5.Q8_0.gguf
 
 .PHONY: help format lint fix typecheck test coverage extension clean ci \
         build cache-init cache-update cache-rebuild cache-clear cache-status \

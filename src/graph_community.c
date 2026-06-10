@@ -17,6 +17,7 @@
 #include "graph_adjacency.h"
 #include "id_validate.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -593,8 +594,48 @@ static int lei_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
         return SQLITE_OK;
     }
 
-    int *community = (int *)malloc((size_t)N * sizeof(int));
-    double Q = run_leiden(&g, community, resolution, config.direction);
+    /* G7 T7.1: cache dispatch. Only GII-backed edge tables have a
+     * _config shadow with the communities cache. For non-GII tables
+     * we fall through to the unconditional run_leiden path below. */
+    int has_cache = (config.edge_table != NULL && is_graph_adjacency(vtab->db, config.edge_table));
+    int *community = NULL;
+    double Q = 0.0;
+
+    if (has_cache) {
+        CommCacheState state = check_communities_cache(vtab->db, config.edge_table, resolution);
+        if (state == COMM_CACHE_HIT) {
+            int cached_n = 0;
+            int rc_get = leiden_shadow_get(vtab->db, config.edge_table, /*ns=*/0, &community, &cached_n);
+            if (rc_get == SQLITE_OK && cached_n == N) {
+                Q = config_get_double(vtab->db, config.edge_table, "communities_modularity", 0.0);
+                comr_init(&cur->results);
+                for (int i = 0; i < N; i++) {
+                    comr_add(&cur->results, g.ids[i], community[i], Q);
+                }
+                free(community);
+                graph_data_destroy(&g);
+                cur->current = 0;
+                cur->eof = (cur->results.count == 0);
+                return SQLITE_OK;
+            }
+            /* Size mismatch or fetch failure → fall through to compute. */
+            free(community);
+            community = NULL;
+        }
+        /* WARM_START / COLD_START → compute path; warm-start optimization
+         * (using cached partition as initial) is deferred to T7.7. For now
+         * both states route through run_leiden + write-back. */
+    }
+
+    community = (int *)malloc((size_t)N * sizeof(int));
+    Q = run_leiden(&g, community, resolution, config.direction);
+
+    /* T7.1 write-back: persist the freshly-computed partition so the
+     * next read at the same generation/resolution hits the cache. */
+    if (has_cache) {
+        sqlite3_int64 G_adj = config_get_int64_public(vtab->db, config.edge_table, "generation", 0);
+        leiden_shadow_put(vtab->db, config.edge_table, /*ns=*/0, community, N, resolution, Q, G_adj);
+    }
 
     comr_init(&cur->results);
     for (int i = 0; i < N; i++) {
@@ -660,6 +701,484 @@ static sqlite3_module graph_leiden_module = {
     .xColumn = lei_column,
     .xRowid = lei_rowid,
 };
+
+/* ═══════════════════════════════════════════════════════════════
+ * Warm-start Leiden (G6 T6.4)
+ *
+ * Per the plan (section 1322): when n_changed == 0 or
+ * changed_nodes == NULL, the warm-start variant is equivalent to
+ * cold run_leiden. The actual optimization (using changed_nodes to
+ * skip refinement for unchanged neighborhoods) is a future
+ * refinement gated by a real perf need; the current implementation
+ * routes the no-hint case directly through run_leiden.
+ *
+ * When changed_nodes IS provided, we still fall back to cold
+ * run_leiden for now — implementing true warm-start would require
+ * threading initial-partition support through run_leiden's local-
+ * moving phase, which neither T6.4's contract nor any current
+ * downstream consumer requires. This branch becomes load-bearing
+ * if/when a future ticket exercises it.
+ * ═══════════════════════════════════════════════════════════════ */
+
+double run_leiden_warm(const GraphData *g, int *community, double resolution, const char *direction,
+                       const int *changed_nodes, int n_changed) {
+    (void)changed_nodes;
+    (void)n_changed;
+    return run_leiden(g, community, resolution, direction);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * Communities cache I/O (G6 T6.5)
+ *
+ * Atomic write path: SAVEPOINT wraps DELETE-from-namespace + INSERT
+ * loop + four config_set(_double / via INSERT OR REPLACE) writes so
+ * any failure mid-batch ROLLBACK TOs the savepoint, leaving readers
+ * to see only the pre-call state.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int leiden_shadow_put(sqlite3 *db, const char *vt_name, int namespace_id, const int *community, int n,
+                      double resolution, double modularity, int64_t generation) {
+    if (!db || !vt_name || (n > 0 && !community)) {
+        return SQLITE_MISUSE;
+    }
+
+    sqlite3_exec(db, "SAVEPOINT comm_put", NULL, NULL, NULL);
+
+    char *sql = NULL;
+    sqlite3_stmt *stmt = NULL;
+    int rc;
+
+    /* Replace any existing partition for this namespace. */
+    sql = sqlite3_mprintf("DELETE FROM \"%w_communities\" WHERE namespace_id = ?", vt_name);
+    if (!sql) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    sql = NULL;
+    if (rc != SQLITE_OK)
+        goto rollback;
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    stmt = NULL;
+    if (rc != SQLITE_DONE)
+        goto rollback;
+
+    /* INSERT one row per node. Re-use a single prepared statement
+     * across the loop. */
+    sql = sqlite3_mprintf("INSERT INTO \"%w_communities\""
+                          "(namespace_id, node_idx, community_id) VALUES (?, ?, ?)",
+                          vt_name);
+    if (!sql) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    sql = NULL;
+    if (rc != SQLITE_OK)
+        goto rollback;
+
+    for (int i = 0; i < n; i++) {
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        sqlite3_bind_int(stmt, 2, i);
+        sqlite3_bind_int(stmt, 3, community[i]);
+        int step = sqlite3_step(stmt);
+        sqlite3_reset(stmt);
+        if (step != SQLITE_DONE) {
+            sqlite3_finalize(stmt);
+            rc = step;
+            goto rollback;
+        }
+    }
+    sqlite3_finalize(stmt);
+    stmt = NULL;
+
+    /* Count distinct community ids for num_communities. O(n^2) on a
+     * tiny scratch buffer — N is bounded by node_count, not edges. */
+    int distinct = 0;
+    int *seen = (int *)malloc((size_t)n * sizeof(int));
+    if (!seen) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    for (int i = 0; i < n; i++) {
+        int found = 0;
+        for (int j = 0; j < distinct; j++) {
+            if (seen[j] == community[i]) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            seen[distinct++] = community[i];
+        }
+    }
+    free(seen);
+
+    /* Config metadata — bundled inside the same SAVEPOINT so a
+     * failure here also rolls back the partition writes. */
+    rc = config_set_double(db, vt_name, "communities_resolution", resolution);
+    if (rc != SQLITE_OK)
+        goto rollback;
+    rc = config_set_double(db, vt_name, "communities_modularity", modularity);
+    if (rc != SQLITE_OK)
+        goto rollback;
+
+    /* communities_generation and num_communities — INTEGER, written
+     * via the same TEXT-typed config table. Hand-format because the
+     * file-static config_set_int isn't visible here. */
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%lld", (long long)generation);
+    sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_config\"(key, value) "
+                          "VALUES ('communities_generation', %Q)",
+                          vt_name, buf);
+    if (!sql) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    sql = NULL;
+    if (rc != SQLITE_OK)
+        goto rollback;
+
+    snprintf(buf, sizeof(buf), "%d", distinct);
+    sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_config\"(key, value) "
+                          "VALUES ('num_communities', %Q)",
+                          vt_name, buf);
+    if (!sql) {
+        rc = SQLITE_NOMEM;
+        goto rollback;
+    }
+    rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+    sqlite3_free(sql);
+    sql = NULL;
+    if (rc != SQLITE_OK)
+        goto rollback;
+
+    sqlite3_exec(db, "RELEASE comm_put", NULL, NULL, NULL);
+    return SQLITE_OK;
+
+rollback:
+    if (stmt)
+        sqlite3_finalize(stmt);
+    if (sql)
+        sqlite3_free(sql);
+    sqlite3_exec(db, "ROLLBACK TO comm_put", NULL, NULL, NULL);
+    sqlite3_exec(db, "RELEASE comm_put", NULL, NULL, NULL);
+    return rc;
+}
+
+int leiden_shadow_get(sqlite3 *db, const char *vt_name, int namespace_id, int **out_community, int *out_n) {
+    if (!db || !vt_name || !out_community || !out_n) {
+        return SQLITE_MISUSE;
+    }
+    *out_community = NULL;
+    *out_n = 0;
+
+    /* First pass: COUNT(*) so we know how big to allocate. Cheaper than
+     * a realloc loop on the typical case where the partition is small. */
+    char *sql = sqlite3_mprintf("SELECT COUNT(*) FROM \"%w_communities\" WHERE namespace_id = ?", vt_name);
+    if (!sql)
+        return SQLITE_NOMEM;
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK)
+        return rc;
+    sqlite3_bind_int(stmt, 1, namespace_id);
+    int count = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    if (count == 0)
+        return SQLITE_NOTFOUND;
+
+    int *buf = (int *)malloc((size_t)count * sizeof(int));
+    if (!buf)
+        return SQLITE_NOMEM;
+
+    /* Second pass: ORDER BY node_idx so out[i] = community of node i. */
+    sql = sqlite3_mprintf("SELECT node_idx, community_id FROM \"%w_communities\" "
+                          "WHERE namespace_id = ? ORDER BY node_idx",
+                          vt_name);
+    if (!sql) {
+        free(buf);
+        return SQLITE_NOMEM;
+    }
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        free(buf);
+        return rc;
+    }
+    sqlite3_bind_int(stmt, 1, namespace_id);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int idx = sqlite3_column_int(stmt, 0);
+        int cid = sqlite3_column_int(stmt, 1);
+        if (idx >= 0 && idx < count) {
+            buf[idx] = cid;
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    *out_community = buf;
+    *out_n = count;
+    return SQLITE_OK;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * Component-seeded cold start (G6 T6.7)
+ *
+ * Probe sqlite_master for <vt>_components. When absent, return
+ * SQLITE_OK without touching community[] — the documented no-op
+ * fallback. When present, the real implementation would SELECT
+ * node_idx, component_id and copy into community[]; that path is
+ * gated on a future _components shadow that doesn't ship today, so
+ * for now the present-table branch is also a no-op (caller falls
+ * through to singleton init).
+ *
+ * The contract value is letting callers invoke unconditionally
+ * without first probing for _components — even when the optimization
+ * isn't realized, the API is in place.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int seed_from_components(sqlite3 *db, const char *vt_name, int *community, int n) {
+    if (!db || !vt_name) {
+        return SQLITE_MISUSE;
+    }
+    /* Defensive: NULL community / n == 0 is a valid no-op. */
+    if (!community || n <= 0) {
+        return SQLITE_OK;
+    }
+
+    char *sql = sqlite3_mprintf("SELECT 1 FROM sqlite_master "
+                                "WHERE type = 'table' AND name = '%w_components' LIMIT 1",
+                                vt_name);
+    if (!sql) {
+        return SQLITE_NOMEM;
+    }
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+    int present = (sqlite3_step(stmt) == SQLITE_ROW);
+    sqlite3_finalize(stmt);
+
+    if (!present) {
+        /* No-op fallback — caller's community[] is preserved. */
+        return SQLITE_OK;
+    }
+
+    /* Future _components feature would populate community[] here.
+     * Today we leave it unmodified — equivalent to the absent case. */
+    return SQLITE_OK;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * Cascade emit (G6 T6.6)
+ *
+ * Same three-band strategy as sssp_cascade_emit (G4 T4.4). The
+ * SELECTIVE / DELTA_FLUSH path adds the documented 1-hop extension:
+ * Leiden's local-moving phase only re-evaluates nodes against their
+ * neighbors, so a changed node's neighbors must also be marked stale
+ * for the warm-start to capture the moved boundary correctly.
+ *
+ * SAVEPOINT-wrapped so failure mid-batch rolls back atomically.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int comm_cascade_emit(sqlite3 *db, const char *vt_name, int namespace_id, SsspRebuildStrategy strategy,
+                      const GraphData *g, const int *changed_nodes, int n_changed) {
+    if (!db || !vt_name) {
+        return SQLITE_MISUSE;
+    }
+    int rc;
+    char *sql = NULL;
+    sqlite3_stmt *stmt = NULL;
+
+    sqlite3_exec(db, "SAVEPOINT comm_cascade", NULL, NULL, NULL);
+
+    if (strategy == REBUILD_SELECTIVE || strategy == REBUILD_DELTA_FLUSH) {
+        if (n_changed > 0 && (!g || !changed_nodes)) {
+            rc = SQLITE_MISUSE;
+            goto rollback;
+        }
+        sql = sqlite3_mprintf("INSERT OR IGNORE INTO \"%w_comm_delta\""
+                              "(namespace_id, node_idx) VALUES (?, ?)",
+                              vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+
+        for (int i = 0; i < n_changed; i++) {
+            int u = changed_nodes[i];
+            if (u < 0 || u >= g->node_count) {
+                rc = SQLITE_RANGE;
+                sqlite3_finalize(stmt);
+                stmt = NULL;
+                goto rollback;
+            }
+
+            /* The changed node itself. */
+            sqlite3_bind_int(stmt, 1, namespace_id);
+            sqlite3_bind_int(stmt, 2, u);
+            int step = sqlite3_step(stmt);
+            sqlite3_reset(stmt);
+            if (step != SQLITE_DONE) {
+                rc = step;
+                sqlite3_finalize(stmt);
+                stmt = NULL;
+                goto rollback;
+            }
+
+            /* Out-neighbors. */
+            for (int e = 0; e < g->out[u].count; e++) {
+                int v = g->out[u].edges[e].target;
+                sqlite3_bind_int(stmt, 1, namespace_id);
+                sqlite3_bind_int(stmt, 2, v);
+                step = sqlite3_step(stmt);
+                sqlite3_reset(stmt);
+                if (step != SQLITE_DONE) {
+                    rc = step;
+                    sqlite3_finalize(stmt);
+                    stmt = NULL;
+                    goto rollback;
+                }
+            }
+
+            /* In-neighbors. */
+            for (int e = 0; e < g->in[u].count; e++) {
+                int v = g->in[u].edges[e].target;
+                sqlite3_bind_int(stmt, 1, namespace_id);
+                sqlite3_bind_int(stmt, 2, v);
+                step = sqlite3_step(stmt);
+                sqlite3_reset(stmt);
+                if (step != SQLITE_DONE) {
+                    rc = step;
+                    sqlite3_finalize(stmt);
+                    stmt = NULL;
+                    goto rollback;
+                }
+            }
+        }
+        sqlite3_finalize(stmt);
+        stmt = NULL;
+    } else if (strategy == REBUILD_FULL) {
+        /* DELETE _communities + _comm_delta scoped to the namespace,
+         * then reset communities_generation = -1 so
+         * check_communities_cache routes the next read to COLD_START. */
+        sql = sqlite3_mprintf("DELETE FROM \"%w_communities\" WHERE namespace_id = ?", vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        stmt = NULL;
+        if (rc != SQLITE_DONE)
+            goto rollback;
+
+        sql = sqlite3_mprintf("DELETE FROM \"%w_comm_delta\" WHERE namespace_id = ?", vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+        sqlite3_bind_int(stmt, 1, namespace_id);
+        rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        stmt = NULL;
+        if (rc != SQLITE_DONE)
+            goto rollback;
+
+        sql = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w_config\"(key, value) "
+                              "VALUES ('communities_generation', '-1')",
+                              vt_name);
+        if (!sql) {
+            rc = SQLITE_NOMEM;
+            goto rollback;
+        }
+        rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
+        sqlite3_free(sql);
+        sql = NULL;
+        if (rc != SQLITE_OK)
+            goto rollback;
+    } else {
+        rc = SQLITE_MISUSE;
+        goto rollback;
+    }
+
+    sqlite3_exec(db, "RELEASE comm_cascade", NULL, NULL, NULL);
+    return SQLITE_OK;
+
+rollback:
+    if (stmt)
+        sqlite3_finalize(stmt);
+    if (sql)
+        sqlite3_free(sql);
+    sqlite3_exec(db, "ROLLBACK TO comm_cascade", NULL, NULL, NULL);
+    sqlite3_exec(db, "RELEASE comm_cascade", NULL, NULL, NULL);
+    return rc;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * Communities cache state machine (G6 T6.2)
+ *
+ * Decision order matters:
+ *
+ *   1. G_comm < 0       → COLD_START (never computed; resolution irrelevant)
+ *   2. resolution drift ≥ 1e-10 from cached value → COLD_START
+ *      (the cached partition is for a different gamma, can't warm-start)
+ *   3. G_comm < G_adj   → WARM_START (resolution matches but adjacency moved)
+ *   4. otherwise        → HIT
+ *
+ * Resolution comparison uses fabs(diff) < 1e-10. The sentinel
+ * communities_resolution = -1.0 (set by xCreate) ensures any positive
+ * gamma diverges by far more than 1e-10, so case 2 catches first-read
+ * COLD_START even when generation values happen to coincide.
+ * ═══════════════════════════════════════════════════════════════ */
+
+CommCacheState check_communities_cache(sqlite3 *db, const char *vtab_name, double requested_resolution) {
+    int64_t G_comm = config_get_int64_public(db, vtab_name, "communities_generation", -1);
+    if (G_comm < 0) {
+        return COMM_CACHE_COLD_START;
+    }
+
+    double cached_res = config_get_double(db, vtab_name, "communities_resolution", -1.0);
+    if (fabs(cached_res - requested_resolution) >= 1e-10) {
+        return COMM_CACHE_COLD_START;
+    }
+
+    int64_t G_adj = config_get_int64_public(db, vtab_name, "generation", 0);
+    if (G_comm < G_adj) {
+        return COMM_CACHE_WARM_START;
+    }
+
+    return COMM_CACHE_HIT;
+}
 
 /* ═══════════════════════════════════════════════════════════════
  * Registration

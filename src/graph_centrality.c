@@ -218,19 +218,16 @@ static int double_eq(double a, double b) {
  * Used by Brandes for tracking shortest-path predecessors.
  * ═══════════════════════════════════════════════════════════════ */
 
-typedef struct {
-    int *items;
-    int count;
-    int capacity;
-} IntList;
-
-static void intlist_init(IntList *l) {
+/* IntList — definition + helpers are public in graph_centrality.h so
+ * external G5 consumers (reconstruction, tests) can manage pred[]
+ * entries without re-implementing the same dynamic-array boilerplate. */
+void intlist_init(IntList *l) {
     l->items = NULL;
     l->count = 0;
     l->capacity = 0;
 }
 
-static void intlist_push(IntList *l, int val) {
+void intlist_push(IntList *l, int val) {
     if (l->count >= l->capacity) {
         l->capacity = l->capacity == 0 ? 4 : l->capacity * 2;
         l->items = (int *)realloc(l->items, (size_t)l->capacity * sizeof(int));
@@ -238,11 +235,11 @@ static void intlist_push(IntList *l, int val) {
     l->items[l->count++] = val;
 }
 
-static void intlist_clear(IntList *l) {
+void intlist_clear(IntList *l) {
     l->count = 0;
 }
 
-static void intlist_destroy(IntList *l) {
+void intlist_destroy(IntList *l) {
     free(l->items);
     l->items = NULL;
     l->count = l->capacity = 0;
@@ -512,6 +509,402 @@ int brandes_compute(const GraphData *g, const char *direction, int auto_approx, 
 }
 
 /* ═══════════════════════════════════════════════════════════════
+ * Cache-aware Brandes wrapper (G5 T5.4)
+ *
+ * Mirrors brandes_compute's structure but:
+ *   - per-source SSSP runs through sssp_load_or_compute (cache hit
+ *     when fresh; compute + write-back on miss / staleness)
+ *   - pred[] and stack[] are rebuilt via reconstruct_pred_from_dist
+ *     instead of filled by sssp_bfs / sssp_dijkstra
+ *
+ * Back-prop / scaling / normalization are byte-identical to the
+ * uncached path; Brandes back-prop is associative+commutative so
+ * any pred[] ordering difference washes out in CB[].
+ * ═══════════════════════════════════════════════════════════════ */
+
+int brandes_compute_cached(const GraphData *g, sqlite3 *db, const char *gii_vt_name, int namespace_id,
+                           const char *direction, int auto_approx, int normalized, double *CB, double *EB) {
+    if (!g || !db || !gii_vt_name || !CB) {
+        return SQLITE_MISUSE;
+    }
+    int N = g->node_count;
+
+    double *dist = (double *)malloc((size_t)N * sizeof(double));
+    double *sigma = (double *)malloc((size_t)N * sizeof(double));
+    double *delta = (double *)malloc((size_t)N * sizeof(double));
+    int *stack = (int *)malloc((size_t)N * sizeof(int));
+    IntList *pred = (IntList *)calloc((size_t)N, sizeof(IntList));
+    if (!dist || !sigma || !delta || !stack || !pred) {
+        free(dist);
+        free(sigma);
+        free(delta);
+        free(stack);
+        free(pred);
+        return SQLITE_NOMEM;
+    }
+    for (int i = 0; i < N; i++) {
+        intlist_init(&pred[i]);
+    }
+
+    /* Source set (same exact / approx logic as brandes_compute). */
+    int n_sources = N;
+    int *sources = (int *)malloc((size_t)N * sizeof(int));
+    double scale = 1.0;
+    if (auto_approx > 0 && N > auto_approx) {
+        n_sources = (int)ceil(sqrt((double)N));
+        if (n_sources < 1) {
+            n_sources = 1;
+        }
+        int step = N / n_sources;
+        if (step < 1) {
+            step = 1;
+        }
+        n_sources = 0;
+        for (int i = 0; i < N && n_sources < (int)ceil(sqrt((double)N)); i += step) {
+            sources[n_sources++] = i;
+        }
+        scale = (double)N / (double)n_sources;
+    } else {
+        for (int i = 0; i < N; i++) {
+            sources[i] = i;
+        }
+    }
+
+    int weighted = g->has_weights;
+    int rc = SQLITE_OK;
+    for (int si = 0; si < n_sources; si++) {
+        int s = sources[si];
+        int stack_size = 0;
+
+        /* Cache-aware SSSP populates dist/sigma. */
+        rc = sssp_load_or_compute(db, gii_vt_name, namespace_id, g, s, weighted, dist, sigma, direction);
+        if (rc != SQLITE_OK) {
+            goto cleanup;
+        }
+
+        /* sigma may be all-zero if the cached row was dist-only — that
+         * would break back-prop. Recompute sigma from scratch by
+         * forcing a fresh BFS/Dijkstra into local buffers. T5.1's
+         * write-back stores both dist and sigma now, so this is a
+         * defensive fallback for older cache rows. */
+        int sigma_seen_nonzero = 0;
+        for (int i = 0; i < N; i++) {
+            if (sigma[i] != 0.0) {
+                sigma_seen_nonzero = 1;
+                break;
+            }
+        }
+        if (!sigma_seen_nonzero) {
+            int dummy_stack_size = 0;
+            if (weighted) {
+                sssp_dijkstra(g, s, dist, sigma, pred, stack, &dummy_stack_size, direction);
+            } else {
+                sssp_bfs(g, s, dist, sigma, pred, stack, &dummy_stack_size, direction);
+            }
+        }
+
+        /* Rebuild pred[] / stack[] from the (now-correct) dist[]. */
+        rc = reconstruct_pred_from_dist(g, s, dist, pred, stack, &stack_size, direction, weighted);
+        if (rc != SQLITE_OK) {
+            goto cleanup;
+        }
+
+        /* Backward accumulation — byte-identical to brandes_compute. */
+        for (int i = 0; i < N; i++) {
+            delta[i] = 0.0;
+        }
+        while (stack_size > 0) {
+            int w = stack[--stack_size];
+            for (int pi = 0; pi < pred[w].count; pi++) {
+                int v = pred[w].items[pi];
+                if (sigma[w] > 0) {
+                    double flow = (sigma[v] / sigma[w]) * (1.0 + delta[w]);
+                    delta[v] += flow;
+                    if (EB) {
+                        EB[v * N + w] += flow;
+                    }
+                }
+            }
+            if (w != s) {
+                CB[w] += delta[w];
+            }
+        }
+    }
+
+    /* Scaling + undirected halve + normalize — identical to brandes_compute. */
+    if (scale != 1.0) {
+        for (int i = 0; i < N; i++) {
+            CB[i] *= scale;
+        }
+        if (EB) {
+            int NN = N * N;
+            for (int i = 0; i < NN; i++) {
+                EB[i] *= scale;
+            }
+        }
+    }
+    int undirected = direction && strcmp(direction, "both") == 0;
+    if (undirected) {
+        for (int i = 0; i < N; i++) {
+            CB[i] /= 2.0;
+        }
+        if (EB) {
+            int NN = N * N;
+            for (int i = 0; i < NN; i++) {
+                EB[i] /= 2.0;
+            }
+        }
+    }
+    if (normalized && N > 2) {
+        double norm_factor = undirected ? (double)(N - 1) * (double)(N - 2) / 2.0 : (double)(N - 1) * (double)(N - 2);
+        for (int i = 0; i < N; i++) {
+            CB[i] /= norm_factor;
+        }
+        if (EB) {
+            int NN = N * N;
+            for (int i = 0; i < NN; i++) {
+                EB[i] /= norm_factor;
+            }
+        }
+    }
+
+cleanup:
+    for (int i = 0; i < N; i++) {
+        intlist_destroy(&pred[i]);
+    }
+    free(pred);
+    free(dist);
+    free(sigma);
+    free(delta);
+    free(stack);
+    free(sources);
+    return rc;
+}
+
+/* G3 T3.3 — un-defer trigger threshold accessor. Returns the
+ * compile-time MUNINN_BRANDES_SHARE_THRESHOLD so callers don't have
+ * to include graph_centrality.h (which pulls sqlite3ext.h) just to
+ * read the constant. */
+double muninn_brandes_share_threshold(void) {
+    return MUNINN_BRANDES_SHARE_THRESHOLD;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * pred / stack reconstruction from cached dist[] (G5 T5.2)
+ *
+ * Inverse of sssp_bfs/dijkstra's expansion. For each w with finite
+ * dist[w], scan edges (u, w) — that's g->in[w] when use_out, g->out[w]
+ * when use_in (the dual of the expansion direction). u is a predecessor
+ * of w iff dist[u] + weight(u, w) == dist[w]. stack[] is filled with
+ * reachable indices sorted by dist ascending so Brandes back-prop
+ * pops in non-decreasing distance order from the end.
+ * ═══════════════════════════════════════════════════════════════ */
+
+typedef struct {
+    int idx;
+    double dist;
+} DistIdxPair;
+
+static int compare_distidx(const void *a, const void *b) {
+    const DistIdxPair *pa = (const DistIdxPair *)a;
+    const DistIdxPair *pb = (const DistIdxPair *)b;
+    if (pa->dist < pb->dist)
+        return -1;
+    if (pa->dist > pb->dist)
+        return 1;
+    /* Tie-break by idx so the order is deterministic — same-distance
+     * nodes don't depend on each other in Brandes back-prop, but a
+     * stable order makes parity tests reproducible. */
+    return pa->idx - pb->idx;
+}
+
+int reconstruct_pred_from_dist(const GraphData *g, int source, const double *dist, IntList *pred, int *stack,
+                               int *stack_size, const char *direction, int weighted) {
+    if (!g || !dist || !pred || !stack || !stack_size) {
+        return SQLITE_MISUSE;
+    }
+    if (source < 0 || source >= g->node_count) {
+        return SQLITE_RANGE;
+    }
+    int N = g->node_count;
+
+    int use_out = !direction || strcmp(direction, "reverse") != 0;
+    int use_in = direction && (strcmp(direction, "reverse") == 0 || strcmp(direction, "both") == 0);
+
+    /* Pred[]: iterate the same edge set sssp_bfs / sssp_dijkstra
+     * traverses (g->out[u] for use_out, g->in[u] for use_in) and use
+     * the SSSP optimality condition `dist[u] + w(u,v) == dist[v]` to
+     * mark u as a predecessor of v.
+     *
+     * Iterating via the EXPANSION direction (out[] not in[]) is load-
+     * compatible with graph_data_load's direction='forward' setting,
+     * which populates only g->out[] and leaves g->in[] empty. The
+     * same predicate applied edge-by-edge produces the same
+     * predecessor sets without depending on the reverse adjacency. */
+    for (int w = 0; w < N; w++) {
+        intlist_clear(&pred[w]);
+    }
+    for (int u = 0; u < N; u++) {
+        if (dist[u] < 0) {
+            continue;
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            const GraphAdjList *adj;
+            if (pass == 0) {
+                adj = use_out ? &g->out[u] : NULL;
+            } else {
+                adj = use_in ? &g->in[u] : NULL;
+            }
+            if (!adj) {
+                continue;
+            }
+            for (int e = 0; e < adj->count; e++) {
+                int v = adj->edges[e].target;
+                if (dist[v] < 0 || v == source) {
+                    continue;
+                }
+                double w_uv = weighted ? adj->edges[e].weight : 1.0;
+                if (double_eq(dist[u] + w_uv, dist[v])) {
+                    /* Adjacent-dedup so multi-edges or out[]+in[]
+                     * traversal don't create back-to-back duplicates. */
+                    if (pred[v].count == 0 || pred[v].items[pred[v].count - 1] != u) {
+                        intlist_push(&pred[v], u);
+                    }
+                }
+            }
+        }
+    }
+
+    /* stack[]: reachable indices sorted by dist ascending. */
+    DistIdxPair *pairs = (DistIdxPair *)malloc((size_t)N * sizeof(DistIdxPair));
+    if (!pairs) {
+        return SQLITE_NOMEM;
+    }
+    int n_reachable = 0;
+    for (int i = 0; i < N; i++) {
+        if (dist[i] >= 0) {
+            pairs[n_reachable].idx = i;
+            pairs[n_reachable].dist = dist[i];
+            n_reachable++;
+        }
+    }
+    qsort(pairs, (size_t)n_reachable, sizeof(DistIdxPair), compare_distidx);
+    for (int i = 0; i < n_reachable; i++) {
+        stack[i] = pairs[i].idx;
+    }
+    *stack_size = n_reachable;
+    free(pairs);
+
+    return SQLITE_OK;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * SSSP load-or-compute wrapper (G5 T5.1)
+ *
+ * Cache-hit path: sssp_shadow_get reads dist[]/sigma[] BLOBs, copy
+ * into output buffers, return SQLITE_OK.
+ *
+ * Cache-miss path: allocate scratch pred[]/stack[], run sssp_bfs or
+ * sssp_dijkstra, write back via sssp_shadow_put, free scratch,
+ * return SQLITE_OK.
+ *
+ * pred[]/stack[] reconstruction from cached dist[] is T5.2's
+ * territory. T5.1's wrapper produces dist[] and sigma[] only.
+ * ═══════════════════════════════════════════════════════════════ */
+
+int sssp_load_or_compute(sqlite3 *db, const char *gii_vt_name, int namespace_id, const GraphData *g, int source,
+                         int weighted, double *dist, double *sigma, const char *direction) {
+    if (!db || !gii_vt_name || !g || !dist || !sigma) {
+        return SQLITE_MISUSE;
+    }
+    if (source < 0 || source >= g->node_count) {
+        return SQLITE_RANGE;
+    }
+    int N = g->node_count;
+
+    /* Try cache first — but a cache row is only trustworthy if the
+     * (namespace, source) pair is NOT in _sssp_delta. T5.3's staleness
+     * check: a SELECTIVE/DELTA_FLUSH cascade may have marked this
+     * source stale without bumping generation, so the cache row could
+     * be a poisoned read. */
+    double *cached_dist = NULL;
+    double *cached_sigma = NULL;
+    int cached_n = 0;
+    int rc = sssp_shadow_get(db, gii_vt_name, namespace_id, source, &cached_dist, &cached_sigma, &cached_n);
+    if (rc == SQLITE_OK) {
+        int stale = sssp_shadow_is_stale(db, gii_vt_name, namespace_id, source);
+        if (stale > 0) {
+            /* Stale: free cached buffers and fall through to recompute. */
+            free(cached_dist);
+            free(cached_sigma);
+            cached_dist = NULL;
+            cached_sigma = NULL;
+        } else if (stale < 0) {
+            free(cached_dist);
+            free(cached_sigma);
+            return -stale;
+        } else {
+            if (cached_n != N) {
+                free(cached_dist);
+                free(cached_sigma);
+                return SQLITE_CORRUPT;
+            }
+            memcpy(dist, cached_dist, sizeof(double) * (size_t)N);
+            if (cached_sigma) {
+                memcpy(sigma, cached_sigma, sizeof(double) * (size_t)N);
+            } else {
+                memset(sigma, 0, sizeof(double) * (size_t)N);
+            }
+            free(cached_dist);
+            free(cached_sigma);
+            return SQLITE_OK;
+        }
+    } else if (rc != SQLITE_NOTFOUND) {
+        return rc;
+    }
+
+    /* Miss path. sssp_bfs / sssp_dijkstra need scratch pred[]+stack[]
+     * buffers even though the cache doesn't store them. */
+    int *stack = (int *)malloc((size_t)N * sizeof(int));
+    IntList *pred = (IntList *)calloc((size_t)N, sizeof(IntList));
+    if (!stack || !pred) {
+        free(stack);
+        free(pred);
+        return SQLITE_NOMEM;
+    }
+    for (int i = 0; i < N; i++) {
+        intlist_init(&pred[i]);
+    }
+
+    int stack_size = 0;
+    if (weighted) {
+        sssp_dijkstra(g, source, dist, sigma, pred, stack, &stack_size, direction);
+    } else {
+        sssp_bfs(g, source, dist, sigma, pred, stack, &stack_size, direction);
+    }
+
+    /* Free scratch before write-back so a write failure doesn't leak. */
+    for (int i = 0; i < N; i++) {
+        intlist_destroy(&pred[i]);
+    }
+    free(pred);
+    free(stack);
+
+    /* Persist for the next reader. */
+    rc = sssp_shadow_put(db, gii_vt_name, namespace_id, source, dist, sigma, N);
+    if (rc != SQLITE_OK) {
+        return rc;
+    }
+
+    /* Consume-and-clear: if this miss was triggered by a stale
+     * delta entry (T5.3 path), drop it now that the cache is fresh.
+     * On a "never-cached" miss the delta entry doesn't exist and the
+     * DELETE is a harmless no-op. Per the plan section 1000, the
+     * consumer is responsible for clearing what it consumes. */
+    return sssp_shadow_clear_delta(db, gii_vt_name, namespace_id, source);
+}
+
+/* ═══════════════════════════════════════════════════════════════
  * DEGREE CENTRALITY
  *
  * O(V+E) — iterate adjacency lists, sum weights per node.
@@ -523,15 +916,17 @@ enum {
     DEG_COL_OUT_DEGREE,
     DEG_COL_DEGREE,
     DEG_COL_CENTRALITY,
-    DEG_COL_EDGE_TABLE,    /* hidden */
-    DEG_COL_SRC_COL,       /* hidden */
-    DEG_COL_DST_COL,       /* hidden */
-    DEG_COL_WEIGHT_COL,    /* hidden */
-    DEG_COL_NORMALIZED,    /* hidden */
-    DEG_COL_DIRECTION,     /* hidden */
-    DEG_COL_TIMESTAMP_COL, /* hidden */
-    DEG_COL_TIME_START,    /* hidden */
-    DEG_COL_TIME_END,      /* hidden */
+    DEG_COL_EDGE_TABLE,           /* hidden */
+    DEG_COL_SRC_COL,              /* hidden */
+    DEG_COL_DST_COL,              /* hidden */
+    DEG_COL_WEIGHT_COL,           /* hidden */
+    DEG_COL_NORMALIZED,           /* hidden */
+    DEG_COL_DIRECTION,            /* hidden */
+    DEG_COL_TIMESTAMP_COL,        /* hidden */
+    DEG_COL_TIME_START,           /* hidden */
+    DEG_COL_TIME_END,             /* hidden */
+    DEG_COL_COMMUNITY_FILTER,     /* hidden — G7 T7.2 */
+    DEG_COL_COMMUNITY_RESOLUTION, /* hidden — G7 T7.2 */
 };
 
 typedef struct {
@@ -552,7 +947,8 @@ static int deg_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
                                       "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
                                       "  weight_col TEXT HIDDEN, normalized INTEGER HIDDEN,"
                                       "  direction TEXT HIDDEN, timestamp_col TEXT HIDDEN,"
-                                      "  time_start HIDDEN, time_end HIDDEN"
+                                      "  time_start HIDDEN, time_end HIDDEN,"
+                                      "  community_filter INTEGER HIDDEN, community_resolution REAL HIDDEN"
                                       ")");
     if (rc != SQLITE_OK)
         return rc;
@@ -568,7 +964,7 @@ static int deg_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int deg_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_common(pIdxInfo, DEG_COL_EDGE_TABLE, DEG_COL_TIME_END, 0x7, 1000.0);
+    return graph_best_index_common(pIdxInfo, DEG_COL_EDGE_TABLE, DEG_COL_COMMUNITY_RESOLUTION, 0x7, 1000.0);
 }
 
 static int deg_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -607,7 +1003,7 @@ static int deg_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
     int normalized = 0;
     int pos = 0;
 
-#define DEG_N_HIDDEN (DEG_COL_TIME_END - DEG_COL_EDGE_TABLE + 1)
+#define DEG_N_HIDDEN (DEG_COL_COMMUNITY_RESOLUTION - DEG_COL_EDGE_TABLE + 1)
     for (int bit = 0; bit < DEG_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit)))
             continue;
@@ -753,16 +1149,18 @@ static sqlite3_module graph_degree_module = {
 enum {
     BET_COL_NODE = 0,
     BET_COL_CENTRALITY,
-    BET_COL_EDGE_TABLE,    /* hidden */
-    BET_COL_SRC_COL,       /* hidden */
-    BET_COL_DST_COL,       /* hidden */
-    BET_COL_WEIGHT_COL,    /* hidden */
-    BET_COL_NORMALIZED,    /* hidden */
-    BET_COL_DIRECTION,     /* hidden */
-    BET_COL_AUTO_APPROX,   /* hidden */
-    BET_COL_TIMESTAMP_COL, /* hidden */
-    BET_COL_TIME_START,    /* hidden */
-    BET_COL_TIME_END,      /* hidden */
+    BET_COL_EDGE_TABLE,           /* hidden */
+    BET_COL_SRC_COL,              /* hidden */
+    BET_COL_DST_COL,              /* hidden */
+    BET_COL_WEIGHT_COL,           /* hidden */
+    BET_COL_NORMALIZED,           /* hidden */
+    BET_COL_DIRECTION,            /* hidden */
+    BET_COL_AUTO_APPROX,          /* hidden */
+    BET_COL_TIMESTAMP_COL,        /* hidden */
+    BET_COL_TIME_START,           /* hidden */
+    BET_COL_TIME_END,             /* hidden */
+    BET_COL_COMMUNITY_FILTER,     /* hidden — G7 T7.2 */
+    BET_COL_COMMUNITY_RESOLUTION, /* hidden — G7 T7.2 */
 };
 
 typedef struct {
@@ -783,7 +1181,8 @@ static int bet_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
                                       "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
                                       "  weight_col TEXT HIDDEN, normalized INTEGER HIDDEN,"
                                       "  direction TEXT HIDDEN, auto_approx_threshold INTEGER HIDDEN,"
-                                      "  timestamp_col TEXT HIDDEN, time_start HIDDEN, time_end HIDDEN"
+                                      "  timestamp_col TEXT HIDDEN, time_start HIDDEN, time_end HIDDEN,"
+                                      "  community_filter INTEGER HIDDEN, community_resolution REAL HIDDEN"
                                       ")");
     if (rc != SQLITE_OK)
         return rc;
@@ -799,7 +1198,7 @@ static int bet_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int bet_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_common(pIdxInfo, BET_COL_EDGE_TABLE, BET_COL_TIME_END, 0x7, 1000.0);
+    return graph_best_index_common(pIdxInfo, BET_COL_EDGE_TABLE, BET_COL_COMMUNITY_RESOLUTION, 0x7, 1000.0);
 }
 
 static int bet_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -838,7 +1237,7 @@ static int bet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
     int auto_approx = 50000;
     int pos = 0;
 
-#define BET_N_HIDDEN (BET_COL_TIME_END - BET_COL_EDGE_TABLE + 1)
+#define BET_N_HIDDEN (BET_COL_COMMUNITY_RESOLUTION - BET_COL_EDGE_TABLE + 1)
     for (int bit = 0; bit < BET_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit)))
             continue;
@@ -996,16 +1395,18 @@ enum {
     EBET_COL_SRC = 0,
     EBET_COL_DST,
     EBET_COL_CENTRALITY,
-    EBET_COL_EDGE_TABLE,    /* hidden */
-    EBET_COL_SRC_COL,       /* hidden */
-    EBET_COL_DST_COL,       /* hidden */
-    EBET_COL_WEIGHT_COL,    /* hidden */
-    EBET_COL_NORMALIZED,    /* hidden */
-    EBET_COL_DIRECTION,     /* hidden */
-    EBET_COL_AUTO_APPROX,   /* hidden */
-    EBET_COL_TIMESTAMP_COL, /* hidden */
-    EBET_COL_TIME_START,    /* hidden */
-    EBET_COL_TIME_END,      /* hidden */
+    EBET_COL_EDGE_TABLE,           /* hidden */
+    EBET_COL_SRC_COL,              /* hidden */
+    EBET_COL_DST_COL,              /* hidden */
+    EBET_COL_WEIGHT_COL,           /* hidden */
+    EBET_COL_NORMALIZED,           /* hidden */
+    EBET_COL_DIRECTION,            /* hidden */
+    EBET_COL_AUTO_APPROX,          /* hidden */
+    EBET_COL_TIMESTAMP_COL,        /* hidden */
+    EBET_COL_TIME_START,           /* hidden */
+    EBET_COL_TIME_END,             /* hidden */
+    EBET_COL_COMMUNITY_FILTER,     /* hidden — G7 T7.2 */
+    EBET_COL_COMMUNITY_RESOLUTION, /* hidden — G7 T7.2 */
 };
 
 typedef struct {
@@ -1026,7 +1427,8 @@ static int ebet_connect(sqlite3 *db, void *pAux, int argc, const char *const *ar
                                       "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
                                       "  weight_col TEXT HIDDEN, normalized INTEGER HIDDEN,"
                                       "  direction TEXT HIDDEN, auto_approx_threshold INTEGER HIDDEN,"
-                                      "  timestamp_col TEXT HIDDEN, time_start HIDDEN, time_end HIDDEN"
+                                      "  timestamp_col TEXT HIDDEN, time_start HIDDEN, time_end HIDDEN,"
+                                      "  community_filter INTEGER HIDDEN, community_resolution REAL HIDDEN"
                                       ")");
     if (rc != SQLITE_OK)
         return rc;
@@ -1042,7 +1444,7 @@ static int ebet_connect(sqlite3 *db, void *pAux, int argc, const char *const *ar
 
 static int ebet_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_common(pIdxInfo, EBET_COL_EDGE_TABLE, EBET_COL_TIME_END, 0x7, 2000.0);
+    return graph_best_index_common(pIdxInfo, EBET_COL_EDGE_TABLE, EBET_COL_COMMUNITY_RESOLUTION, 0x7, 2000.0);
 }
 
 static int ebet_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -1082,7 +1484,8 @@ static int ebet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idx
     int auto_approx = 0;
     int pos = 0;
 
-    for (int bit = 0; bit < 12; bit++) {
+#define EBET_N_HIDDEN (EBET_COL_COMMUNITY_RESOLUTION - EBET_COL_EDGE_TABLE + 1)
+    for (int bit = 0; bit < EBET_N_HIDDEN; bit++) {
         if (!(idxNum & (1 << bit)))
             continue;
         int col = bit + EBET_COL_EDGE_TABLE;
@@ -1116,6 +1519,11 @@ static int ebet_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idx
             break;
         case EBET_COL_TIME_END:
             config.time_end = argv[pos];
+            break;
+        /* T7.2: community_filter / community_resolution declared but
+         * not yet wired — T7.3 lights up the filtering. */
+        case EBET_COL_COMMUNITY_FILTER:
+        case EBET_COL_COMMUNITY_RESOLUTION:
             break;
         }
         pos++;
@@ -1248,15 +1656,17 @@ static sqlite3_module graph_edge_betweenness_module = {
 enum {
     CLO_COL_NODE = 0,
     CLO_COL_CENTRALITY,
-    CLO_COL_EDGE_TABLE,    /* hidden */
-    CLO_COL_SRC_COL,       /* hidden */
-    CLO_COL_DST_COL,       /* hidden */
-    CLO_COL_WEIGHT_COL,    /* hidden */
-    CLO_COL_NORMALIZED,    /* hidden */
-    CLO_COL_DIRECTION,     /* hidden */
-    CLO_COL_TIMESTAMP_COL, /* hidden */
-    CLO_COL_TIME_START,    /* hidden */
-    CLO_COL_TIME_END,      /* hidden */
+    CLO_COL_EDGE_TABLE,           /* hidden */
+    CLO_COL_SRC_COL,              /* hidden */
+    CLO_COL_DST_COL,              /* hidden */
+    CLO_COL_WEIGHT_COL,           /* hidden */
+    CLO_COL_NORMALIZED,           /* hidden */
+    CLO_COL_DIRECTION,            /* hidden */
+    CLO_COL_TIMESTAMP_COL,        /* hidden */
+    CLO_COL_TIME_START,           /* hidden */
+    CLO_COL_TIME_END,             /* hidden */
+    CLO_COL_COMMUNITY_FILTER,     /* hidden — G7 T7.2 */
+    CLO_COL_COMMUNITY_RESOLUTION, /* hidden — G7 T7.2 */
 };
 
 typedef struct {
@@ -1277,7 +1687,8 @@ static int clo_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
                                       "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
                                       "  weight_col TEXT HIDDEN, normalized INTEGER HIDDEN,"
                                       "  direction TEXT HIDDEN, timestamp_col TEXT HIDDEN,"
-                                      "  time_start HIDDEN, time_end HIDDEN"
+                                      "  time_start HIDDEN, time_end HIDDEN,"
+                                      "  community_filter INTEGER HIDDEN, community_resolution REAL HIDDEN"
                                       ")");
     if (rc != SQLITE_OK)
         return rc;
@@ -1293,7 +1704,7 @@ static int clo_connect(sqlite3 *db, void *pAux, int argc, const char *const *arg
 
 static int clo_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
     (void)pVTab;
-    return graph_best_index_common(pIdxInfo, CLO_COL_EDGE_TABLE, CLO_COL_TIME_END, 0x7, 1000.0);
+    return graph_best_index_common(pIdxInfo, CLO_COL_EDGE_TABLE, CLO_COL_COMMUNITY_RESOLUTION, 0x7, 1000.0);
 }
 
 static int clo_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
@@ -1331,7 +1742,7 @@ static int clo_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxS
     int normalized = 1; /* default ON for closeness */
     int pos = 0;
 
-#define CLO_N_HIDDEN (CLO_COL_TIME_END - CLO_COL_EDGE_TABLE + 1)
+#define CLO_N_HIDDEN (CLO_COL_COMMUNITY_RESOLUTION - CLO_COL_EDGE_TABLE + 1)
     for (int bit = 0; bit < CLO_N_HIDDEN && pos < argc; bit++) {
         if (!(idxNum & (1 << bit)))
             continue;

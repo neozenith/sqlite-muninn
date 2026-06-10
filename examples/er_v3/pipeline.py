@@ -7,6 +7,7 @@ clustering inside the C function.
 
 import json
 import logging
+import os
 import shutil
 import sqlite3
 import time
@@ -19,7 +20,8 @@ log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 EXTENSION_PATH = str(PROJECT_ROOT / "build" / "muninn")
-MODELS_DIR = PROJECT_ROOT / "models"
+# GGUF model directory: ~/.claude/cache/models (override via MUNINN_MODELS_DIR).
+MODELS_DIR = Path(os.environ.get("MUNINN_MODELS_DIR", str(Path.home() / ".claude" / "cache" / "models")))
 PREP_DIR = Path(__file__).resolve().parent / "prep"
 
 EMBED_MODEL_NAME = "NomicEmbed"

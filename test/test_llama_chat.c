@@ -3,12 +3,12 @@
  *
  * Always-run tests: registration, error handling, VT schema, string helpers,
  *                   NULL argument handling, logging, registry limits.
- * Model-gated tests: full integration when models/Qwen3-*.gguf exists.
+ * Model-gated tests: full integration when the Qwen3-*.gguf models exist.
  * Each model is loaded ONCE into the process-global registry and
  * reused across all integration tests to avoid OOM.
  *
- * The test runner is invoked from the project root, so model paths
- * are relative: "models/Qwen3-4B-Q4_K_M.gguf" etc.
+ * Models are resolved under ~/.claude/cache/models (override via the
+ * MUNINN_MODELS_DIR env var), e.g. "$HOME/.claude/cache/models/Qwen3-4B-Q4_K_M.gguf".
  */
 #include "test_common.h"
 #include <sqlite3.h>
@@ -33,25 +33,47 @@ extern void muninn_test_clear_all_dummies(void);
 extern int muninn_registry_capacity(void);
 
 /* ── Model discovery ─────────────────────────────────────────────
- * Check for GGUF models in models/ at suite start. Integration
- * tests run for every model that exists on disk. */
+ * Resolve GGUF model paths under ~/.claude/cache/models (or
+ * MUNINN_MODELS_DIR) and check which exist at suite start.
+ * Integration tests run for every model that exists on disk. */
 
 typedef struct {
-    const char *path;
+    const char *filename;
     const char *name;
+    char path[512];
     int available;
 } TestModel;
 
 static TestModel g_test_models[] = {
-    {"models/Qwen3-4B-Q4_K_M.gguf", "Qwen3-4B", 0},
-    {"models/Qwen3-8B-Q4_K_M.gguf", "Qwen3-8B", 0},
+    {"Qwen3-4B-Q4_K_M.gguf", "Qwen3-4B", {0}, 0},
+    {"Qwen3-8B-Q4_K_M.gguf", "Qwen3-8B", {0}, 0},
 };
 #define N_TEST_MODELS (int)(sizeof(g_test_models) / sizeof(g_test_models[0]))
 
 static int g_any_model = 0;
 
+/* Resolve the GGUF model directory: $MUNINN_MODELS_DIR if set, else
+ * $HOME/.claude/cache/models. Returns a pointer to a static buffer. */
+static const char *models_base_dir(void) {
+    static char base[400];
+    const char *env = getenv("MUNINN_MODELS_DIR");
+    if (env && *env) {
+        snprintf(base, sizeof(base), "%s", env);
+        return base;
+    }
+    const char *home = getenv("HOME");
+    if (home && *home) {
+        snprintf(base, sizeof(base), "%s/.claude/cache/models", home);
+        return base;
+    }
+    snprintf(base, sizeof(base), "models");
+    return base;
+}
+
 static void discover_models(void) {
+    const char *base = models_base_dir();
     for (int i = 0; i < N_TEST_MODELS; i++) {
+        snprintf(g_test_models[i].path, sizeof(g_test_models[i].path), "%s/%s", base, g_test_models[i].filename);
         FILE *f = fopen(g_test_models[i].path, "rb");
         if (f) {
             fclose(f);
@@ -61,7 +83,7 @@ static void discover_models(void) {
         }
     }
     if (!g_any_model) {
-        printf("  (no GGUF models in models/ — integration tests skipped)\n");
+        printf("  (no GGUF models in %s — integration tests skipped)\n", base);
     }
 }
 

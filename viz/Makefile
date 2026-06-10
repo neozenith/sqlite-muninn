@@ -1,7 +1,7 @@
 # muninn-viz — Build & Dev targets
 # All commands run from viz/ directory (invoked via make -C viz)
 
-BACKEND_PORT ?= 8200
+BACKEND_PORT ?= 8290
 FRONTEND_PORT ?= 5282
 
 .PHONY: help install install-python install-frontend dev test test-api test-frontend test-e2e \

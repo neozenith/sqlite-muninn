@@ -21,6 +21,7 @@ Requirements:
 
 import json
 import logging
+import os
 import sqlite3
 import subprocess
 import sys
@@ -52,7 +53,8 @@ except NameError:
     else:
         PROJECT_ROOT = Path.cwd().parent.parent  # local notebook CWD is examples/{name}/
 EXTENSION_PATH = str(PROJECT_ROOT / "build" / "muninn")
-MODELS_DIR = PROJECT_ROOT / "models"
+# GGUF model directory: ~/.claude/cache/models (override via MUNINN_MODELS_DIR).
+MODELS_DIR = Path(os.environ.get("MUNINN_MODELS_DIR", str(Path.home() / ".claude" / "cache" / "models")))
 
 
 # ── Model Definitions ──────────────────────────────────────────────

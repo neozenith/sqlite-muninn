@@ -10,6 +10,7 @@ extern void test_begin(const char *name);
 extern void test_pass(void);
 extern void test_fail(const char *file, int line, const char *expr);
 extern int test_failed_flag(void);
+extern int test_should_run(const char *name);
 
 #define ASSERT(expr)                                                                                                   \
     do {                                                                                                               \
@@ -39,8 +40,10 @@ extern int test_failed_flag(void);
 
 #define RUN_TEST(fn)                                                                                                   \
     do {                                                                                                               \
-        test_begin(#fn);                                                                                               \
-        fn();                                                                                                          \
+        if (test_should_run(#fn)) {                                                                                    \
+            test_begin(#fn);                                                                                           \
+            fn();                                                                                                      \
+        }                                                                                                              \
     } while (0)
 
 /* Wrapper that calls test_pass() only if no ASSERT failed */

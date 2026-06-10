@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -36,8 +37,8 @@ EMBEDDING_MODELS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Resolved GGUF model paths (derived from GGUF_MODELS_DIR + gguf_file).
-GGUF_MODELS_DIR = PROJECT_ROOT / "models"
+# GGUF model directory: ~/.claude/cache/models (override via MUNINN_MODELS_DIR).
+GGUF_MODELS_DIR = Path(os.environ.get("MUNINN_MODELS_DIR", str(Path.home() / ".claude" / "cache" / "models")))
 
 # ── NER/RE model limits ─────────────────────────────────────────
 # GLiNER truncates at 384 word-level tokens (\w+(?:-\w+)*|\S regex —
@@ -141,7 +142,7 @@ GLINER2_RE_LABELS = [
 
 MUNINN_CHAT_MODEL_NAME = "Qwen3.5-4B"
 MUNINN_CHAT_MODEL_FILE = "Qwen3.5-4B-Q4_K_M.gguf"
-MUNINN_CHAT_MODELS_DIR = PROJECT_ROOT / "models"
+MUNINN_CHAT_MODELS_DIR = GGUF_MODELS_DIR
 
 # ── Phase names (for _build_progress table and manifest display) ─
 
