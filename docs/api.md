@@ -578,7 +578,7 @@ Performance: one pass over the loaded adjacency, O(E) time and O(k) extra memory
 
 **See also**: [`graph_leiden`](#graph_leiden), [`muninn_label_groups`](#muninn_label_groups), [Conductance guide](centrality-community.md#conductance-scoring-a-partition) for comparing declared against discovered groupings.
 
-Since: v0.5.0
+Since: v0.6.0
 
 ---
 
