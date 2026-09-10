@@ -220,7 +220,9 @@ int csr_apply_delta(const CsrArray *old_csr, const CsrDelta *deltas, int delta_c
     for (int d = 0; d < delta_count; d++) {
         int32_t src = deltas[d].src_idx;
         int32_t dst = deltas[d].dst_idx;
-        if (src < 0 || src >= new_node_count || dst < 0 || dst >= new_node_count)
+        /* src indexes the rows of this CSR (block-local when blocked); dst is
+         * always a global node index and may legitimately exceed new_node_count. */
+        if (src < 0 || src >= new_node_count || dst < 0)
             continue;
 
         if (deltas[d].op == 2) {
