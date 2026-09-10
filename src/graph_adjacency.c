@@ -1466,9 +1466,10 @@ static void gadj_adj_add(GraphAdjList *adj, int target, double weight) {
     adj->count++;
 }
 
-/* Load GraphData from shadow tables (assumes data is fresh) */
+/* Load GraphData from shadow tables (assumes data is fresh).
+ * g must already be initialised by the caller (graph_data_init); calling it
+ * again here leaked the first allocation set on every adjacency-VT load. */
 static int load_graph_from_shadow(sqlite3 *db, const char *name, GraphData *g, char **pzErrMsg) {
-    graph_data_init(g);
     int rc;
 
     /* Load node registry */
@@ -1570,7 +1571,6 @@ int graph_data_load_from_adjacency(sqlite3 *db, const char *vtab_name, GraphData
         config.weight_col = weight_col;
         config.direction = "both";
 
-        graph_data_init(g);
         int rc = graph_data_load(db, &config, g, pzErrMsg);
 
         sqlite3_free(edge_table);

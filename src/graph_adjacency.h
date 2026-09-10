@@ -34,6 +34,7 @@ int is_graph_adjacency(sqlite3 *db, const char *name);
  * loading from the original edge table. When fresh, loads from
  * shadow table BLOBs (much faster than SQL scan).
  *
+ * g must be initialised with graph_data_init() before the call.
  * Returns SQLITE_OK on success. Caller must call graph_data_destroy().
  */
 int graph_data_load_from_adjacency(sqlite3 *db, const char *vtab_name, GraphData *g, char **pzErrMsg);

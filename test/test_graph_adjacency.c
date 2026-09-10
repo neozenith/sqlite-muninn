@@ -378,7 +378,8 @@ TEST(test_adj_load_graph_data_missing_vt) {
 
 TEST(test_adj_reconnect_persists) {
     /* xConnect path: a second connection to a file-backed DB sees the cache */
-    const char *path = "tmp/test_graph_adjacency_reconnect.db";
+    /* build/ always exists when test_runner runs; tmp/ does not on CI runners */
+    const char *path = "build/test_graph_adjacency_reconnect.db";
     sqlite3 *db = NULL;
     sqlite3_open(path, &db);
     adjacency_register_module(db);
