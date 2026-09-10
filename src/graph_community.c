@@ -1,8 +1,10 @@
 /*
- * graph_community.c — Community detection table-valued functions
+ * graph_community.c — Community detection and partition-quality TVFs
  *
  * TVFs:
- *   graph_leiden — Leiden community detection (Traag et al., 2019)
+ *   graph_leiden      — Leiden community detection (Traag et al., 2019)
+ *   graph_conductance — per-group conductance of any node membership
+ *                       (Kannan, Vempala & Vetta, 2004)
  *
  * The Leiden algorithm iterates three phases:
  *   1. Local moving — each node moves to best neighboring community
@@ -662,9 +664,399 @@ static sqlite3_module graph_leiden_module = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
+ * Conductance
+ * ═══════════════════════════════════════════════════════════════ */
+
+/*
+ * graph_data_load() stores each edge row once in out[src] (and mirrors it
+ * into in[dst] when direction is "both" or "reverse"). Walking out[] alone
+ * therefore visits every row exactly once; for "reverse" out[] is empty and
+ * in[] holds the rows instead.
+ */
+int run_conductance(const GraphData *g, const int *group, int k, const char *direction, Conductance *out) {
+    int N = g->node_count;
+    for (int c = 0; c < k; c++) {
+        out[c].size = 0;
+        out[c].internal = 0.0;
+        out[c].cut = 0.0;
+        out[c].vol = 0.0;
+        out[c].phi = 0.0;
+    }
+    if (N == 0 || k == 0)
+        return SQLITE_OK;
+
+    for (int i = 0; i < N; i++) {
+        if (group[i] >= 0 && group[i] < k)
+            out[group[i]].size++;
+    }
+
+    int use_in = direction && strcmp(direction, "reverse") == 0;
+    double total_vol = 0.0;
+    for (int u = 0; u < N; u++) {
+        const GraphAdjList *adj = use_in ? &g->in[u] : &g->out[u];
+        for (int e = 0; e < adj->count; e++) {
+            int v = adj->edges[e].target;
+            double w = adj->edges[e].weight;
+            total_vol += 2.0 * w;
+            int gu = group[u], gv = group[v];
+            if (gu >= 0 && gu == gv) {
+                out[gu].internal += w;
+            } else {
+                if (gu >= 0)
+                    out[gu].cut += w;
+                if (gv >= 0)
+                    out[gv].cut += w;
+            }
+        }
+    }
+
+    for (int c = 0; c < k; c++) {
+        out[c].vol = 2.0 * out[c].internal + out[c].cut;
+        double rest = total_vol - out[c].vol;
+        double denom = out[c].vol < rest ? out[c].vol : rest;
+        out[c].phi = denom > 0.0 ? out[c].cut / denom : 0.0;
+    }
+    return SQLITE_OK;
+}
+
+/*
+ * Read (group, member) rows from membership_table and assign a group index
+ * to every loaded graph node. Group values are read as TEXT and interned via
+ * a second GraphData (which is a string-interning hash map), so INTEGER
+ * community IDs and TEXT labels take the same path. Members absent from the
+ * graph are ignored; a node listed more than once keeps its first group.
+ *
+ * On success *groups holds the interned group ids (groups->ids[c],
+ * groups->node_count == k). Caller must graph_data_destroy(groups).
+ */
+static int load_membership(sqlite3 *db, const char *table, const char *group_col, const char *member_col,
+                           const GraphData *g, int *group, GraphData *groups, char **pzErrMsg) {
+    if (id_validate(table) != 0 || id_validate(group_col) != 0 || id_validate(member_col) != 0) {
+        *pzErrMsg = sqlite3_mprintf("graph_conductance: invalid membership table/column identifier");
+        return SQLITE_ERROR;
+    }
+    char *sql = sqlite3_mprintf("SELECT \"%w\", \"%w\" FROM \"%w\"", group_col, member_col, table);
+    if (!sql)
+        return SQLITE_NOMEM;
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    sqlite3_free(sql);
+    if (rc != SQLITE_OK) {
+        *pzErrMsg = sqlite3_mprintf("graph_conductance: %s", sqlite3_errmsg(db));
+        return rc;
+    }
+
+    for (int i = 0; i < g->node_count; i++)
+        group[i] = -1;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *gid = (const char *)sqlite3_column_text(stmt, 0);
+        const char *member = (const char *)sqlite3_column_text(stmt, 1);
+        if (!gid || !member)
+            continue;
+        int node = graph_data_find(g, member);
+        if (node < 0 || group[node] >= 0)
+            continue;
+        group[node] = graph_data_find_or_add(groups, gid);
+    }
+    sqlite3_finalize(stmt);
+    return SQLITE_OK;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * TVF: graph_conductance
+ * ═══════════════════════════════════════════════════════════════ */
+
+typedef struct {
+    char *group_id;
+    Conductance c;
+} ConductanceRow;
+
+enum {
+    CND_COL_GROUP_ID = 0,
+    CND_COL_SIZE,
+    CND_COL_INTERNAL,
+    CND_COL_CUT,
+    CND_COL_VOL,
+    CND_COL_PHI,
+    CND_COL_EDGE_TABLE,       /* hidden */
+    CND_COL_SRC_COL,          /* hidden */
+    CND_COL_DST_COL,          /* hidden */
+    CND_COL_WEIGHT_COL,       /* hidden */
+    CND_COL_DIRECTION,        /* hidden */
+    CND_COL_TIMESTAMP_COL,    /* hidden */
+    CND_COL_TIME_START,       /* hidden */
+    CND_COL_TIME_END,         /* hidden */
+    CND_COL_MEMBERSHIP_TABLE, /* hidden */
+    CND_COL_GROUP_COL,        /* hidden */
+    CND_COL_MEMBER_COL,       /* hidden */
+};
+
+/* Required: edge_table, src_col, dst_col, membership_table, group_col, member_col */
+#define CND_REQUIRED_MASK                                                                                              \
+    ((1 << (CND_COL_EDGE_TABLE - CND_COL_EDGE_TABLE)) | (1 << (CND_COL_SRC_COL - CND_COL_EDGE_TABLE)) |                \
+     (1 << (CND_COL_DST_COL - CND_COL_EDGE_TABLE)) | (1 << (CND_COL_MEMBERSHIP_TABLE - CND_COL_EDGE_TABLE)) |          \
+     (1 << (CND_COL_GROUP_COL - CND_COL_EDGE_TABLE)) | (1 << (CND_COL_MEMBER_COL - CND_COL_EDGE_TABLE)))
+
+typedef struct {
+    sqlite3_vtab_cursor base;
+    ConductanceRow *rows;
+    int count;
+    int current;
+    int eof;
+} ConductanceCursor;
+
+static void cnd_rows_destroy(ConductanceCursor *cur) {
+    for (int i = 0; i < cur->count; i++)
+        free(cur->rows[i].group_id);
+    free(cur->rows);
+    cur->rows = NULL;
+    cur->count = 0;
+}
+
+static int cnd_connect(sqlite3 *db, void *pAux, int argc, const char *const *argv, sqlite3_vtab **ppVtab,
+                       char **pzErr) {
+    (void)pAux;
+    (void)argc;
+    (void)argv;
+    (void)pzErr;
+    int rc = sqlite3_declare_vtab(db, "CREATE TABLE x("
+                                      "  group_id TEXT, size INTEGER, internal REAL, cut REAL, vol REAL, phi REAL,"
+                                      "  edge_table TEXT HIDDEN, src_col TEXT HIDDEN, dst_col TEXT HIDDEN,"
+                                      "  weight_col TEXT HIDDEN, direction TEXT HIDDEN, timestamp_col TEXT HIDDEN,"
+                                      "  time_start HIDDEN, time_end HIDDEN,"
+                                      "  membership_table TEXT HIDDEN, group_col TEXT HIDDEN, member_col TEXT HIDDEN"
+                                      ")");
+    if (rc != SQLITE_OK)
+        return rc;
+
+    CommunityVtab *vtab = (CommunityVtab *)sqlite3_malloc(sizeof(CommunityVtab));
+    if (!vtab)
+        return SQLITE_NOMEM;
+    memset(vtab, 0, sizeof(CommunityVtab));
+    vtab->db = db;
+    *ppVtab = &vtab->base;
+    return SQLITE_OK;
+}
+
+static int cnd_best_index(sqlite3_vtab *pVTab, sqlite3_index_info *pIdxInfo) {
+    (void)pVTab;
+    return graph_best_index_common(pIdxInfo, CND_COL_EDGE_TABLE, CND_COL_MEMBER_COL, CND_REQUIRED_MASK, 2000.0);
+}
+
+static int cnd_open(sqlite3_vtab *pVTab, sqlite3_vtab_cursor **ppCursor) {
+    (void)pVTab;
+    ConductanceCursor *cur = (ConductanceCursor *)calloc(1, sizeof(ConductanceCursor));
+    if (!cur)
+        return SQLITE_NOMEM;
+    cur->eof = 1;
+    *ppCursor = &cur->base;
+    return SQLITE_OK;
+}
+
+static int cnd_close(sqlite3_vtab_cursor *pCursor) {
+    ConductanceCursor *cur = (ConductanceCursor *)pCursor;
+    cnd_rows_destroy(cur);
+    free(cur);
+    return SQLITE_OK;
+}
+
+static int cnd_filter(sqlite3_vtab_cursor *pCursor, int idxNum, const char *idxStr, int argc, sqlite3_value **argv) {
+    (void)idxStr;
+    ConductanceCursor *cur = (ConductanceCursor *)pCursor;
+    CommunityVtab *vtab = (CommunityVtab *)pCursor->pVtab;
+
+    cnd_rows_destroy(cur);
+    cur->current = 0;
+    cur->eof = 1;
+
+    GraphLoadConfig config;
+    memset(&config, 0, sizeof(config));
+    const char *membership_table = NULL;
+    const char *group_col = NULL;
+    const char *member_col = NULL;
+    int pos = 0;
+
+#define CND_N_HIDDEN (CND_COL_MEMBER_COL - CND_COL_EDGE_TABLE + 1)
+    for (int bit = 0; bit < CND_N_HIDDEN && pos < argc; bit++) {
+        if (!(idxNum & (1 << bit)))
+            continue;
+        switch (bit + CND_COL_EDGE_TABLE) {
+        case CND_COL_EDGE_TABLE:
+            config.edge_table = graph_safe_text(argv[pos]);
+            break;
+        case CND_COL_SRC_COL:
+            config.src_col = graph_safe_text(argv[pos]);
+            break;
+        case CND_COL_DST_COL:
+            config.dst_col = graph_safe_text(argv[pos]);
+            break;
+        case CND_COL_WEIGHT_COL:
+            config.weight_col = graph_safe_text(argv[pos]);
+            break;
+        case CND_COL_DIRECTION:
+            config.direction = graph_safe_text(argv[pos]);
+            break;
+        case CND_COL_TIMESTAMP_COL:
+            config.timestamp_col = graph_safe_text(argv[pos]);
+            break;
+        case CND_COL_TIME_START:
+            config.time_start = argv[pos];
+            break;
+        case CND_COL_TIME_END:
+            config.time_end = argv[pos];
+            break;
+        case CND_COL_MEMBERSHIP_TABLE:
+            membership_table = graph_safe_text(argv[pos]);
+            break;
+        case CND_COL_GROUP_COL:
+            group_col = graph_safe_text(argv[pos]);
+            break;
+        case CND_COL_MEMBER_COL:
+            member_col = graph_safe_text(argv[pos]);
+            break;
+        }
+        pos++;
+    }
+
+    if (!config.edge_table || !membership_table || !group_col || !member_col) {
+        vtab->base.zErrMsg = sqlite3_mprintf("graph_conductance: edge_table, src_col, dst_col, membership_table, "
+                                             "group_col and member_col are required");
+        return SQLITE_ERROR;
+    }
+    if (!config.direction)
+        config.direction = "both";
+
+    GraphData g;
+    graph_data_init(&g);
+    char *errmsg = NULL;
+    int rc;
+    if (is_graph_adjacency(vtab->db, config.edge_table)) {
+        rc = graph_data_load_from_adjacency(vtab->db, config.edge_table, &g, &errmsg);
+    } else {
+        rc = graph_data_load(vtab->db, &config, &g, &errmsg);
+    }
+    if (rc != SQLITE_OK) {
+        vtab->base.zErrMsg = errmsg ? errmsg : sqlite3_mprintf("graph_conductance: failed to load graph");
+        graph_data_destroy(&g);
+        return SQLITE_ERROR;
+    }
+
+    int N = g.node_count;
+    int *group = (int *)malloc((size_t)(N > 0 ? N : 1) * sizeof(int));
+    GraphData groups;
+    graph_data_init(&groups);
+    if (!group) {
+        graph_data_destroy(&groups);
+        graph_data_destroy(&g);
+        return SQLITE_NOMEM;
+    }
+
+    rc = load_membership(vtab->db, membership_table, group_col, member_col, &g, group, &groups, &errmsg);
+    if (rc != SQLITE_OK) {
+        vtab->base.zErrMsg = errmsg;
+        free(group);
+        graph_data_destroy(&groups);
+        graph_data_destroy(&g);
+        return SQLITE_ERROR;
+    }
+
+    int k = groups.node_count;
+    if (k > 0) {
+        Conductance *scores = (Conductance *)malloc((size_t)k * sizeof(Conductance));
+        cur->rows = (ConductanceRow *)calloc((size_t)k, sizeof(ConductanceRow));
+        if (!scores || !cur->rows) {
+            free(scores);
+            free(group);
+            graph_data_destroy(&groups);
+            graph_data_destroy(&g);
+            return SQLITE_NOMEM;
+        }
+        run_conductance(&g, group, k, config.direction, scores);
+        for (int c = 0; c < k; c++) {
+            cur->rows[c].group_id = strdup(groups.ids[c]);
+            cur->rows[c].c = scores[c];
+        }
+        cur->count = k;
+        free(scores);
+    }
+
+    free(group);
+    graph_data_destroy(&groups);
+    graph_data_destroy(&g);
+
+    cur->eof = (cur->count == 0);
+    return SQLITE_OK;
+}
+
+static int cnd_next(sqlite3_vtab_cursor *p) {
+    ConductanceCursor *cur = (ConductanceCursor *)p;
+    cur->current++;
+    cur->eof = (cur->current >= cur->count);
+    return SQLITE_OK;
+}
+
+static int cnd_eof(sqlite3_vtab_cursor *p) {
+    return ((ConductanceCursor *)p)->eof;
+}
+
+static int cnd_column(sqlite3_vtab_cursor *p, sqlite3_context *ctx, int col) {
+    ConductanceCursor *cur = (ConductanceCursor *)p;
+    ConductanceRow *row = &cur->rows[cur->current];
+    switch (col) {
+    case CND_COL_GROUP_ID:
+        sqlite3_result_text(ctx, row->group_id, -1, SQLITE_TRANSIENT);
+        break;
+    case CND_COL_SIZE:
+        sqlite3_result_int64(ctx, (sqlite3_int64)row->c.size);
+        break;
+    case CND_COL_INTERNAL:
+        sqlite3_result_double(ctx, row->c.internal);
+        break;
+    case CND_COL_CUT:
+        sqlite3_result_double(ctx, row->c.cut);
+        break;
+    case CND_COL_VOL:
+        sqlite3_result_double(ctx, row->c.vol);
+        break;
+    case CND_COL_PHI:
+        sqlite3_result_double(ctx, row->c.phi);
+        break;
+    default:
+        sqlite3_result_null(ctx);
+        break;
+    }
+    return SQLITE_OK;
+}
+
+static int cnd_rowid(sqlite3_vtab_cursor *p, sqlite3_int64 *pRowid) {
+    *pRowid = ((ConductanceCursor *)p)->current;
+    return SQLITE_OK;
+}
+
+static sqlite3_module graph_conductance_module = {
+    .iVersion = 0,
+    .xCreate = NULL,
+    .xConnect = cnd_connect,
+    .xBestIndex = cnd_best_index,
+    .xDisconnect = comm_disconnect,
+    .xDestroy = comm_disconnect,
+    .xOpen = cnd_open,
+    .xClose = cnd_close,
+    .xFilter = cnd_filter,
+    .xNext = cnd_next,
+    .xEof = cnd_eof,
+    .xColumn = cnd_column,
+    .xRowid = cnd_rowid,
+};
+
+/* ═══════════════════════════════════════════════════════════════
  * Registration
  * ═══════════════════════════════════════════════════════════════ */
 
 int community_register_tvfs(sqlite3 *db) {
-    return sqlite3_create_module(db, "graph_leiden", &graph_leiden_module, NULL);
+    int rc = sqlite3_create_module(db, "graph_leiden", &graph_leiden_module, NULL);
+    if (rc != SQLITE_OK)
+        return rc;
+    return sqlite3_create_module(db, "graph_conductance", &graph_conductance_module, NULL);
 }

@@ -60,6 +60,7 @@ extern void test_hnsw_algo(void);
 extern void test_id_validate(void);
 extern void test_graph_load(void);
 extern void test_graph_csr(void);
+extern void test_graph_community(void);
 extern void test_graph_selector(void);
 extern void test_llama_embed(void);
 extern void test_llama_chat(void);
@@ -94,6 +95,9 @@ int main(void) {
 
     printf("\n[graph_csr]\n");
     test_graph_csr();
+
+    printf("\n[graph_community]\n");
+    test_graph_community();
 
     printf("\n[graph_selector]\n");
     test_graph_selector();

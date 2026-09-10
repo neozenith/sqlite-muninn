@@ -5,7 +5,7 @@
  * - hnsw_index virtual table (HNSW vector index)
  * - graph_bfs, graph_dfs, graph_shortest_path, graph_components, graph_pagerank TVFs
  * - graph_degree, graph_node_betweenness, graph_edge_betweenness, graph_closeness centrality TVFs
- * - graph_leiden community detection TVF
+ * - graph_leiden community detection TVF, graph_conductance partition-quality TVF
  * - graph_adjacency virtual table (persistent CSR adjacency cache)
  * - graph_select TVF (dbt-style node selection)
  * - node2vec_train() scalar function
