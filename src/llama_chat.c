@@ -55,7 +55,7 @@ static int load_chat_model(const char *path, int n_ctx, LoadedChatModel *out, ch
     if (ngl_env)
         ngl = atoi(ngl_env);
     mparams.n_gpu_layers = ngl;
-    mparams.use_mmap = 1;
+    mparams.load_mode = LLAMA_LOAD_MODE_MMAP;
 
     struct llama_model *model = llama_model_load_from_file(path, mparams);
     if (!model) {
