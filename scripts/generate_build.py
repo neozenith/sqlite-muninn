@@ -49,6 +49,8 @@ TEST_LINK_SOURCES = [
     "src/id_validate.c",
     "src/graph_load.c",
     "src/graph_csr.c",
+    "src/graph_adjacency.c",
+    "src/graph_community.c",
     "src/graph_selector_parse.c",
     "src/graph_selector_eval.c",
     "src/llama_common.c",
@@ -74,6 +76,7 @@ CMAKE_FLAGS_BASE = {
     "LLAMA_BUILD_TOOLS": "OFF",
     "LLAMA_BUILD_EXAMPLES": "OFF",
     "LLAMA_BUILD_SERVER": "OFF",
+    "LLAMA_BUILD_APP": "OFF",
     "CMAKE_BUILD_TYPE": "MinSizeRel",
 }
 

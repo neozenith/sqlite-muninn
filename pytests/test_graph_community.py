@@ -1,8 +1,12 @@
 """
 Integration tests for graph community detection table-valued functions.
 
-Tests graph_leiden on synthetic graphs with known community structure.
+Tests graph_leiden on synthetic graphs with known community structure, and
+graph_conductance against the two-triangle graph from docs/centrality-community.md.
 """
+
+import pysqlite3 as sqlite3
+import pytest
 
 
 def create_barbell_graph(conn):
@@ -285,3 +289,211 @@ class TestGraphLeiden:
 
         comm_ids = [r[0] for r in results]
         assert comm_ids == list(range(len(comm_ids)))
+
+
+# ═══════════════════════════════════════════════════════════════
+# graph_conductance
+# ═══════════════════════════════════════════════════════════════
+
+
+def create_two_triangles(conn):
+    """
+    Two triangles (alice, bob, carol, dave) and (eve, frank, grace) joined by
+    the single bridge dave -> eve. Same graph as docs/centrality-community.md.
+
+    total_vol = 18. left: internal 5, cut 1, vol 11. right: internal 3, cut 1, vol 7.
+    """
+    conn.execute("CREATE TABLE edges (src TEXT, dst TEXT, weight REAL DEFAULT 1.0, ts TEXT)")
+    edges = [
+        ("alice", "bob", 1.0, "2026-01-10"),
+        ("alice", "carol", 1.0, "2026-01-10"),
+        ("bob", "carol", 1.0, "2026-01-10"),
+        ("bob", "dave", 1.0, "2026-02-10"),
+        ("carol", "dave", 1.0, "2026-02-10"),
+        ("dave", "eve", 1.0, "2026-03-10"),  # bridge
+        ("eve", "frank", 1.0, "2026-04-10"),
+        ("eve", "grace", 1.0, "2026-04-10"),
+        ("frank", "grace", 1.0, "2026-04-10"),
+    ]
+    conn.executemany("INSERT INTO edges VALUES (?, ?, ?, ?)", edges)
+
+
+def create_assignment(conn):
+    conn.execute("CREATE TABLE assignment (node TEXT, team TEXT)")
+    conn.executemany(
+        "INSERT INTO assignment VALUES (?, ?)",
+        [
+            ("alice", "left"),
+            ("bob", "left"),
+            ("carol", "left"),
+            ("dave", "left"),
+            ("eve", "right"),
+            ("frank", "right"),
+            ("grace", "right"),
+        ],
+    )
+
+
+CONDUCTANCE_SQL = (
+    "SELECT group_id, size, internal, cut, vol, phi FROM graph_conductance"
+    " WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'"
+    "   AND direction = 'both'"
+    "   AND membership_table = 'assignment' AND group_col = 'team' AND member_col = 'node'"
+    " ORDER BY group_id"
+)
+
+
+class TestGraphConductance:
+    def test_declared_membership_matches_issue_table(self, conn):
+        """Values from the issue #31 worked example."""
+        create_two_triangles(conn)
+        create_assignment(conn)
+        rows = conn.execute(CONDUCTANCE_SQL).fetchall()
+
+        assert [r[0] for r in rows] == ["left", "right"]
+        left, right = rows
+        assert left[1:5] == (4, 5.0, 1.0, 11.0)
+        assert right[1:5] == (3, 3.0, 1.0, 7.0)
+        assert abs(left[5] - 1 / 7) < 1e-9
+        assert abs(right[5] - 1 / 7) < 1e-9
+
+    def test_output_columns_and_types(self, conn):
+        create_two_triangles(conn)
+        create_assignment(conn)
+        cur = conn.execute(CONDUCTANCE_SQL)
+        assert [d[0] for d in cur.description] == ["group_id", "size", "internal", "cut", "vol", "phi"]
+        row = cur.fetchone()
+        assert isinstance(row[0], str)
+        assert isinstance(row[1], int)
+        assert all(isinstance(v, float) for v in row[2:])
+
+    def test_scores_leiden_partition(self, conn):
+        """Composition with graph_leiden: INTEGER community IDs are accepted."""
+        create_two_triangles(conn)
+        conn.execute(
+            "CREATE TEMP TABLE discovered AS"
+            " SELECT node, community_id FROM graph_leiden"
+            "  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'"
+            "    AND direction = 'both' AND resolution = 1.0"
+        )
+        rows = conn.execute(
+            "SELECT group_id, size, phi FROM graph_conductance"
+            " WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'"
+            "   AND direction = 'both'"
+            "   AND membership_table = 'discovered'"
+            "   AND group_col = 'community_id' AND member_col = 'node'"
+            " ORDER BY group_id"
+        ).fetchall()
+
+        # Leiden finds the two triangles; both sides have phi = 1/7
+        assert len(rows) == 2
+        assert {r[0] for r in rows} == {"0", "1"}
+        assert sum(r[1] for r in rows) == 7
+        assert all(abs(r[2] - 1 / 7) < 1e-9 for r in rows)
+
+    def test_ungrouped_nodes_count_toward_cut(self, conn):
+        create_two_triangles(conn)
+        create_assignment(conn)
+        conn.execute("DELETE FROM assignment WHERE node = 'grace'")
+        rows = {r[0]: r[1:] for r in conn.execute(CONDUCTANCE_SQL).fetchall()}
+
+        assert rows["left"] == (4, 5.0, 1.0, 11.0, rows["left"][4])
+        assert abs(rows["left"][4] - 1 / 7) < 1e-9
+        # right = {eve, frank}: internal 1, cut 3 (dave-eve, eve-grace, frank-grace), vol 5
+        assert rows["right"][:4] == (2, 1.0, 3.0, 5.0)
+        assert abs(rows["right"][4] - 3 / 5) < 1e-9
+
+    def test_members_not_in_graph_are_ignored(self, conn):
+        create_two_triangles(conn)
+        create_assignment(conn)
+        conn.execute("INSERT INTO assignment VALUES ('zed', 'left'), ('nobody', 'ghost')")
+        rows = conn.execute(CONDUCTANCE_SQL).fetchall()
+
+        assert [r[0] for r in rows] == ["left", "right"]
+        assert rows[0][1] == 4  # zed did not inflate size
+
+    def test_singleton_with_no_internal_edges_is_one(self, conn):
+        create_two_triangles(conn)
+        conn.execute("CREATE TABLE assignment (node TEXT, team TEXT)")
+        conn.execute("INSERT INTO assignment VALUES ('dave', 'solo')")
+        (row,) = conn.execute(CONDUCTANCE_SQL).fetchall()
+        assert row == ("solo", 1, 0.0, 3.0, 3.0, 1.0)
+
+    def test_whole_graph_is_zero_not_nan(self, conn):
+        create_two_triangles(conn)
+        conn.execute("CREATE TABLE assignment (node TEXT, team TEXT)")
+        conn.execute("INSERT INTO assignment SELECT DISTINCT src, 'all' FROM edges")
+        conn.execute("INSERT INTO assignment SELECT DISTINCT dst, 'all' FROM edges")
+        (row,) = conn.execute(CONDUCTANCE_SQL).fetchall()
+        assert row == ("all", 7, 9.0, 0.0, 18.0, 0.0)
+
+    def test_weighted(self, conn):
+        create_two_triangles(conn)
+        create_assignment(conn)
+        conn.execute("UPDATE edges SET weight = 0.25 WHERE src = 'dave' AND dst = 'eve'")
+        rows = conn.execute(
+            "SELECT group_id, internal, cut, vol, phi FROM graph_conductance"
+            " WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'"
+            "   AND weight_col = 'weight' AND direction = 'both'"
+            "   AND membership_table = 'assignment' AND group_col = 'team' AND member_col = 'node'"
+            " ORDER BY group_id"
+        ).fetchall()
+        left, right = rows
+        assert left[1:4] == (5.0, 0.25, 10.25)
+        assert right[1:4] == (3.0, 0.25, 6.25)
+        assert abs(left[4] - 0.25 / 6.25) < 1e-9
+        assert abs(right[4] - 0.25 / 6.25) < 1e-9
+
+    def test_temporal_filter(self, conn):
+        """Only January edges: the left triangle exists, no bridge, so phi = 0."""
+        create_two_triangles(conn)
+        create_assignment(conn)
+        rows = conn.execute(
+            "SELECT group_id, size, internal, cut, phi FROM graph_conductance"
+            " WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'"
+            "   AND direction = 'both' AND timestamp_col = 'ts'"
+            "   AND time_start = '2026-01-01' AND time_end = '2026-01-31'"
+            "   AND membership_table = 'assignment' AND group_col = 'team' AND member_col = 'node'"
+        ).fetchall()
+        assert rows == [("left", 3, 3.0, 0.0, 0.0)]
+
+    def test_volume_floor_filter(self, conn):
+        create_two_triangles(conn)
+        create_assignment(conn)
+        rows = conn.execute(CONDUCTANCE_SQL.replace(" ORDER BY", " AND vol >= 10 ORDER BY")).fetchall()
+        assert [r[0] for r in rows] == ["left"]
+
+    def test_direction_forward_and_reverse_match_both(self, conn):
+        create_two_triangles(conn)
+        create_assignment(conn)
+        both = conn.execute(CONDUCTANCE_SQL).fetchall()
+        fwd = conn.execute(CONDUCTANCE_SQL.replace("'both'", "'forward'")).fetchall()
+        rev = conn.execute(CONDUCTANCE_SQL.replace("'both'", "'reverse'")).fetchall()
+        assert fwd == both
+        assert rev == both
+
+    def test_graph_adjacency_as_edge_table(self, conn):
+        create_two_triangles(conn)
+        create_assignment(conn)
+        conn.execute("CREATE VIRTUAL TABLE g USING graph_adjacency(edge_table='edges', src_col='src', dst_col='dst')")
+        rows = conn.execute(CONDUCTANCE_SQL.replace("edge_table = 'edges'", "edge_table = 'g'")).fetchall()
+        assert rows == conn.execute(CONDUCTANCE_SQL).fetchall()
+
+    def test_empty_membership_yields_no_rows(self, conn):
+        create_two_triangles(conn)
+        conn.execute("CREATE TABLE assignment (node TEXT, team TEXT)")
+        assert conn.execute(CONDUCTANCE_SQL).fetchall() == []
+
+    def test_missing_membership_constraints_errors(self, conn):
+        create_two_triangles(conn)
+        with pytest.raises(sqlite3.OperationalError, match="membership_table"):
+            conn.execute(
+                "SELECT * FROM graph_conductance WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'"
+            ).fetchall()
+
+    def test_invalid_identifier_rejected(self, conn):
+        create_two_triangles(conn)
+        create_assignment(conn)
+        with pytest.raises(sqlite3.OperationalError, match="invalid"):
+            conn.execute(CONDUCTANCE_SQL.replace("'assignment'", "'assignment; DROP TABLE edges'")).fetchall()
+        assert conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 9

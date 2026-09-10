@@ -224,38 +224,50 @@ static int install_triggers(sqlite3 *db, const char *vtab_name, const char *edge
                             const char *dst_col, const char *weight_col) {
     char *sql;
     int rc;
-    const char *w_expr = weight_col ? weight_col : "NULL";
+    /* Weight expression for the delta row. Unweighted graphs log 1.0, the same
+     * default graph_data_load() assigns, so the delta and the cache agree. */
+    char *new_w = weight_col ? sqlite3_mprintf("NEW.\"%w\"", weight_col) : sqlite3_mprintf("1.0");
+    char *old_w = weight_col ? sqlite3_mprintf("OLD.\"%w\"", weight_col) : sqlite3_mprintf("1.0");
+    if (!new_w || !old_w) {
+        sqlite3_free(new_w);
+        sqlite3_free(old_w);
+        return SQLITE_NOMEM;
+    }
 
     /* AFTER INSERT */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ai\" AFTER INSERT ON \"%w\" BEGIN "
                           "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
-                          "VALUES (NEW.\"%w\", NEW.\"%w\", NEW.\"%w\", 1); END",
-                          vtab_name, edge_table, vtab_name, src_col, dst_col, w_expr);
+                          "VALUES (NEW.\"%w\", NEW.\"%w\", %s, 1); END",
+                          vtab_name, edge_table, vtab_name, src_col, dst_col, new_w);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
-        return rc;
+        goto done;
 
     /* AFTER DELETE */
     sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_ad\" AFTER DELETE ON \"%w\" BEGIN "
                           "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
-                          "VALUES (OLD.\"%w\", OLD.\"%w\", OLD.\"%w\", 2); END",
-                          vtab_name, edge_table, vtab_name, src_col, dst_col, w_expr);
+                          "VALUES (OLD.\"%w\", OLD.\"%w\", %s, 2); END",
+                          vtab_name, edge_table, vtab_name, src_col, dst_col, old_w);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
     if (rc != SQLITE_OK)
-        return rc;
+        goto done;
 
     /* AFTER UPDATE: log delete of old + insert of new */
-    sql = sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_au\" AFTER UPDATE ON \"%w\" BEGIN "
-                          "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
-                          "VALUES (OLD.\"%w\", OLD.\"%w\", OLD.\"%w\", 2); "
-                          "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
-                          "VALUES (NEW.\"%w\", NEW.\"%w\", NEW.\"%w\", 1); END",
-                          vtab_name, edge_table, vtab_name, src_col, dst_col, w_expr, vtab_name, src_col, dst_col,
-                          w_expr);
+    sql =
+        sqlite3_mprintf("CREATE TRIGGER IF NOT EXISTS \"%w_au\" AFTER UPDATE ON \"%w\" BEGIN "
+                        "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
+                        "VALUES (OLD.\"%w\", OLD.\"%w\", %s, 2); "
+                        "INSERT INTO \"%w_delta\"(src, dst, weight, op) "
+                        "VALUES (NEW.\"%w\", NEW.\"%w\", %s, 1); END",
+                        vtab_name, edge_table, vtab_name, src_col, dst_col, old_w, vtab_name, src_col, dst_col, new_w);
     rc = sqlite3_exec(db, sql, NULL, NULL, NULL);
     sqlite3_free(sql);
+
+done:
+    sqlite3_free(new_w);
+    sqlite3_free(old_w);
     return rc;
 }
 
@@ -1454,9 +1466,10 @@ static void gadj_adj_add(GraphAdjList *adj, int target, double weight) {
     adj->count++;
 }
 
-/* Load GraphData from shadow tables (assumes data is fresh) */
+/* Load GraphData from shadow tables (assumes data is fresh).
+ * g must already be initialised by the caller (graph_data_init); calling it
+ * again here leaked the first allocation set on every adjacency-VT load. */
 static int load_graph_from_shadow(sqlite3 *db, const char *name, GraphData *g, char **pzErrMsg) {
-    graph_data_init(g);
     int rc;
 
     /* Load node registry */
@@ -1558,7 +1571,6 @@ int graph_data_load_from_adjacency(sqlite3 *db, const char *vtab_name, GraphData
         config.weight_col = weight_col;
         config.direction = "both";
 
-        graph_data_init(g);
         int rc = graph_data_load(db, &config, g, pzErrMsg);
 
         sqlite3_free(edge_table);

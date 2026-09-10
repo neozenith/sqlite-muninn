@@ -23,6 +23,8 @@ make clean          # Remove muninn extension and test_runner binaries
 
 **Benchmarks:** `make -C benchmarks help` to see all benchmark targets.
 
+**Outer loop, releases, llama.cpp updates:** see [DEVELOPMENT.md](DEVELOPMENT.md). Run `make ci-all` before marking a PR ready; bump `VERSION` then `make version-stamp` for a release; `make llama-update && make llama-clean && make all` to move the submodule.
+
 ## Architecture
 
 ### Extension Entry Point
@@ -32,7 +34,7 @@ make clean          # Remove muninn extension and test_runner binaries
 1. **`hnsw_register_module`** — the `hnsw_index` virtual table (vector similarity search)
 2. **`graph_register_tvfs`** — graph traversal table-valued functions (BFS, DFS, shortest path, components, PageRank)
 3. **`centrality_register_tvfs`** — centrality measures (`graph_degree`, `graph_betweenness`, `graph_closeness`)
-4. **`community_register_tvfs`** — community detection (`graph_leiden`)
+4. **`community_register_tvfs`** — community detection (`graph_leiden`) and partition scoring (`graph_conductance`)
 5. **`node2vec_register_functions`** — the `node2vec_train()` scalar function
 6. **`gii_register_module`** — Graph Incremental Index (`USING gii(...)` virtual table)
 7. **`embed_register_functions`** — GGUF embedding/reranking (`muninn_embed()`, `muninn_embed_model()`, `muninn_models` VT)

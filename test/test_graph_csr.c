@@ -345,10 +345,51 @@ TEST(csr_block_roundtrip) {
 
 /* ── Entry Point ───────────────────────────────────────────── */
 
+TEST(csr_delta_dst_beyond_block_node_count) {
+    /* Blocked mode: a block holds rows for its own nodes only, but targets are
+     * global indices. A delta whose dst lies outside the block must still apply. */
+    GraphData g;
+    graph_data_init(&g);
+    int a = graph_data_find_or_add(&g, "A");
+    int b = graph_data_find_or_add(&g, "B");
+    graph_data_add_edge(&g, a, b, 1.0, 1, 1);
+
+    CsrArray fwd, rev;
+    ASSERT(csr_build(&g, &fwd, &rev) == 0);
+    ASSERT_EQ_INT(fwd.node_count, 2);
+
+    /* Insert A -> node 4600, far beyond this block's 2 rows */
+    CsrDelta delta = {.src_idx = (int32_t)a, .dst_idx = 4600, .weight = 1.0, .op = 1};
+    CsrArray new_fwd;
+    ASSERT(csr_apply_delta(&fwd, &delta, 1, 2, &new_fwd) == 0);
+    ASSERT_EQ_INT(csr_degree(&new_fwd, a), 2);
+    ASSERT_EQ_INT(new_fwd.targets[new_fwd.offsets[a] + 1], 4600);
+
+    /* Deleting it again by global index also works */
+    CsrDelta del = {.src_idx = (int32_t)a, .dst_idx = 4600, .weight = 1.0, .op = 2};
+    CsrArray after_del;
+    ASSERT(csr_apply_delta(&new_fwd, &del, 1, 2, &after_del) == 0);
+    ASSERT_EQ_INT(csr_degree(&after_del, a), 1);
+
+    /* A src outside the block is still ignored */
+    CsrDelta bad = {.src_idx = 4600, .dst_idx = (int32_t)a, .weight = 1.0, .op = 1};
+    CsrArray unchanged;
+    ASSERT(csr_apply_delta(&fwd, &bad, 1, 2, &unchanged) == 0);
+    ASSERT_EQ_INT(unchanged.edge_count, 1);
+
+    csr_destroy(&fwd);
+    csr_destroy(&rev);
+    csr_destroy(&new_fwd);
+    csr_destroy(&after_del);
+    csr_destroy(&unchanged);
+    graph_data_destroy(&g);
+}
+
 void test_graph_csr(void) {
     RUN_TEST(csr_empty_graph);
     RUN_TEST(csr_triangle);
     RUN_TEST(csr_serialize_roundtrip);
+    RUN_TEST(csr_delta_dst_beyond_block_node_count);
     RUN_TEST(csr_delta_insert);
     RUN_TEST(csr_delta_delete);
     RUN_TEST(csr_delta_add_new_node);

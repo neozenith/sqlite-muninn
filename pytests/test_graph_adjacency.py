@@ -299,3 +299,39 @@ class TestBlockedCSR:
         """Algorithm TVFs should work with blocked CSR storage."""
         rows = adj_conn.execute("SELECT COUNT(*) FROM graph_degree('g', 'src', 'dst', 'weight')").fetchone()
         assert rows[0] == 3  # 3 nodes
+
+
+class TestRegressions:
+    def test_unweighted_insert_after_create(self, conn):
+        """Triggers on an unweighted table used to reference NEW."NULL" and fail every insert."""
+        conn.execute("CREATE TABLE edges (src TEXT, dst TEXT)")
+        conn.execute("INSERT INTO edges VALUES ('A', 'B')")
+        conn.execute("CREATE VIRTUAL TABLE g USING graph_adjacency(edge_table='edges', src_col='src', dst_col='dst')")
+        conn.execute("INSERT INTO edges VALUES ('B', 'C')")
+        conn.execute("UPDATE edges SET dst = 'D' WHERE src = 'A'")
+        conn.execute("DELETE FROM edges WHERE src = 'B'")
+        rows = dict(conn.execute("SELECT node, out_degree FROM g").fetchall())
+        # nodes stay registered after their edges are deleted; only degrees change
+        assert rows == {"A": 1, "B": 0, "C": 0, "D": 0}
+        assert conn.execute("SELECT value FROM g_config WHERE key='edge_count'").fetchone()[0] == "1"
+        assert conn.execute("SELECT weight FROM g_delta").fetchall() == []
+
+    def test_incremental_insert_into_partial_last_block(self, conn):
+        """Deltas targeting nodes in the final (partial) CSR block were dropped by csr_apply_delta."""
+        conn.execute("CREATE TABLE edges (src TEXT, dst TEXT)")
+        conn.executemany("INSERT INTO edges VALUES (?, ?)", [(f"n{i}", f"n{i + 1}") for i in range(5000)])
+        conn.execute("CREATE VIRTUAL TABLE g USING graph_adjacency(edge_table='edges', src_col='src', dst_col='dst')")
+        assert conn.execute("SELECT COUNT(*) FROM g_csr_fwd").fetchone()[0] == 2
+
+        conn.execute("INSERT INTO edges VALUES ('n4500', 'n4600')")  # both in block 1
+        conn.execute("INSERT INTO edges VALUES ('n10', 'n4700')")  # block 0 -> block 1
+        degrees = dict(conn.execute("SELECT node, out_degree FROM g WHERE node IN ('n4500', 'n10')").fetchall())
+        assert degrees == {"n4500": 2, "n10": 2}
+        in_degrees = dict(conn.execute("SELECT node, in_degree FROM g WHERE node IN ('n4600', 'n4700')").fetchall())
+        assert in_degrees == {"n4600": 2, "n4700": 2}
+        # the loader sees the same edges the degree table reports
+        row = conn.execute(
+            "SELECT out_degree FROM graph_degree"
+            " WHERE edge_table='g' AND src_col='src' AND dst_col='dst' AND node='n4500'"
+        ).fetchone()
+        assert row[0] == 2.0

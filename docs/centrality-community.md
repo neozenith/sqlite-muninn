@@ -1,6 +1,7 @@
+| How well separated is a grouping? | [`graph_conductance`](api.md#graph_conductance) |
 # Centrality and Community
 
-Five TVFs for structural graph analysis on any existing edge table: four centrality measures (`graph_degree`, `graph_node_betweenness`, `graph_edge_betweenness`, `graph_closeness`) and Leiden community detection (`graph_leiden`). All support weighted, directed, and temporally filtered inputs through the [shared constraint syntax](api.md#graph-tvf-constraint-syntax).
+Six TVFs for structural graph analysis on any existing edge table: four centrality measures (`graph_degree`, `graph_node_betweenness`, `graph_edge_betweenness`, `graph_closeness`), Leiden community detection (`graph_leiden`), and conductance scoring of any grouping (`graph_conductance`). All support weighted, directed, and temporally filtered inputs through the [shared constraint syntax](api.md#graph-tvf-constraint-syntax).
 
 ## When to use what
 
@@ -242,6 +243,125 @@ Strong edges are more likely to keep endpoints in the same community.
 
 ---
 
+## Conductance: scoring a partition
+
+`graph_leiden` reports a global `modularity`, which is only defined for the partition Leiden itself found and is not comparable across partitions of different granularity. [`graph_conductance`](api.md#graph_conductance) scores **any** node-to-group membership, one row per group, on a fixed scale: `phi = 0` is a closed group, `phi = 1` is a group where every edge leaves. Every other graph TVF derives a labelling; this one scores one.
+
+```text
+internal(S) = summed weight of edges with both endpoints in S
+cut(S)      = summed weight of edges with exactly one endpoint in S
+vol(S)      = 2 * internal(S) + cut(S)
+phi(S)      = cut(S) / min(vol(S), vol(V) - vol(S))
+```
+
+### Score a membership you already have
+
+The membership table can come from anywhere: an org chart, a manual labelling, a different algorithm.
+
+```sql
+CREATE TABLE assignment (node TEXT, team TEXT);
+INSERT INTO assignment VALUES
+  ('alice','left'), ('bob','left'),  ('carol','left'), ('dave','left'),
+  ('eve','right'),  ('frank','right'), ('grace','right');
+
+SELECT group_id, size, internal, cut, vol, round(phi, 3) AS phi
+  FROM graph_conductance
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both'
+    AND membership_table = 'assignment'
+    AND group_col = 'team' AND member_col = 'node'
+  ORDER BY phi;
+```
+
+```text
+group_id  size  internal  cut  vol   phi
+--------  ----  --------  ---  ----  -----
+left      4     5.0       1.0  11.0  0.143
+right     3     3.0       1.0  7.0   0.143
+```
+
+The single bridge edge is the whole cut on both sides. `left` has the larger volume, so its denominator is the *complement's* volume (`18 - 11 = 7`), which is why both groups land on the same `phi`.
+
+### Score the partition Leiden found
+
+`graph_leiden` already emits `(node, community_id)` rows, so the composition is plain SQL:
+
+```sql
+CREATE TEMP TABLE discovered AS
+  SELECT node, community_id FROM graph_leiden
+    WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+      AND direction = 'both' AND resolution = 1.0;
+
+SELECT group_id, size, internal, cut, vol, round(phi, 3) AS phi
+  FROM graph_conductance
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both'
+    AND membership_table = 'discovered'
+    AND group_col = 'community_id' AND member_col = 'node'
+  ORDER BY phi;
+```
+
+```text
+group_id  size  internal  cut  vol   phi
+--------  ----  --------  ---  ----  -----
+0         4     5.0       1.0  11.0  0.143
+1         3     3.0       1.0  7.0   0.143
+```
+
+`group_id` is TEXT verbatim from `group_col`, so Leiden's INTEGER IDs come back as `'0'` and `'1'`.
+
+### Compare a declared membership against a discovered one
+
+Both sides are scored by the same metric on the same scale, which is the point modularity cannot serve:
+
+```sql
+SELECT 'declared' AS source, round(AVG(phi), 3) AS mean_phi, COUNT(*) AS groups
+  FROM graph_conductance
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both' AND membership_table = 'assignment'
+    AND group_col = 'team' AND member_col = 'node'
+UNION ALL
+SELECT 'leiden', round(AVG(phi), 3), COUNT(*)
+  FROM graph_conductance
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both' AND membership_table = 'discovered'
+    AND group_col = 'community_id' AND member_col = 'node';
+```
+
+```text
+source    mean_phi  groups
+--------  --------  ------
+declared  0.143     2
+leiden    0.143     2
+```
+
+### Apply a volume floor
+
+Small groups are degenerate: a singleton with no internal edges scores `phi = 1.0` regardless of quality, and a group that swallows a whole component scores `phi = 0.0`. Both are arithmetically correct, and both are noise. Filter on `vol` rather than trusting `phi` alone:
+
+```sql
+SELECT group_id, size, vol, round(phi, 3) AS phi
+  FROM graph_conductance
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both' AND membership_table = 'discovered'
+    AND group_col = 'community_id' AND member_col = 'node'
+    AND vol >= 10
+  ORDER BY phi DESC;
+```
+
+```text
+group_id  size  vol   phi
+--------  ----  ----  -----
+0         4     11.0  0.143
+```
+
+Weighted (`weight_col`) and temporally filtered (`timestamp_col`, `time_start`, `time_end`) inputs are inherited from the shared constraint set with no extra surface. Nodes in the graph that have no membership row are ungrouped: their edges still count toward the `cut` of the grouped endpoint, so a partial labelling is scored against the whole graph, not against itself.
+
+!!! tip "Network community profile"
+    Leskovec, Lang & Mahoney (2010) characterise a graph by plotting the best conductance found at each group size. Sweep `resolution` in `graph_leiden`, score each partition with `graph_conductance`, and plot `MIN(phi)` grouped by `size` to reproduce that profile in SQL.
+
+---
+
 ## Combining centrality with communities
 
 A common pattern: detect communities, then pick the most important node inside each.
@@ -271,9 +391,12 @@ SELECT nc.community_id, nc.node, round(cent.centrality, 3) AS c
 - [Node2Vec](node2vec.md) — learn structural embeddings that *encode* community and centrality signal
 - [GraphRAG Cookbook](graphrag-cookbook.md) — full retrieval pipeline built on these primitives
 - [API Reference — Centrality](api.md#centrality) — every constraint and default
+- [API Reference — `graph_conductance`](api.md#graph_conductance) — output semantics for ungrouped nodes and degenerate groups
 
 ## References
 
 - Brandes, U. (2001). [A Faster Algorithm for Betweenness Centrality](https://doi.org/10.1080/0022250X.2001.9990249). *Journal of Mathematical Sociology*, 25(2), 163–177.
 - Wasserman, S. & Faust, K. (1994). *Social Network Analysis: Methods and Applications*. Cambridge University Press.
 - Traag, V. A., Waltman, L. & van Eck, N. J. (2019). [From Louvain to Leiden: guaranteeing well-connected communities](https://arxiv.org/abs/1810.08473). *Scientific Reports*, 9(1), 5233.
+- Kannan, R., Vempala, S. & Vetta, A. (2004). [On Clusterings: Good, Bad and Spectral](https://doi.org/10.1145/990308.990313). *Journal of the ACM*, 51(3), 497–515.
+- Leskovec, J., Lang, K. J. & Mahoney, M. W. (2010). [Empirical Comparison of Algorithms for Network Community Detection](https://doi.org/10.1145/1772690.1772755). *WWW 2010*, 631–640.

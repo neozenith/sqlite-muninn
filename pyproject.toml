@@ -91,6 +91,7 @@ dev = [
     "jupytext>=1.16.0",
     "mypy>=1.19.1",
     "nbmake>=1.5.5",
+    "networkx>=3.6.1",
     "pip>=26.0.1",
     "playwright>=1.58.0",
     "pysqlite3>=0.6.0",

@@ -57,6 +57,10 @@ WASM_SQLITE_SRC  = $(WASM_BUILD)/sqlite3.c
 WASM_JS          = $(WASM_BUILD)/muninn_sqlite3.js
 WASM_BIN         = $(WASM_BUILD)/muninn_sqlite3.wasm
 
+# Parallel jobs for the llama.cpp CMake build. A bare `-j` means unlimited
+# (one compiler per source file), which exhausts the 7 GB GitHub Linux runners.
+LLAMA_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+
 LLAMA_WASM_BUILD = $(LLAMA_DIR)/build-wasm
 LLAMA_WASM_LIBS  = $(LLAMA_WASM_BUILD)/src/libllama.a \
                    $(LLAMA_WASM_BUILD)/ggml/src/libggml.a \
@@ -139,8 +143,8 @@ $(LLAMA_LIBS_CORE): | $(LLAMA_DIR)/CMakeLists.txt
 	@echo "######### Building llama.cpp static libraries (this may take a minute)..."
 	cmake -B $(LLAMA_BUILD) -S $(LLAMA_DIR) $(LLAMA_CMAKE_FLAGS)
 
-	@echo "######### Compiling llama.cpp 1 core..."
-	cmake --build $(LLAMA_BUILD) --config MinSizeRel -j
+	@echo "######### Compiling llama.cpp with $(LLAMA_JOBS) parallel jobs..."
+	cmake --build $(LLAMA_BUILD) --config MinSizeRel -j$(LLAMA_JOBS)
 
 llama-clean:                                   ## Clean llama.cpp build artifacts
 	rm -rf $(LLAMA_BUILD)
@@ -178,13 +182,15 @@ $(WASM_SQLITE_SRC):                                ## Download SQLite amalgamati
 $(LLAMA_WASM_LIBS): | $(LLAMA_DIR)/CMakeLists.txt ## Build llama.cpp as WASM static libs
 	@command -v emcmake >/dev/null 2>&1 || { echo "error: emcmake not found — install Emscripten SDK"; exit 1; }
 	emcmake cmake -B $(LLAMA_WASM_BUILD) -S $(LLAMA_DIR) $(LLAMA_CMAKE_FLAGS_WASM)
-	emmake $(MAKE) -C $(LLAMA_WASM_BUILD) llama ggml -j$$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+	emmake $(MAKE) -C $(LLAMA_WASM_BUILD) llama ggml -j$(LLAMA_JOBS)
 
 build-wasm: build-wasm-full                        ## Build WASM module (lite by default)
 
 build-wasm-full: $(WASM_SQLITE_SRC) $(LLAMA_WASM_LIBS) ## Build full WASM (with llama.cpp/embeddings)
 	@command -v emcc >/dev/null 2>&1 || { echo "error: emcc not found — install Emscripten SDK"; exit 1; }
-	emcc $(EMCC_FLAGS) \
+	# -sDEFAULT_TO_CXX=1: the llama.cpp static libs are C++, and emcc stopped
+	# linking libc++ by default in Emscripten 4.x. Request it explicitly.
+	emcc $(EMCC_FLAGS) -sDEFAULT_TO_CXX=1 \
 		$(VENDOR_INCLUDE) $(LLAMA_INCLUDE) \
 		$(WASM_SQLITE_SRC) \
 		$(SRC) \
@@ -208,6 +214,7 @@ test-c: build/test_runner                        ## Run C unit tests + coverage
 			--gcov-ignore-errors=source_not_found \
 			--gcov-ignore-errors=no_working_dir_found \
 			--gcov-ignore-parse-errors=suspicious_hits.warn_once_per_file \
+			--gcov-exclude-directories '(^|/)tmp(/|$$)' \
 			--fail-under-line 50 --print-summary; \
 	else \
 		echo "gcovr not installed — skipping C coverage report"; \

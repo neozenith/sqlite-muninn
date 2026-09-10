@@ -1,4 +1,4 @@
-# Architecture
+| `community_register_tvfs` | `graph_leiden`, `graph_conductance` |# Architecture
 
 How the muninn extension is organized internally — the registration flow, the module layering, the shared infrastructure, and the design patterns that recur across every subsystem. Read this after [Getting Started](getting-started.md); it is aimed at contributors and integrators, not first-time users.
 
@@ -49,7 +49,7 @@ flowchart LR
         hnsw["hnsw_register_module<br/>hnsw_index VT"]:::computePrimary
         gtvf["graph_register_tvfs<br/>bfs / dfs / sp / components / pagerank"]:::computePrimary
         cent["centrality_register_tvfs<br/>degree / node+edge betweenness / closeness"]:::computePrimary
-        comm["community_register_tvfs<br/>graph_leiden"]:::computePrimary
+        comm["community_register_tvfs<br/>graph_leiden / graph_conductance"]:::computePrimary
         adj["adjacency_register_module<br/>graph_adjacency VT"]:::computePrimary
         sel["graph_select_register_tvf<br/>dbt-style selector"]:::computePrimary
         n2v["node2vec_register_functions<br/>node2vec_train"]:::computePrimary
