@@ -3,13 +3,14 @@ name: muninn-graph-algorithms
 description: >
   Runs graph algorithms (BFS, DFS, shortest path, PageRank, connected components,
   degree / node-betweenness / edge-betweenness / closeness centrality, Leiden
-  community detection) on any SQLite edge table via table-valued functions.
+  community detection, conductance partition scoring) on any SQLite edge table via table-valued functions.
   Covers the WHERE edge_table = ... constraint calling convention and the
   persistent CSR adjacency cache (graph_adjacency). Use when the user mentions
   "graph traversal", "BFS", "DFS", "shortest path", "Dijkstra", "PageRank",
   "connected components", "centrality", "betweenness", "closeness",
-  "Leiden community", "community detection", "graph algorithm in SQLite",
-  "graph_bfs", "graph_pagerank", "graph_leiden", "CSR adjacency",
+  "Leiden community", "community detection", "conductance", "partition quality",
+  "graph algorithm in SQLite", "graph_bfs", "graph_pagerank", "graph_leiden",
+  "graph_conductance", "CSR adjacency",
   "graph_adjacency", or wants to analyze a network / dependency / social graph
   stored in SQLite.
 license: MIT
@@ -166,6 +167,34 @@ frank  1
 
 `resolution` ↑ → more, smaller communities. `resolution` ↓ → fewer, larger. The output also includes a `modularity` column (repeated per row). Leiden guarantees well-connected communities (unlike Louvain).
 
+## Conductance: score any grouping
+
+`graph_leiden`'s `modularity` is global and only defined for the partition Leiden found. `graph_conductance` scores **any** node-to-group membership table per group, on a `[0, 1]` scale (`phi = 0` closed group, `phi = 1` every edge leaves). It takes the same `membership_table` / `group_col` / `member_col` triple as `muninn_label_groups`.
+
+```sql
+CREATE TABLE teams (node TEXT, team TEXT);
+INSERT INTO teams VALUES
+  ('alice','a'), ('bob','a'), ('carol','a'),
+  ('dave','b'),  ('eve','b'), ('frank','b');
+
+SELECT group_id, size, internal, cut, vol, round(phi, 3) AS phi
+  FROM graph_conductance
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both'
+    AND membership_table = 'teams' AND group_col = 'team' AND member_col = 'node'
+  ORDER BY phi;
+```
+
+```text
+group_id  size  internal  cut  vol  phi
+--------  ----  --------  ---  ---  -----
+a         3     2.0       2.0  6.0  0.333
+b         3     2.0       2.0  6.0  0.333
+```
+
+To score the partition Leiden found, materialise its output first (`CREATE TEMP TABLE discovered AS SELECT node, community_id FROM graph_leiden WHERE ...`) and point `membership_table` at it with `group_col = 'community_id'`. Filter on `vol` before trusting `phi`: a singleton with no internal edges scores `1.0` and a group that swallows a whole component scores `0.0`.
+
+
 ## Persistent CSR adjacency cache
 
 If you run many algorithms on the same edge table, create a `graph_adjacency` virtual table — it caches CSR forward/reverse adjacency with delta-triggered lazy rebuild.
@@ -235,6 +264,7 @@ const rows = db.prepare(`
 - **Zero results from betweenness on bidirectional data** — pre-2026 Brandes dedup bug is fixed; check you're on muninn ≥ 0.4.
 - **`graph_adjacency` not triggering incremental rebuild** — it needs triggers on the source edge table; those are installed by `CREATE VIRTUAL TABLE`. If you DROP and re-create the edge table, re-create `graph_adjacency` too.
 - **Leiden `modularity` column repeats per row** — that's correct; it's a global value, repeated for convenience so every row carries the score.
+- **`graph_conductance` returns `group_id` as TEXT** — Leiden's INTEGER community IDs come back as `'0'`, `'1'`; cast before numeric joins. `phi` is `0.0` (not NULL) when a group has zero volume or spans the whole graph.
 - **Direction ignored on `graph_components`** — components are intrinsically undirected. Use `graph_bfs` with `direction='forward'` if you need reachability.
 
 ## See also

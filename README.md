@@ -1,3 +1,4 @@
+| Conductance | Kannan, Vempala & Vetta, JACM 2004 |
 # sqlite-muninn
 
 <div align="center">
@@ -35,7 +36,7 @@ Huginn and Muninn are the two ravens of Odin and their names translate to _Thoug
 - **Graph Traversal** - BFS, DFS, shortest path, connected components, PageRank on any edge table, dbt syntax graph node selection.
 - **`llama.cpp` native models**; Load and use GGUF LLM models natively in sqlite.
 - **Centrality Measures** - Degree, betweenness (Brandes), and closeness centrality with weighted/temporal support
-- **Community Detection** - Leiden algorithm for discovering graph communities with modularity scoring
+- **Community Detection** - Leiden algorithm for discovering graph communities with modularity scoring, plus per-group conductance for scoring any partition
 - **Node2Vec** - Learn structural node embeddings from graph topology, store in HNSW for similarity search
 - **Zero dependencies** - compiles to a single `.dylib`/`.so`/`.dll`
 - **SIMD accelerated** - ARM NEON and x86 SSE distance functions

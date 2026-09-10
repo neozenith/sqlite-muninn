@@ -14,7 +14,7 @@ All symbols are registered by `sqlite3_muninn_init` (i.e. triggered by `.load ./
 - [Centrality](#centrality)
     - [`graph_degree`](#graph_degree) · [`graph_node_betweenness`](#graph_node_betweenness) · [`graph_edge_betweenness`](#graph_edge_betweenness) · [`graph_closeness`](#graph_closeness)
 - [Community detection](#community-detection)
-    - [`graph_leiden`](#graph_leiden)
+    - [`graph_leiden`](#graph_leiden) · [`graph_conductance`](#graph_conductance)
 - [Adjacency cache](#adjacency-cache)
     - [`graph_adjacency`](#graph_adjacency)
 - [Graph selector](#graph-selector)
@@ -471,6 +471,114 @@ SELECT node, community_id FROM graph_leiden
 ```
 
 See [Centrality and Community](centrality-community.md#leiden-community-detection) for the resolution sweep recipe and Microsoft-GraphRAG-style supernode pattern.
+
+---
+
+### `graph_conductance`
+
+Score any node-to-group membership over a graph: per-group `internal`, `cut`, `vol`, and conductance `phi` (Kannan, Vempala & Vetta, 2004). `graph_leiden`'s `modularity` is global and only defined for the partition Leiden found; conductance is per-group, bounded in `[0, 1]`, and has the same meaning regardless of how many groups exist or where they came from.
+
+**Definition**
+
+For a group `S` in graph `V`:
+
+```text
+internal(S) = summed weight of edges with both endpoints in S
+cut(S)      = summed weight of edges with exactly one endpoint in S
+vol(S)      = 2 * internal(S) + cut(S)
+phi(S)      = cut(S) / min(vol(S), vol(V) - vol(S))
+```
+
+`phi = 0` is a closed group; `phi = 1` is a group where every edge leaves. Unweighted graphs give every edge weight `1.0`, so `internal` and `cut` are plain counts.
+
+**Example**
+
+```sql
+SELECT group_id, size, internal, cut, vol, round(phi, 3) AS phi
+  FROM graph_conductance
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both'
+    AND membership_table = 'assignment'
+    AND group_col = 'team' AND member_col = 'node'
+  ORDER BY phi;
+```
+
+```text
+group_id  size  internal  cut  vol   phi
+--------  ----  --------  ---  ----  -----
+left      4     5.0       1.0  11.0  0.143
+right     3     3.0       1.0  7.0   0.143
+```
+
+**Output**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `group_id` | TEXT | Group identifier, verbatim from `group_col` (INTEGER values are returned as their text form) |
+| `size` | INTEGER | Number of graph nodes in the group |
+| `internal` | REAL | Summed weight of edges with both endpoints inside |
+| `cut` | REAL | Summed weight of edges with exactly one endpoint inside |
+| `vol` | REAL | `2 * internal + cut` |
+| `phi` | REAL | `cut / min(vol, total_vol - vol)` |
+
+**Extra constraints** (in addition to the [shared constraints](#graph-tvf-constraint-syntax))
+
+| Constraint | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `membership_table` | TEXT | yes | Table mapping nodes to groups |
+| `group_col` | TEXT | yes | Column holding the group identifier |
+| `member_col` | TEXT | yes | Column holding the node ID |
+
+The membership triple is the same shape [`muninn_label_groups`](#muninn_label_groups) takes, so one `(node, community_id)` table feeds both. `internal`, `cut`, and `vol` are REAL rather than INTEGER so that weighted and unweighted inputs share one schema, matching [`graph_degree`](#graph_degree).
+
+**Returns**: one row per distinct `group_col` value that has at least one member in the loaded graph, in first-seen order. `phi` is `0.0` (never NULL or NaN) when the denominator is zero. Semantics:
+
+- A graph node with no membership row is *ungrouped*. Its edges still count toward `cut` for whichever endpoint is grouped, and toward the total volume.
+- A membership row whose node has no edges in the (possibly temporally filtered) graph is ignored.
+- A node listed more than once keeps its first group.
+- Conductance is defined on undirected graphs; `direction = 'both'` is the meaningful setting. `forward` and `reverse` are accepted for consistency and score the same edge rows.
+- A group with no internal edges scores `phi = 1.0`; a group whose every neighbour is inside it scores `phi = 0.0`. Both are arithmetically correct and both are noise on tiny groups, which is why `size`, `internal`, and `vol` are returned alongside `phi`. Filter on `vol` rather than trusting `phi` alone.
+
+**Full recipe**
+
+```sql
+.load ./muninn
+
+CREATE TABLE edges (src TEXT, dst TEXT, weight REAL DEFAULT 1.0);
+INSERT INTO edges VALUES
+  ('alice', 'bob',   1.0), ('alice', 'carol', 1.0), ('bob',   'carol', 1.0),
+  ('bob',   'dave',  1.0), ('carol', 'dave',  1.0),
+  ('dave',  'eve',   1.0),   -- bridge
+  ('eve',   'frank', 1.0), ('eve',   'grace', 1.0), ('frank', 'grace', 1.0);
+
+-- Score the partition Leiden found
+CREATE TEMP TABLE discovered AS
+  SELECT node, community_id FROM graph_leiden
+    WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+      AND direction = 'both' AND resolution = 1.0;
+
+SELECT group_id, size, internal, cut, vol, round(phi, 3) AS phi
+  FROM graph_conductance
+  WHERE edge_table = 'edges' AND src_col = 'src' AND dst_col = 'dst'
+    AND direction = 'both'
+    AND membership_table = 'discovered'
+    AND group_col = 'community_id' AND member_col = 'node'
+    AND vol >= 5
+  ORDER BY phi;
+```
+
+```text
+group_id  size  internal  cut  vol   phi
+--------  ----  --------  ---  ----  -----
+0         4     5.0       1.0  11.0  0.143
+1         3     3.0       1.0  7.0   0.143
+```
+
+Performance: one pass over the loaded adjacency, O(E) time and O(k) extra memory for k groups. Reading the membership table is a single `SELECT`.
+
+**See also**: [`graph_leiden`](#graph_leiden), [`muninn_label_groups`](#muninn_label_groups), [Conductance guide](centrality-community.md#conductance-scoring-a-partition) for comparing declared against discovered groupings.
+
+Since: v0.5.0
 
 ---
 

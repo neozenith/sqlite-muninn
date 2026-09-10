@@ -213,6 +213,8 @@ Steve Wozniak           1
 
 Two natural communities: Musk's companies and Apple/Jobs/Cook.
 
+To check how cleanly those communities separate, score the partition with [`graph_conductance`](centrality-community.md#conductance-scoring-a-partition); it takes the same `(node, community_id)` table that Step 8 builds.
+
 ## Step 8 — Label the communities
 
 ```sql

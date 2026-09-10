@@ -1,3 +1,4 @@
+| [`graph_conductance`](api.md#graph_conductance) | TVF | Per-group conductance of any node membership |
 # sqlite-muninn
 
 <div align="center">
