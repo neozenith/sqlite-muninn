@@ -214,7 +214,8 @@ test-c: build/test_runner                        ## Run C unit tests + coverage
 			--gcov-ignore-errors=source_not_found \
 			--gcov-ignore-errors=no_working_dir_found \
 			--gcov-ignore-parse-errors=suspicious_hits.warn_once_per_file \
-			--fail-under-line 50 --print-summary build; \
+			--gcov-exclude-directories '(^|/)tmp(/|$$)' \
+			--fail-under-line 50 --print-summary; \
 	else \
 		echo "gcovr not installed — skipping C coverage report"; \
 	fi
