@@ -23,6 +23,8 @@ make clean          # Remove muninn extension and test_runner binaries
 
 **Benchmarks:** `make -C benchmarks help` to see all benchmark targets.
 
+**Outer loop, releases, llama.cpp updates:** see [DEVELOPMENT.md](DEVELOPMENT.md). Run `make ci-all` before marking a PR ready; bump `VERSION` then `make version-stamp` for a release; `make llama-update && make llama-clean && make all` to move the submodule.
+
 ## Architecture
 
 ### Extension Entry Point
