@@ -49,7 +49,9 @@ make test-c        # the wrappers in src/llama_*.c track llama.h; API drift show
 
 `make llama-clean` is mandatory after an update: the Makefile only builds the
 static libraries when they are missing, so a stale `vendor/llama.cpp/build/`
-silently links old code against new headers. When `llama.h` removes or renames a
+silently links old code against new headers. The CMake build runs with
+`LLAMA_JOBS` parallel compilers (defaults to the core count; `make all LLAMA_JOBS=2`
+on memory-constrained machines). When `llama.h` removes or renames a
 field (for example `use_mmap` became `load_mode = LLAMA_LOAD_MODE_MMAP`), fix
 `src/llama_embed.c` and `src/llama_chat.c` in the same PR as the submodule bump.
 
